@@ -2,18 +2,17 @@
 
 // Feed order, by lab file name. Labs missing from this list are appended in lab-number order.
 // Lab-number order for now. Suggestion: open on something instantly fun and quick to load, e.g. 'sand'.
-// (Vessel is fun too, but its first visit takes ~10 s to compile; see NO_PRELOAD.)
+// (Vessel is fun too, but on a first visit it takes ~8 s to compile before it draws.)
 export const ORDER = ['prism', 'fluid', 'goop', 'knockout', 'bigbang', 'godrays', 'maze', 'pachinko', 'neural', 'sand', 'life', 'splat'];
 
 // Which toy a bare link (no #toy) opens on. null = the first in ORDER.
 export const START = null;
 
-// Toys too heavy to preload as a frozen neighbour. Their first shader compile blocks the page's main thread
-// (shared by every toy in the feed), so preloading one freezes the toy on screen. Measured cold, first visit,
-// Edge on Windows/D3D11: Goop ~33 s, Vessel ~9.6 s; every other lab draws within ~1.7 s.
-// These mount only once someone stops on them; after that (shaders cached) they preload like the rest.
-// Empty this once those labs compile asynchronously.
-export const NO_PRELOAD = ['goop', 'fluid'];
+// Toys too heavy to preload as a frozen neighbour: they mount only once someone stops on them, and preload
+// normally after their first compile. A lab whose first shader compile blocks the page's main thread (shared by
+// every toy in the feed) freezes the toy on screen while it preloads. Goop (~33 s) and Vessel (~10 s) used to;
+// they now compile in the background and set window.labWarming until they can draw, so the list is empty.
+export const NO_PRELOAD = [];
 
 // Placeholders: Scott supplies the mugshot, bio and links.
 export const ARTIST = {

@@ -893,13 +893,25 @@ void main() {
   fragColor = vec4(pow(col, vec3(1.0 / 2.2)), 1.0);
 }`.replace('DIST_FADE', (DIST + 6).toFixed(1));
 
-let prog = null, U = {};
-function compile() {
-  const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
+let prog = null, U = {}, shaders = [];
+let warming = false;   // true until the shader has compiled; the site's feed waits on window.labWarming before showing the lab
+// The ray-marcher is a big shader: on Windows (ANGLE → D3D) its first compile can take half a minute, and asking for
+// its status blocks the page until it's done. With KHR_parallel_shader_compile the GPU process compiles it in the
+// background while compileReady() polls each frame; without the extension this falls back to one blocking compile.
+const parallel = gl?.getExtension('KHR_parallel_shader_compile');
+function compileStart() {
+  const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); return s; };
+  shaders = [sh(gl.VERTEX_SHADER, VERT), sh(gl.FRAGMENT_SHADER, FRAG)];
   prog = gl.createProgram();
-  gl.attachShader(prog, sh(gl.VERTEX_SHADER, VERT)); gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, FRAG));
+  shaders.forEach(s => gl.attachShader(prog, s));
   gl.linkProgram(prog);
-  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+}
+const compileReady = () => !parallel || gl.getProgramParameter(prog, parallel.COMPLETION_STATUS_KHR);
+function compile() {
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    const log = shaders.map(s => gl.getShaderInfoLog(s)).filter(Boolean).join('\n');
+    throw new Error(log || gl.getProgramInfoLog(prog));
+  }
   gl.useProgram(prog);
   const n = gl.getProgramParameter(prog, gl.ACTIVE_UNIFORMS);
   for (let i = 0; i < n; i++) { const name = gl.getActiveUniform(prog, i).name.replace(/\[0\]$/, ''); U[name] = gl.getUniformLocation(prog, name); }
@@ -933,7 +945,7 @@ lab.on('palette', p => { liq = p.liq || BENCH_LIQ; dirty = true; });
 lab.on('change', key => { dirty = true; if (key === 'quality') applySize(); });
 
 function render() {
-  if (!gl) return;
+  if (!gl || warming) return;
   pack();
   const Q = QUALITY[P.quality] || QUALITY.medium;
   gl.viewport(0, 0, canvas.width, canvas.height);
@@ -1049,10 +1061,16 @@ const WARM = 0.2, CALM_T = 7.5;   // calm: hanging just after the haul, ropes st
 if (!gl) {
   lab.hud('This lab needs WebGL2, which this browser has turned off.');
 } else {
-  compile();
+  compileStart();
   ANCHORS = buildAnchors();
   resetSim(lab.calm ? CALM_T : WARM);
   applySize();
+}
+warming = window.labWarming = !!gl;
+if (warming) lab.hud('compiling the shader…');
+function finishWarming() {
+  compile();
+  warming = window.labWarming = false;
   render(); hud();
 }
 lab.on('reset', () => { lab.set('loop', true); dirty = true; });
@@ -1081,6 +1099,7 @@ window.__lab = {
 let hudTick = 0;
 lab.loop(dt => {
   if (!gl) return;
+  if (warming) { if (compileReady()) finishWarming(); return; }
   const active = !lab.calm || nowS() - lastInteract < 10;
   if (active) simulate(dt);
   if (active || dirty) render();

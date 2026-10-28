@@ -176,3 +176,12 @@ After the five-shot volley, Scott asked for every ball to burst into five, and e
   - Twelve labs is the portfolio ("they will either love me or hate me"). Palette and tweak variants come later.
   - Each toy gets a URL and an expanded landing page.
   - Keep old versions so the process can be shown, not just the result.
+
+## 2026-10-28 — Splat!: the grid was a fall all along
+
+> "you see a fine grid and its slowly zooming. turns out its because of a fixed camera on the logo. the logo is falling fast and its made of nickelodeon-like slime."
+
+- **The trick is perspective:** the camera rides the mark, so the mark never changes size and only the floor grows, as 1 / distance. A steady fall reads as a lazy zoom that speeds up, until it doesn't. Two cues give the game away late: a soft shadow that slides in from the corner and sharpens, and grid lines that keep resolving finer (three levels, each fading in by pixel size, so the grid never moirés or pops).
+- **Slime, not particles:** everything is one metaball field cut at one level, with one-pixel analytic antialiasing. The airborne mark is its own distance field; the splat dilates that field into a puddle on a bouncy spring, and fingers are plastic rope chains that stretch, stick, creep back and sometimes pinch off a droplet. The mark's body stays as a mound inside the puddle, so you can still read the logo in the splat.
+- **The reveal (the decisive call):** the splat doesn't cut to the next drop. It tears open from the centre like a bursting film, a thick rim sweeping the old goo off the screen, and through the hole is the next mark in the next colour over the next grid, already at the top of its fall. Like the maze, the loop is "the thing contains the next thing", and the swap is pixel-exact.
+- **Looks:** a bevelled extrusion read as plastic. Blurring the distance field for the mound (sampled with a cubic B-spline, because bilinear slopes showed as blocks in the highlights) turned it into a puffy, glossy goo.

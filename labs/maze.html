@@ -479,6 +479,15 @@ function present() {
   else if (th < 1e-4) screen.drawImage(sceneL.c, 0, 0);
   else if (tech > 1e-3) presentTechnical(camera(th, true), tech);
   else { const c = camera(th); warp(c, sceneL.c, 0, c.sq.y * c.dpr - c.cy, (c.sq.y + c.sq.size) * c.dpr - c.cy, 0, canvas.width); }
+  const turn = lab.calm ? 0 : turnNow();
+  if (turn > 1e-4) {
+    if (turnL.c.width !== canvas.width || turnL.c.height !== canvas.height) { turnL.c.width = canvas.width; turnL.c.height = canvas.height; }
+    turnL.x.clearRect(0, 0, canvas.width, canvas.height); turnL.x.drawImage(canvas, 0, 0);
+    const X = dx(0), Y = dy(0), cs = Math.cos(turn), sn = Math.sin(turn);
+    screen.setTransform(1, 0, 0, 1, 0, 0); screen.clearRect(0, 0, canvas.width, canvas.height);
+    screen.setTransform(cs, sn, -sn, cs, X - cs * X + sn * Y, Y - sn * X - cs * Y); screen.drawImage(turnL.c, 0, 0);
+    screen.setTransform(1, 0, 0, 1, 0, 0);
+  }
   applyInvert();
 }
 // the tilted camera, in device px: center, distance, the tilt's sine and cosine, zoom, px per logo unit
@@ -1068,7 +1077,7 @@ function makeColors() {
   const line = Math.min(1, sh * 1.5);
   PAT['P:closed'] = hatch(p.bg, mix(p.bg, p.ink, line), 1);
   C.open = mix(p.bg, p.ink, 0.9);
-  C.glow = p.ink;
+  C.glow = RED;                         // the solved path and its glow
   C.accent = RED;                       // construction axes, the arrival ring
   C.race = [p.ink, RED];
   C.raceClosed = C.race.map(c => mix(p.bg, c, sh * 0.84));
@@ -1238,9 +1247,52 @@ function drawIsland(x) {
 }
 // The reveal itself, over everything: white floods the whole maze out from the small mark, which it leaves standing
 // black, then the mark gives a little bump. Black and white only, so the mark is already the colour it lands as.
+// First a red stroke traces the hidden mark: it grows round each chevron's outline, then sweeps round once more, two
+// laps in T_TRACE. It stays on as the flood comes in and fades with it.
+const T_TRACE = 1.0;
+function traceMark(x, mn, u, a) {
+  const k = geo.dpr * geo.f.scale * mn.m, X = dx(mn.x), Y = dy(mn.y), lw = Math.max(1.5 * geo.dpr, geo.cell * 0.18);
+  const head = 2 * easeInOut(u);                          // laps travelled
+  x.lineJoin = 'round'; x.lineCap = 'round'; x.strokeStyle = RED;
+  for (const pc of MARK.pieces) {
+    const { pts } = POLYS[pc.k], [sx, sy] = mn.shift[pc.k], n = pts.length;
+    const P = pts.map(([px, py]) => [X + (px + sx) * k, Y + (py + sy) * k]);
+    const cum = [0];
+    for (let i = 0; i < n; i++) { const a0 = P[i], b0 = P[(i + 1) % n]; cum.push(cum[i] + Math.hypot(b0[0] - a0[0], b0[1] - a0[1])); }
+    const L = cum[n], at = d => { d = ((d % L) + L) % L; let i = 0; while (cum[i + 1] < d) i++; const t = (d - cum[i]) / (cum[i + 1] - cum[i] || 1), a0 = P[i], b0 = P[(i + 1) % n]; return [a0[0] + (b0[0] - a0[0]) * t, a0[1] + (b0[1] - a0[1]) * t, i]; };
+    const seg = (d0, d1) => {                             // the outline from d0 to d1 (d1 - d0 ≤ L)
+      const [x0, y0, i0] = at(d0); x.beginPath(); x.moveTo(x0, y0);
+      let i = i0, base = d0 - (((d0 % L) + L) % L);
+      for (let guard = 0; base + cum[i + 1] < d1 && guard <= n; guard++) {
+        x.lineTo(...P[(i + 1) % n]);
+        if (++i === n) { i = 0; base += L; }
+      }
+      const [x1, y1] = at(d1); x.lineTo(x1, y1);
+    };
+    // the drawn outline: growing on the first lap, whole after
+    x.globalAlpha = a; x.shadowColor = RED; x.shadowBlur = 10 * geo.dpr; x.lineWidth = lw;
+    if (head < 1) seg(0, head * L); else { x.beginPath(); P.forEach((q, i) => i ? x.lineTo(...q) : x.moveTo(...q)); x.closePath(); }
+    x.stroke();
+    // the sweeping head: a brighter, thicker comet a fifth of the way round long
+    if (u < 1) {
+      const hd = head * L, tl = Math.max(0, hd - 0.2 * L);
+      seg(tl, hd); x.lineWidth = lw * 2.2; x.shadowBlur = 18 * geo.dpr; x.stroke();
+      seg(Math.max(tl, hd - 0.06 * L), hd); x.strokeStyle = '#fff'; x.lineWidth = lw * 0.9; x.shadowBlur = 0; x.stroke(); x.strokeStyle = RED;
+    }
+  }
+  x.shadowBlur = 0; x.globalAlpha = 1;
+}
+// As the zoom ramps in, the whole view turns a half turn about the mark's centre, for a bit of flair. The mark is
+// symmetric under it, so the new maze lands on the same outline; the turn is dropped there, where the clean mark looks
+// the same either way.
+const T_TURN = 0.9;
+const turnNow = () => dive && clock >= dive.t0 ? Math.PI * easeInOut((clock - dive.t0) / T_TURN) : 0;
+const turnL = layer();
 function drawReveal(x) {
-  const mn = G.mini, r = revealT();
-  if (!mn || r <= 0) return;
+  const mn = G.mini, r0 = revealT();
+  if (!mn || r0 <= 0) return;
+  const r = r0 - T_TRACE;
+  if (r <= 0) { traceMark(x, mn, r0 / T_TRACE, 1); return; }
   const k = geo.dpr * geo.f.scale, X = dx(mn.x), Y = dy(mn.y), fl = easeInOut(r / 0.55);
   x.save();
   x.beginPath(); x.arc(X, Y, fl * Math.hypot(canvas.width, canvas.height), 0, 2 * Math.PI); x.clip();
@@ -1249,13 +1301,14 @@ function drawReveal(x) {
   x.restore();
   const b = clamp01((r - 0.4) / 0.45);
   drawMark(x, k * mn.m * (1 + 0.16 * Math.sin(Math.PI * b) * (1 - b)), X, Y, mn.shift, INK);
+  if (r < 0.5) traceMark(x, mn, 1, 1 - easeOut(r / 0.5));
 }
 // Dead ends: when a search proves a branch dead, a red X pops at its tip and zooms out as it fades.
 const T_POP = 0.5;
 const SIN_AB = Math.sqrt(1 - (MARK.A[0] * MARK.B[0] + MARK.A[1] * MARK.B[1]) ** 2);   // sin of the 85.6° apex
 function drawPops(x) {
-  const [a0, a1] = MARK.A, [b0, b1] = MARK.B, k = geo.dpr * geo.f.scale, cosAB = Math.sqrt(1 - SIN_AB * SIN_AB);
-  const lw = Math.min(3 * geo.dpr, Math.max(geo.dpr, geo.cell * 0.11));
+  const [a0, a1] = MARK.A, [b0, b1] = MARK.B, k = geo.dpr * geo.f.scale;
+  const lw = Math.min(5 * geo.dpr, Math.max(2 * geo.dpr, geo.cell * 0.2));
   x.lineCap = 'round'; x.strokeStyle = RED; x.lineWidth = lw;
   for (const r of runs) if (r) for (const s of r.searches) {
     if (!s.pops || !s.pops.length) continue;
@@ -1267,7 +1320,7 @@ function drawPops(x) {
       if (u < 0) continue;
       const g = G.byK[G.cellPiece[c]], i0 = G.ci[c], j0 = G.cj[c];
       const hs = (g.S[i0 + 1] - g.S[i0]) / 2 * k, ht = (g.T[j0 + 1] - g.T[j0]) / 2 * k;
-      const room = h => (h * SIN_AB - lw / 2 * cosAB - LV.wall / 2 - Math.max(geo.dpr, h * 0.1)) / SIN_AB;
+      const room = h => (h * SIN_AB - LV.wall / 2) / SIN_AB * 0.8;   // sized by the cell alone, so a thick X stays an X
       // pops in with an overshoot, then keeps growing as it fades
       const rr = Math.min(room(hs), room(ht)) * (u < 0.2 ? easeOutBack(u / 0.2) : 1 + 1.2 * easeOut((u - 0.2) / 0.8));
       if (rr < 0.75) continue;
@@ -1501,7 +1554,7 @@ function drawTrails(x) {
     x.globalAlpha = tr.moving ? 1 : easeOut((clock - tr.fadeAt) / T_FADE);
     trailPath(x, tr, d);
     x.lineWidth = race && tr.slot === 0 ? thick * 1.9 : thick;
-    x.strokeStyle = race ? C.race[tr.slot] : C.ink;
+    x.strokeStyle = race ? C.race[tr.slot] : RED;          // the solved path is red
     if (!race && LV.glow > 0.05) { x.shadowColor = C.glow; x.shadowBlur = LV.glow * geo.dpr; }
     // landed: the line swells as a bright pulse runs along it, start to goal
     const cel = r.group && r.group.fired && !lab.calm ? (clock - r.group.at) / T_CELEBRATE : -1;
@@ -1684,7 +1737,7 @@ function applyInvert() {
 // before they move, and the black mark's outline takes the ink as it goes. The mark is drawn as vectors
 // throughout and lands as exactly the first frame of a new maze, which then carves as usual: the lean back into the
 // technical drawing, the carve, the pan up, the search.
-const T_HOLD = T_REVEAL + 1.2, T_DIVE = 2.2;
+const T_HOLD = T_REVEAL + T_TRACE + 1.2, T_DIVE = 2.2;
 let dive = null;
 function presentDive() {
   const x = screen, mn = G.mini, u = easeInOut((clock - dive.t0) / T_DIVE), Z = 1 / mn.m, z = Z ** u, w = (z - 1) / (Z - 1);

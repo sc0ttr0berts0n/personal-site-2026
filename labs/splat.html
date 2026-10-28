@@ -165,6 +165,35 @@ if (halfOK) {
 } else {
   sdfTex = texture(384, 384, gl.R16F, gl.RED, gl.FLOAT, cpuSdf(384));
 }
+// A Gaussian-blurred copy of the distance shapes the mark's mound, so its mitred corners don't leave creases.
+// It's sampled with a cubic B-spline in the composite, because bilinear slopes would show as blocks in the lighting.
+const SOFT_N = 512, SOFT_SIGMA = 0.03;   // logo units
+const blurProg = program(FS_TRI, `#version 300 es
+precision highp float;
+uniform sampler2D uSrc; uniform vec2 uDir; uniform float uN;
+out vec4 o;
+void main(){
+  vec2 uv = gl_FragCoord.xy / uN; float s = 0., ws = 0.;
+  for (int i = -12; i <= 12; i++) { float x = float(i) / 4.; float w = exp(-.5 * x * x); s += texture(uSrc, uv + uDir * float(i)).r * w; ws += w; }
+  o = vec4(s / ws, 0., 0., 1.);
+}`);
+let softTex = sdfTex;
+if (halfOK) {
+  const a = texture(SOFT_N, SOFT_N, gl.R16F, gl.RED, gl.HALF_FLOAT), b = texture(SOFT_N, SOFT_N, gl.R16F, gl.RED, gl.HALF_FLOAT);
+  const fb = gl.createFramebuffer();
+  gl.useProgram(blurProg.p); gl.bindVertexArray(tri); gl.viewport(0, 0, SOFT_N, SOFT_N);
+  gl.uniform1f(blurProg.u.uN, SOFT_N); gl.uniform1i(blurProg.u.uSrc, 0); gl.activeTexture(gl.TEXTURE0);
+  const step = SOFT_SIGMA / 4 / (2 * DOM);   // 4 taps per sigma, in uv
+  for (const [src, dst, dir] of [[sdfTex, a, [step, 0]], [a, b, [0, step]]]) {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, dst, 0);
+    gl.bindTexture(gl.TEXTURE_2D, src);
+    gl.uniform2f(blurProg.u.uDir, dir[0], dir[1]);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.deleteFramebuffer(fb); gl.deleteTexture(a);
+  softTex = b;
+}
 
 // The outer edge of the mark along a ray from its centre (where fingers leave the puddle).
 function rayEdge(ux, uy) {
@@ -216,7 +245,7 @@ gl.bindVertexArray(null);
 // ---- composite: floor grid, shadows, the slime surface, and the next world through the tear ----
 const compProg = program(FS_TRI, `#version 300 es
 precision highp float;
-uniform sampler2D uSdf, uField;
+uniform sampler2D uSdf, uSoft, uField;
 uniform vec2 uRes, uCenter;
 uniform float uScale, uTime, uFieldK, uD, uGloss, uShadowOn;
 uniform vec3 uFloorA, uLineA, uSlimeA, uFloorB, uLineB, uSlimeB;
@@ -234,6 +263,17 @@ float vnoise(vec2 p){
   return mix(mix(hash(i), hash(i + vec2(1, 0)), u.x), mix(hash(i + vec2(0, 1)), hash(i + 1.), u.x), u.y);
 }
 float sdfAt(vec2 q){ vec2 c = clamp(q, -DOM, DOM); return texture(uSdf, q / (2. * DOM) + .5).r + length(q - c); }
+// cubic B-spline lookup from four bilinear taps: smooth slopes, so smooth highlights
+float cubic(sampler2D t, vec2 uv){
+  vec2 n = vec2(textureSize(t, 0)), p = uv * n - .5, f = fract(p), i = floor(p);
+  vec2 f2 = f * f, f3 = f2 * f;
+  vec2 w0 = (1. - 3. * f + 3. * f2 - f3) / 6., w1 = (4. - 6. * f2 + 3. * f3) / 6., w2 = (1. + 3. * f + 3. * f2 - 3. * f3) / 6., w3 = f3 / 6.;
+  vec2 s0 = w0 + w1, s1 = w2 + w3, o0 = i - .5 + w1 / s0, o1 = i + 1.5 + w3 / s1;
+  o0 /= n; o1 /= n;
+  return mix(mix(texture(t, vec2(o1.x, o1.y)).r, texture(t, vec2(o0.x, o1.y)).r, s0.x),
+             mix(texture(t, vec2(o1.x, o0.y)).r, texture(t, vec2(o0.x, o0.y)).r, s0.x), s0.y);
+}
+float sdfSoft(vec2 q){ vec2 c = clamp(q, -DOM, DOM); return cubic(uSoft, q / (2. * DOM) + .5) + length(q - c); }
 float Lf(float s){ float x = max(1. - s / W, 0.); return T * x * x; }
 float wob(vec2 q, float amp, float freq, float sp){ return amp * (vnoise(q * freq + vec2(uTime * sp, -uTime * sp * .7)) - .5); }
 float holeH(vec2 q){
@@ -241,18 +281,21 @@ float holeH(vec2 q){
   float n = sin(a * 5. + uTime * 1.3) * .5 + sin(a * 9. - uTime * 2.1) * .3 + sin(a * 14. + 1.7) * .2;
   return uRho + uHoleAmp * n - length(q);
 }
+// x = the field that sets the outline, y = the mound: the mark's own body, which stays thick inside the puddle
 // the mark that is still in the air (identical to FA before impact, so the hand-off is exact)
-float FB(vec2 q){ return Lf(sdfAt(q) + wob(q, uWobL, 6., .6)); }
+vec2 FB(vec2 q){ float w = wob(q, uWobL, 6., .6); return vec2(Lf(sdfAt(q) + w), Lf(sdfSoft(q) + w)); }
 // the mark that landed: its outline dilated into a puddle, plus the beads, minus the tear
-float FA(vec2 q, vec2 uv){
+vec2 FA(vec2 q, vec2 uv){
   vec2 qs = q / uS;
-  float s = sdfAt(qs) - uSpread + wob(qs, uWobL, 6., .6) + wob(qs, uWobS, 3.2, 2.2);
-  float F = Lf(s) + texture(uField, uv).r / uFieldK;
+  float w = wob(qs, uWobL, 6., .6) + wob(qs, uWobS, 3.2, 2.2);
+  float F = Lf(sdfAt(qs) - uSpread + w) + texture(uField, uv).r / uFieldK;
+  float M = Lf(sdfSoft(qs) - uSpread * .3 + w);
   if (uReveal > .5) {
-    float H = holeH(q), x = (H + RING) / .035;
-    F = F * clamp(-H / .08, 0., 1.) + (1.6 * T + F) * exp(-x * x);
+    float H = holeH(q), x = (H + RING) / .035, k = clamp(-H / .08, 0., 1.);
+    F = F * k + (1.6 * T + F) * exp(-x * x);
+    M *= k;
   }
-  return F;
+  return vec2(F, M);
 }
 float gridLevel(vec2 uv, float lw){
   vec2 dd = max(fwidth(uv), vec2(1e-6));
@@ -274,10 +317,15 @@ float logoShadow(vec2 q, float h){
   float b = .015 + .06 * h;
   return (1. - smoothstep(-b, b, sdfAt(u - h * LS))) * .55 * min(1., 1.6 / (1. + .35 * h));
 }
-float hgt(float f, float k){ return .05 * k * (1. - exp(-max(f - T, 0.) / T * 1.3)); }
-vec4 slime(vec3 base, float f0, float fx, float fy, float pq, float k){
-  float g = length(vec2(fx - f0, fy - f0));
-  float a = clamp((f0 - T) / max(g, 1e-6) + .5, 0., 1.);
+// Depth below the surface's outline, read back from the field (exact for Lf), then a round profile:
+// a rolled edge everywhere the slime is, plus the mound of the mark's body (which flattens as it lands).
+float depth(float f){ return W * (sqrt(max(f, T) / T) - 1.); }
+float circ(float f, float r){ float x = 1. - min(depth(f) / r, 1.); return sqrt(1. - x * x); }
+float dome(float f, float r){ float x = min(depth(f) / r, 1.); return x * (2. - x); }
+float hgt(vec2 f, float k){ return .02 * circ(f.x, .022) + .045 * k * dome(f.y, .09); }
+vec4 slime(vec3 base, vec2 f0, vec2 fx, vec2 fy, float pq, float k){
+  float g = length(vec2(fx.x - f0.x, fy.x - f0.x));
+  float a = clamp((f0.x - T) / max(g, 1e-6) + .5, 0., 1.);
   float h0 = hgt(f0, k);
   vec2 dh = vec2(hgt(fx, k) - h0, -(hgt(fy, k) - h0)) / pq;
   vec3 n = normalize(vec3(-dh, 1.));
@@ -285,7 +333,7 @@ vec4 slime(vec3 base, float f0, float fx, float fy, float pq, float k){
   float s1 = max(dot(n, normalize(L1 + vec3(0, 0, 1))), 0.), s2 = max(dot(n, normalize(L2 + vec3(0, 0, 1))), 0.);
   float spec = pow(s1, 90.) * 1.3 + pow(s1, 14.) * .16 + pow(s2, 60.) * .35;
   float fr = pow(1. - n.z, 2.5);
-  float thick = clamp(h0 / (.05 * max(k, .2)), 0., 1.);
+  float thick = clamp(h0 / .06, 0., 1.);
   vec3 c = mix(base * 1.04, base * base * .85, thick * .35) * (.42 + .68 * diff);
   c += fr * .28 * mix(base, vec3(1), .4) + spec * uGloss;
   return vec4(c, a);
@@ -297,9 +345,9 @@ void main(){
   vec2 dqx = vec2(pq, 0.), dqy = vec2(0., -pq), dux = vec2(1. / uRes.x, 0.), duy = vec2(0., 1. / uRes.y);
 
   vec3 col = floorCol(q, uHA, uFloorA, uLineA);
-  float fa0 = FA(q, uv), fax = FA(q + dqx, uv + dux), fay = FA(q + dqy, uv + duy);
+  vec2 fa0 = FA(q, uv), fax = FA(q + dqx, uv + dux), fay = FA(q + dqy, uv + duy);
   float sh = uShadowOn * uShadowA * logoShadow(q, uHA);
-  float ao = uLanded * .45 * smoothstep(0., T, fa0);
+  float ao = uLanded * .45 * smoothstep(0., T, fa0.x);
   float ds = uShadowOn * .45 * smoothstep(.03, .6, texture(uField, uv).g / uFieldK);
   col *= (1. - sh) * (1. - ao) * (1. - ds);
 
@@ -426,12 +474,12 @@ function look() {
   L.flat = 1 - 0.45 * clamp01(sp);
   L.landed = smooth(0, 0.1, tau);
   L.shadowA = 1 - L.landed;
-  L.wobS = P.wobble * (0.07 * Math.exp(-tau * 3.2) + 0.012);
+  L.wobS = P.wobble * (0.07 * Math.exp(-tau * 3.2) + 0.012) * smooth(0, 0.06, tau);
   if (tau > P.hold) {
     const r = tau - P.hold;
     L.reveal = 1; L.rev = r;
-    L.rho = 0.03 + 0.6 * r + 5 * r * r;
-    L.S = 1 + 1.3 * r * r;
+    L.rho = 0.03 + 0.45 * r + 3.4 * r * r;   // the tear accelerates out past the corners
+    L.S = 1 + 0.9 * r * r;                   // and sweeps the old splat out ahead of it
     L.holeAmp = 0.06 * Math.min(1, L.rho * 2);
   }
   return L;
@@ -472,7 +520,8 @@ function catmull(p0, p1, p2, p3, t) {
 let nBodies = 0, nShadows = 0;
 function buildBeads(L) {
   let n = 0;
-  const S = L.S, sr = Math.sqrt(S);
+  // the goo squeezes out of the mark's edge over the first instants instead of appearing all at once
+  const S = L.S, sr = Math.sqrt(S) * smooth(0, 0.07, tau);
   const push = (x, y, R, w) => { if (n >= MAX_BEADS) return; const o = n * 4; beadData[o] = x * S; beadData[o + 1] = y * S; beadData[o + 2] = R * sr; beadData[o + 3] = w * FIELD_K; n++; };
   for (const f of splat.fingers) {
     const nd = f.nodes;
@@ -482,15 +531,18 @@ function buildBeads(L) {
     const rad = j => (j === 0 || j === NODES - 1) ? nd[j].r : nd[j].r * thin;
     for (let j = 0; j < NODES - 1; j++) {
       const a = nd[j], b = nd[j + 1], p0 = nd[Math.max(0, j - 1)], p3 = nd[Math.min(NODES - 1, j + 2)];
-      const ra = rad(j), rb = rad(j + 1), len = Math.hypot(b.x - a.x, b.y - a.y);
-      const nb = Math.min(24, Math.max(1, Math.ceil(len / (0.4 * Math.min(ra, rb)))));
-      const ds = len / nb, pinch = j === NODES - 2 ? f.pinch : 0;
-      for (let k = 0; k < nb; k++) {
-        const t = k / nb, e = t * t * (3 - 2 * t);
+      const ra = rad(j), rb = rad(j + 1), len = Math.max(1e-4, Math.hypot(b.x - a.x, b.y - a.y));
+      const pinch = j === NODES - 2 ? f.pinch : 0;
+      // step along the segment by a fraction of the local radius, so a neck pinching to nothing stays a smooth tube
+      for (let t = 0; t < 1;) {
+        const e = t * t * (3 - 2 * t);
         const r = lerp(ra, rb, e) * (1 - pinch * Math.sin(Math.PI * t));
-        if (r < 0.003) continue;
-        const R = r / 0.43;
-        push(catmull(p0.x, a.x, b.x, p3.x, t), catmull(p0.y, a.y, b.y, p3.y, t), R, Math.min(1, ds / (R * 0.914)));
+        const dt = Math.min(1 - t, Math.max(0.4 * Math.max(r, 0.004) / len, 1 / 64));
+        if (r >= 0.003) {
+          const R = r / 0.43;
+          push(catmull(p0.x, a.x, b.x, p3.x, t), catmull(p0.y, a.y, b.y, p3.y, t), R, Math.min(1, dt * len / (R * 0.914)));
+        }
+        t += dt;
       }
     }
     const tip = nd[NODES - 1];
@@ -554,6 +606,7 @@ function render() {
   gl.useProgram(compProg.p);
   gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, sdfTex); gl.uniform1i(u.uSdf, 0);
   gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, fieldTex); gl.uniform1i(u.uField, 1);
+  gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, softTex); gl.uniform1i(u.uSoft, 2);
   gl.uniform2f(u.uRes, Wpx, Hpx);
   gl.uniform2f(u.uCenter, cx, cy);
   gl.uniform1f(u.uScale, scale);
@@ -587,7 +640,7 @@ function hud() {
 function still() {
   cycle = 0; phase = 'fall'; tf = 0; clock = 1.3; acc = 0;
   impact();
-  stepFor(P.hold + 0.17);
+  stepFor(P.hold + 0.26);
   sinceImpact = 1e9;
   dirty = true;
 }
@@ -629,6 +682,7 @@ window.__lab = {
     render(); hud(); return this.state();
   },
   pause(on = true) { paused = on; },
+  still() { still(); render(); hud(); return this.state(); },   // the reduced-motion frame
   state() { const L = look(); return { phase, cycle, tf: +tf.toFixed(3), tau: +tau.toFixed(3), hA: +L.hA.toFixed(3), reveal: L.reveal, rho: +L.rho.toFixed(3), beads: nBodies, shadows: nShadows, halfOK, ms: +ms.toFixed(2) }; },
   measure(frames = 60) { const t0 = performance.now(); for (let k = 0; k < frames; k++) { advance(1 / 60); render(); } gl.finish(); return (performance.now() - t0) / frames; }
 };

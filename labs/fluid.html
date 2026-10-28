@@ -836,5 +836,16 @@ function stepClock(dt) {
 
 let lastT = 0;
 window.__lab = { renderOnce(t) { lastT = t ?? lastT + 1 / 60; step(1 / 60, lastT); }, flipNow() { flipT = 0; }, sim, U, renderer };
-lab.loop((dt, t) => { lastT = t; step(dt, t); });
+// The vessel shader's first compile can take ~10 s on Windows (ANGLE → D3D), and a plain first render blocks the page
+// for all of it. compileAsync lets the GPU process compile it in the background (KHR_parallel_shader_compile);
+// the loop waits until it's ready. The site's feed reads window.labWarming before showing the lab.
+let warming = window.labWarming = true;
+lab.hud('compiling the shader…');
+// Compile the variant that's actually drawn: the scene renders into the composer's half-float target (linear output),
+// not straight to the canvas. compileAsync reads the current target synchronously, so set it only around the call.
+renderer.setRenderTarget(composer.renderTarget1);
+const compiled = renderer.compileAsync(scene, camera);
+renderer.setRenderTarget(null);
+compiled.catch(e => console.error(e)).finally(() => { warming = window.labWarming = false; });
+lab.loop((dt, t) => { if (warming) return; lastT = t; step(dt, t); });
 </script>

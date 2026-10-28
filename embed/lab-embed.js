@@ -11,6 +11,7 @@
 // Pausing works on any lab without touching its code: requestAnimationFrame callbacks are parked while
 // paused and released on play, and document.hidden reads true, so labs that pause on visibilitychange
 // (Neural's training worker) stop too. lab.loop already clamps the step after a long gap.
+// A frame only counts as drawn once window.labWarming is falsy (Goop and Vessel set it while their shaders compile).
 (() => {
   const q = new URLSearchParams(location.search);
   if (!q.has('embed') || window.parent === window) return;
@@ -43,9 +44,10 @@
     const t0 = performance.now();
     try { cb(ts); } finally {
       frameCbMs += performance.now() - t0;
-      drew = true;
+      // a lab that compiles its shaders in the background sets window.labWarming until it can draw
+      if (!window.labWarming) drew = true;
       // read the canvases in the same frame they were drawn, so WebGL buffers are still valid
-      if (snapWidth) { const w = snapWidth; snapWidth = 0; post({ feed: 'snap', url: snapshot(w) }); }
+      if (snapWidth && drew) { const w = snapWidth; snapWidth = 0; post({ feed: 'snap', url: snapshot(w) }); }
     }
   };
   window.requestAnimationFrame = cb => {
