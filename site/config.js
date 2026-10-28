@@ -3,7 +3,7 @@
 // Feed order, by lab file name. Labs missing from this list are appended in lab-number order.
 // Lab-number order for now. Suggestion: open on something instantly fun and quick to load, e.g. 'sand'.
 // (Vessel is fun too, but its first visit takes ~10 s to compile; see NO_PRELOAD.)
-export const ORDER = ['prism', 'fluid', 'goop', 'knockout', 'bigbang', 'godrays', 'maze', 'pachinko', 'neural', 'sand', 'life'];
+export const ORDER = ['prism', 'fluid', 'goop', 'knockout', 'bigbang', 'godrays', 'maze', 'pachinko', 'neural', 'sand', 'life', 'splat'];
 
 // Which toy a bare link (no #toy) opens on. null = the first in ORDER.
 export const START = null;
