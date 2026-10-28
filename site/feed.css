@@ -92,7 +92,11 @@ dialog.open::backdrop { opacity: 1; }
   transform: translateY(100%); transition: transform .32s var(--ease); }
 .sheet.open { transform: none; }
 .sheet-body { display: grid; gap: 18px; padding: 10px var(--gut-r) max(28px, env(safe-area-inset-bottom, 0px)) var(--gut); }
-.grab { justify-self: center; width: 40px; height: 4px; border-radius: 2px; background: var(--line); border: 0; padding: 0; cursor: pointer; margin-bottom: 4px; }
+/* the handle: a full-width strip that stays put while the sheet scrolls, so it can always be grabbed and dragged down */
+.grab { position: sticky; top: 0; z-index: 1; justify-self: stretch; display: grid; place-items: center; height: 30px;
+  margin: -10px calc(-1 * var(--gut-r)) -8px calc(-1 * var(--gut)); padding: 0; border: 0; background: var(--panel); cursor: grab; touch-action: none; }
+.grab::before { content: ""; width: 40px; height: 4px; border-radius: 2px; background: var(--line); }
+.grab:hover::before { background: var(--dim); }
 .sheet h2 { margin: 0; font: 200 28px/1.1 var(--display); letter-spacing: -.01em; text-wrap: balance; }
 .sheet p { margin: 0; }
 .sheet .blurb { color: var(--dim); }

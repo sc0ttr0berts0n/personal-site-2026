@@ -39,8 +39,6 @@ for (const t of toys) { try { const u = localStorage.getItem('feed-poster:' + t.
 function savePoster(slug, url) {
   posters.set(slug, url);
   try { localStorage.setItem('feed-poster:' + slug, url); } catch (e) {}
-  const img = document.querySelector(`.tile[data-slug="${slug}"] img`);
-  if (img) img.src = url; else renderTiles();
 }
 
 // ---- URL ----
@@ -333,7 +331,54 @@ function closeDialog(d) {
   d.addEventListener('transitionend', done);
   timer = setTimeout(done, 400);
 }
+// Sheets follow a downward drag (on the handle, or anywhere once scrolled to the top) and tray away past
+// a quarter of their height or on a flick; otherwise they spring back.
+function sheetDrag(d) {
+  let st = null;
+  const begin = (y, t, fromHandle) => {
+    if (!d.classList.contains('open')) return;
+    st = { y0: y, dy: 0, active: fromHandle, samples: [[t, y]] };
+  };
+  const follow = (y, t, ev) => {
+    if (!st) return;
+    if (!st.active) {
+      const dy = y - st.y0;
+      if (d.scrollTop > 0 || dy < -6) { st = null; return; }   // scrolling the sheet's content instead
+      if (dy < 6) return;
+      st.active = true; st.y0 = y;
+    }
+    if (ev.cancelable) ev.preventDefault();
+    st.dy = Math.max(0, y - st.y0);
+    st.samples.push([t, y]);
+    while (st.samples.length > 2 && t - st.samples[0][0] > 90) st.samples.shift();
+    d.style.transition = 'none';
+    d.style.transform = `translateY(${st.dy}px)`;
+  };
+  const end = t => {
+    if (!st) return;
+    const s = st; st = null;
+    if (!s.active) return;
+    suppressClickUntil = performance.now() + 80;
+    const [ta, ya] = s.samples[0], [tb, yb] = s.samples.at(-1);
+    const v = tb > ta && t - tb < 80 ? (yb - ya) / (tb - ta) : 0;   // px/ms, down is positive
+    d.style.transition = ''; d.style.transform = '';
+    if (s.dy > d.offsetHeight * 0.25 || v > 0.5) closeDialog(d);
+  };
+  d.addEventListener('touchstart', e => begin(e.touches[0].clientY, e.timeStamp, !!e.target.closest('.grab')), { passive: true });
+  d.addEventListener('touchmove', e => follow(e.touches[0].clientY, e.timeStamp, e), { passive: false });
+  d.addEventListener('touchend', e => end(e.timeStamp));
+  d.addEventListener('touchcancel', e => end(e.timeStamp));
+  // mouse: the handle only
+  d.addEventListener('pointerdown', e => {
+    if (e.pointerType !== 'mouse' || !e.target.closest('.grab')) return;
+    begin(e.clientY, e.timeStamp, true);
+    const mv = ev => follow(ev.clientY, ev.timeStamp, ev);
+    const up = ev => { removeEventListener('pointermove', mv); removeEventListener('pointerup', up); end(ev.timeStamp); };
+    addEventListener('pointermove', mv); addEventListener('pointerup', up);
+  });
+}
 for (const d of document.querySelectorAll('dialog')) {
+  if (d.classList.contains('sheet')) sheetDrag(d);
   d.addEventListener('cancel', e => { e.preventDefault(); closeDialog(d); });
   // tap outside the sheet (on the backdrop) closes it
   d.addEventListener('click', e => { if (e.target === d && !d.classList.contains('overview')) closeDialog(d); });
@@ -387,9 +432,14 @@ $('artist-btn').addEventListener('click', () => {
 let overviewWasPlaying = null;
 function renderTiles() {
   $('ov-count').textContent = `${N} toys`;
+  // the still from npm run posters, then this browser's own snapshot, then the mark
   $('tiles').innerHTML = toys.map((t, i) => `<li><button type="button" class="tile" data-slug="${t.slug}" data-i="${i}"${i === cur ? ' aria-current="true"' : ''}>
-      ${posters.get(t.slug) ? `<img src="${posters.get(t.slug)}" alt="">` : `<span class="mark">${logoSVG({ size: 32 })}</span>`}
+      <span class="mark">${logoSVG({ size: 32 })}</span><img src="posters/${t.slug}.jpg" alt="" loading="lazy" decoding="async">
       <span class="lbl"><span class="num">${t.number}</span><b>${esc(t.title)}</b></span></button></li>`).join('');
+  for (const img of $('tiles').querySelectorAll('img')) img.addEventListener('error', () => {
+    const live = posters.get(img.closest('.tile').dataset.slug);
+    if (live && img.src !== live) img.src = live; else img.remove();
+  });
 }
 function updateCurrentTile() {
   for (const b of document.querySelectorAll('.tile')) b.setAttribute('aria-current', +b.dataset.i === cur ? 'true' : 'false');

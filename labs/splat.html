@@ -1,6 +1,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <script src="../embed/lab-embed.js"></script>
+<script src="../embed/lab-page.js"></script>
 <title>Splat!</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -29,18 +30,27 @@ const LS = [0.5, 0.667];    // shadow offset per unit of height (light from the 
 const SUB = 1 / 240;        // splat physics substep, s
 const NODES = 6;            // nodes per finger: base (pinned to the puddle edge) … tip
 const GRAV = 14;            // droplet gravity, logo units / s²
-// After the splat settles (times from the end of Settle): the next floor's grid fades in on the splat, the splat
-// drains into a window onto that floor, then the mound over the mark squeezes off the next mark, which drops through.
-const GRID_IN = [0, 0.4], DRAIN = [0.2, 0.75], PRESS = [0.55, 1.05];
-const PASS = 0.975;         // the old floor is dropped once the camera is this fraction of the way down to it
-const fallY = x => P.height * C * (0.92 * x * x + 0.08 * x);   // distance fallen: nearly free fall, so it starts from rest
+// On impact the next mark rises out of the splat and locks to the camera. When the floor opens (the Floor opens
+// slider), the splat drops into a splat-shaped hole; a beat later the new mark drops through it too, and the old
+// splat falls alongside, drifting away from the camera and breaking up before the next impact.
+const BEAT = 0.35;              // s the new mark hangs, locked to the camera, between the floor opening and its drop
+const GOOP_V = 0, GOOP_A = 6;   // the old splat's fall into its hole: initial speed and acceleration (logo units)
+const FADE = [0.4, 1.5];        // s after the drop over which the old splat breaks up and dissolves
+const PASS = 0.975;             // the old floor is dropped once the camera is this fraction of the way down to it
+const fallY = x => P.height * C * x * x;   // distance fallen: free fall from rest, so the drop through the hole eases in
+// Falling feel. A touch mid-fall tilts the mark toward it (its near side dips away from the camera) on an underdamped
+// spring; as the speed builds it flutters like a canopy before it opens, its edges flapping; and the air streams past.
+// All of it levels out just before impact (FLAT), so the mark meets its splat flat, and the flap carries into the goo.
+const TILT = 0.5, TILT_W = 9, TILT_Z = 0.3;   // max lean (radians), spring rate and damping
+const FLUTTER = 0.09, FLAP = 0.03;            // canopy flutter (radians) and edge flap (logo units) at full speed, Flutter 1
+const FLAT = [0.86, 0.985];                   // fraction of the fall over which the mark levels out
 
 const lab = createLab({
   number: '12',
   title: 'Splat!',
-  blurb: 'A fine grid, slowly zooming. It’s really a camera locked onto the mark, the mark is made of slime, and it’s falling fast. It hits the floor and splats. Then the next floor’s grid shows through the splat, the pressure squeezes out the next mark in the next colour, and down it goes, through the hole the splat left.',
+  blurb: 'A fine grid, slowly zooming. It’s really a camera locked onto the mark, the mark is made of slime, and it’s falling fast. It hits the floor and splats, and the next mark, in the next colour, pops up out of the splat. Then the floor gives way in the shape of the splat, and down they both go.',
   teaches: 'perspective (screen size goes as 1 / distance, so a steady fall reads as an accelerating zoom) · metaballs: an additive field cut at one level, with one-pixel analytic antialiasing · springs and plastic rope chains for goo',
-  hint: 'tap to drop it now',
+  hint: 'tap it mid-fall to tilt it',
   grid: false,
   palettes: [
     { key: 'slime', name: 'Slime', bg: '#000000', grid: '#16161c', ink: '#f4f4f6', colors: ['#8cff1a', '#ff7a00', '#ff2fa8', '#1ee3ff', '#ffe414', '#9d4dff'] },
@@ -49,16 +59,17 @@ const lab = createLab({
   defaultPalette: 'slime',
   params: {
     fallH: { type: 'heading', label: 'Fall' },
-    fall: { type: 'range', label: 'Fall time', min: 2, max: 14, step: 0.5, value: 6, unit: ' s' },
+    fall: { type: 'range', label: 'Fall time', min: 2, max: 14, step: 0.5, value: 7, unit: ' s' },
     height: { type: 'range', label: 'Drop height', min: 6, max: 60, step: 1, value: 30, format: v => `${v}×` },
     grid: { type: 'range', label: 'Grid density', min: 6, max: 40, step: 1, value: 16 },
     shake: { type: 'range', label: 'Impact shake', min: 0, max: 1, step: 0.05, value: 0.35 },
+    flutter: { type: 'range', label: 'Flutter', min: 0, max: 1, step: 0.05, value: 0.1 },
     splatH: { type: 'heading', label: 'Splat' },
     goo: { type: 'range', label: 'Goo (viscosity)', min: 0, max: 1, step: 0.05, value: 0.5 },
     spread: { type: 'range', label: 'Spread', min: 0.04, max: 0.3, step: 0.01, value: 0.14 },
     fingers: { type: 'range', label: 'Fingers', min: 0, max: 40, step: 1, value: 22 },
     spray: { type: 'range', label: 'Spray', min: 0, max: 60, step: 1, value: 24 },
-    hold: { type: 'range', label: 'Settle before reveal', min: 0.2, max: 3, step: 0.1, value: 0.9, unit: ' s' },
+    hold: { type: 'range', label: 'Floor opens after', min: 0.3, max: 3, step: 0.05, value: 0.7, unit: ' s' },
     lookH: { type: 'heading', label: 'Look' },
     gloss: { type: 'range', label: 'Gloss', min: 0, max: 1, step: 0.05, value: 0.8 },
     wobble: { type: 'range', label: 'Jiggle', min: 0, max: 1, step: 0.05, value: 0.4 },
@@ -99,7 +110,27 @@ layout(location=0) in vec2 aP;
 void main(){ gl_Position = vec4(aP, 0., 1.); }`;
 
 // ---- the outline as a signed distance texture (negative inside), built once ----
-const polys = logoPolygons({ curveSegments: 8 });
+// Pure goop, no corners: each outline is squared off to its long edges, inset by ROUND, and the distance field adds ROUND
+// back, so every outer corner comes back as a quarter-round (the offset of a polygon has round joins).
+const ROUND = 0.035;   // logo units
+function goopPoly(poly) {
+  const n = poly.length, edges = [];
+  let area = 0;
+  for (let i = 0; i < n; i++) { const a = poly[i], b = poly[(i + 1) % n]; area += a[0] * b[1] - b[0] * a[1]; }
+  const sg = Math.sign(area);
+  for (let i = 0; i < n; i++) {
+    const a = poly[i], b = poly[(i + 1) % n], ex = b[0] - a[0], ey = b[1] - a[1], len = Math.hypot(ex, ey);
+    if (len < 0.03) continue;   // the logo's tiny corner arcs
+    const nx = -sg * ey / len, ny = sg * ex / len;   // inward normal
+    edges.push([a[0] + nx * ROUND, a[1] + ny * ROUND, ex / len, ey / len]);
+  }
+  return edges.map((e, i) => {   // corners where consecutive inset edges meet
+    const f = edges[(i + 1) % edges.length], den = e[2] * f[3] - e[3] * f[2];
+    const t = ((f[0] - e[0]) * f[3] - (f[1] - e[1]) * f[2]) / den;
+    return [e[0] + e[2] * t, e[1] + e[3] * t];
+  });
+}
+const polys = logoPolygons({ curveSegments: 8 }).map(goopPoly);
 const SEGS = [];
 for (const poly of polys) for (let i = 0; i < poly.length; i++) { const a = poly[i], b = poly[(i + 1) % poly.length]; SEGS.push(a[0], a[1], b[0], b[1]); }
 const NSEG = SEGS.length / 4;
@@ -117,7 +148,7 @@ void main(){
     d = min(d, length(pa - ba * clamp(dot(pa, ba) / dot(ba, ba), 0., 1.)));
     if ((a.y > q.y) != (b.y > q.y) && q.x < (b.x - a.x) * (q.y - a.y) / (b.y - a.y) + a.x) ins = !ins;
   }
-  o = vec4(ins ? -d : d, 0., 0., 1.);
+  o = vec4((ins ? -d : d) - ${ROUND.toFixed(3)}, 0., 0., 1.);
 }`);
 
 function cpuSdf(n) {
@@ -132,7 +163,7 @@ function cpuSdf(n) {
       d = Math.min(d, Math.hypot(px - ex * h, py - ey * h));
       if ((ay > qy) !== (by > qy) && qx < ex * (qy - ay) / ey + ax) ins = !ins;
     }
-    out[y * n + x] = ins ? -d : d;
+    out[y * n + x] = (ins ? -d : d) - ROUND;
   }
   return out;
 }
@@ -210,29 +241,30 @@ function rayEdge(ux, uy) {
     const t = (ax * ey - ay * ex) / den, s = (ax * uy - ay * ux) / den;
     if (t > 0 && s >= 0 && s <= 1) best = Math.max(best, t);
   }
-  return best || 0.4;
+  return best ? best + ROUND : 0.4;
 }
 
-// ---- field pass: every bead of goo adds a (1 - r²)³ bump, R = droplet bodies, G = their shadows ----
+// ---- field pass: every bead of goo adds a (1 - r²)³ bump. R = the splat's goo, G = flying droplets' shadows,
+// B = the hole the splat leaves in its floor. uK scales a whole set about the centre (perspective). ----
 const beadProg = program(`#version 300 es
 layout(location=0) in vec2 aC;
 layout(location=1) in vec4 aI;
-uniform vec2 uRes, uCenter; uniform float uScale;
+uniform vec2 uRes, uCenter; uniform float uScale, uK;
 out vec2 vC; out float vW;
 void main(){
   vC = aC; vW = aI.w;
-  vec2 p = (aI.xy + aC * aI.z) * uScale + uCenter;
+  vec2 p = (aI.xy + aC * aI.z) * uK * uScale + uCenter;
   gl_Position = vec4(p.x / uRes.x * 2. - 1., 1. - p.y / uRes.y * 2., 0., 1.);
 }`, `#version 300 es
 precision highp float;
 in vec2 vC; in float vW;
-uniform vec2 uMask;
+uniform vec3 uMask;
 out vec4 o;
 void main(){
   float r2 = dot(vC, vC);
   if (r2 >= 1.) discard;
   float k = 1. - r2; k = k * k * k * vW;
-  o = vec4(k * uMask.x, k * uMask.y, 0., 0.);
+  o = vec4(k * uMask, 0.);
 }`);
 const MAX_BEADS = 6000;
 const beadData = new Float32Array(MAX_BEADS * 4);
@@ -246,15 +278,20 @@ gl.bindBuffer(gl.ARRAY_BUFFER, beadBuf);
 gl.bufferData(gl.ARRAY_BUFFER, beadData.byteLength, gl.DYNAMIC_DRAW);
 gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 0, 0); gl.vertexAttribDivisor(1, 1);
 gl.bindVertexArray(null);
+const holeBuf = gl.createBuffer();   // the hole's beads: the splat's shape the moment the floor opened
+gl.bindBuffer(gl.ARRAY_BUFFER, holeBuf);
+gl.bufferData(gl.ARRAY_BUFFER, beadData.byteLength, gl.DYNAMIC_DRAW);
 
-// ---- composite: floor grid, shadows, the slime surface, and the next world through the tear ----
+// ---- composite: floor grids, shadows, the slime, and the old floor with its splat-shaped hole ----
 const compProg = program(FS_TRI, `#version 300 es
 precision highp float;
 uniform sampler2D uSdf, uSoft, uField;
 uniform vec2 uRes, uCenter;
 uniform float uScale, uTime, uFieldK, uD, uGloss, uShadowOn;
 uniform vec3 uFloorA, uLineA, uSlimeA, uFloorB, uLineB, uSlimeB;
-uniform float uHB, uSA, uAOn, uSpread, uWobL, uWobS, uFlat, uLanded, uShadowA, uGIn, uDrain, uPress;
+uniform float uHB, uSA, uAOn, uSpread, uWobL, uWobS, uFlat, uLanded, uShadowA, uAO;
+uniform float uHole, uHoleIn, uFloorOn, uSG, uErode, uSpreadH, uWobSH, uHoleTime, uSB, uEB, uRiseSh, uGoopA, uFlap, uFlapG, uAir, uAirT;
+uniform vec2 uTilt;
 out vec4 o;
 const float T = ${T.toFixed(3)}, W = ${EDGE.toFixed(3)}, DOM = ${DOM.toFixed(3)}, C = ${C.toFixed(3)};
 const vec2 LS = vec2(${LS[0].toFixed(3)}, ${LS[1].toFixed(3)});
@@ -279,30 +316,63 @@ float cubic(sampler2D t, vec2 uv){
 }
 float sdfSoft(vec2 q){ vec2 c = clamp(q, -DOM, DOM); return cubic(uSoft, q / (2. * DOM) + .5) + length(q - c); }
 float Lf(float s){ float x = max(1. - s / W, 0.); return T * x * x; }
-float wob(vec2 q, float amp, float freq, float sp){ return amp * (vnoise(q * freq + vec2(uTime * sp, -uTime * sp * .7)) - .5); }
+float wobAt(vec2 q, float amp, float freq, float sp, float t){ return amp * (vnoise(q * freq + vec2(t * sp, -t * sp * .7)) - .5); }
+float wob(vec2 q, float amp, float freq, float sp){ return wobAt(q, amp, freq, sp, uTime); }
 // Depth below the surface's outline, read back from the field (exact for Lf).
 float depth(float f){ return W * (sqrt(max(f, T) / T) - 1.); }
-// x = the field that sets the outline, y = the mound: the mark's own body, which stays thick inside the puddle
-// the mark that is still in the air (identical to FA before impact, so the hand-off is exact)
-vec2 FB(vec2 q){ float w = wob(q, uWobL, 6., .6); return vec2(Lf(sdfAt(q) + w), Lf(sdfSoft(q) + w)); }
-// The mark that landed, on its own floor plane (scaled by uSA as the camera drops past it): its outline dilated
-// into a puddle, plus the beads. Then the puddle drains from its deepest parts into a window (everything but the
-// mound over the mark), and the mound is squeezed off from the mark's middle out, leaving a lip around it.
-// Returns (outline field, mound field, puddle depth, distance to the mark).
-vec4 FA(vec2 q, vec2 uv){
+// x = the field that sets the outline, y = the mound: the mark's own body, which stays thick inside the puddle.
+// The mark in the air, at screen scale uSB and grown in by uEB as it rises out of the splat (both 1 once it's
+// locked to the camera, which makes it identical to FG at the moment of impact).
+// The mark tilted by uTilt (its length the angle, its direction the side that dips away): ray-cast the screen point
+// back onto the tilted plane, seen in perspective from the camera C above.
+vec2 tiltQ(vec2 q){
+  float th = length(uTilt);
+  if (th < 1e-4) return q;
+  vec2 d = uTilt / th;
+  float s = dot(q, d), a = s * C / max(C * cos(th) - s * sin(th), .05);
+  return a * d + (q - s * d) * (C + a * sin(th)) / C;
+}
+vec2 FB(vec2 q){
+  vec2 qb = tiltQ(q) / uSB;
+  float w = wob(qb, uWobL, 6., .6) + wob(qb, uFlap, 5., 11.) + (1. - uEB) * .08;
+  return vec2(Lf(sdfAt(qb) * uSB + w), Lf(sdfSoft(qb) * uSB + w));
+}
+// The splat's goo, at screen scale uSG as it falls away from the camera: the mark's outline dilated into a puddle,
+// plus the beads, eaten into blobs by uErode as it breaks up.
+vec2 FG(vec2 q, vec2 uv){
+  vec2 qs = q / uSG;
+  float w = wob(qs, uWobL, 6., .6) + wob(qs, uWobS, 3.2, 2.2) + wob(qs, uFlapG, 5., 11.) + uErode * (.4 + .8 * vnoise(qs * 4.5 + 7.));
+  return vec2(Lf(sdfAt(qs) - uSpread + w) + texture(uField, uv).r / uFieldK, Lf(sdfSoft(qs) - uSpread * .3 + w));
+}
+// The hole in the old floor (scale uSA as the camera drops past it): the splat's shape frozen when the floor opened.
+// It starts just inside the goo's edge and grows (uHoleIn) to a touch past it, so it opens out from under the goo.
+float FH(vec2 q, vec2 uv){
   vec2 qs = q / uSA;
-  float w = wob(qs, uWobL, 6., .6) + wob(qs, uWobS, 3.2, 2.2);
-  float sB = sdfAt(qs);
-  float P0 = Lf(sB - uSpread + w), dP = depth(P0);
-  float F = P0 + texture(uField, uv).r / uFieldK;
-  float M = Lf(sdfSoft(qs) - uSpread * .3 + w);
-  float dcut = mix(.26, .022, uDrain);
-  float drain = smoothstep(.02, .05, sB) * smoothstep(dcut - .012, dcut, dP) * step(.001, uDrain);
-  float clr = clamp((sB - mix(-.11, .006, uPress)) / .015, 0., 1.);
-  float x = (sB - .026) / .014;
-  F = F * (1. - drain) * clr + uPress * T * 2. * exp(-x * x);
-  M *= (1. - drain) * clr;
-  return vec4(F, M, dP, sB);
+  float w = wobAt(qs, uWobL, 6., .6, uHoleTime) + wobAt(qs, uWobSH, 3.2, 2.2, uHoleTime);
+  return Lf(sdfAt(qs) - uSpreadH + w - mix(-.02, .012, uHoleIn)) + texture(uField, uv).b / uFieldK * mix(.75, 1.15, uHoleIn);
+}
+// The airstream: specks in the air rushing up past the mark toward the camera, each a streak (motion blur) that
+// radiates from the centre and grows as it nears. uAir is the speed (0 at rest, 1 at impact); uAirT its integral.
+float air(vec2 q, float pq){
+  if (uAir < .01) return 0.;
+  float rq = length(q), ang = atan(q.y, q.x) / 6.2831853 + .5, a = 0.;
+  const float N = 90.;
+  float cell = floor(ang * N);
+  for (int l = 0; l < 2; l++) for (int j = -1; j <= 1; j++) {
+    float c = mod(cell + float(j), N);
+    vec2 sd = vec2(c, float(l) * 37.);
+    float h1 = hash(sd + .3), h2 = hash(sd + 5.1), h3 = hash(sd + 9.7);
+    if (h3 > .6) continue;
+    float pa = (c + .15 + .7 * h1) / N;
+    float ph = fract(h2 + uAirT * (.7 + .6 * h3));
+    float z = mix(3.4, .45, ph), R0 = .5 + .8 * h3;
+    float r1 = R0 / z, r2 = R0 / max(z - .5 * uAir, .3);
+    float da = abs(fract(ang - pa + .5) - .5) * 6.2831853 * rq;
+    float wd = max(pq * 1.1, .006 / z);
+    float along = smoothstep(r1, mix(r1, r2, .35), rq) * (1. - smoothstep(mix(r1, r2, .8), r2 + pq, rq));
+    a += clamp(1. - da / wd, 0., 1.) * along * smoothstep(0., .25, ph) * (1. - smoothstep(.85, 1., ph)) * min(1., .5 / z);
+  }
+  return min(a, 1.) * smoothstep(.08, .55, uAir);
 }
 float gridLevel(vec2 uv, float lw){
   vec2 dd = max(fwidth(uv), vec2(1e-6));
@@ -327,12 +397,12 @@ float logoShadow(vec2 q, float h){
 float circ(float f, float r){ float x = 1. - min(depth(f) / r, 1.); return sqrt(1. - x * x); }
 float dome(float f, float r){ float x = min(depth(f) / r, 1.); return x * (2. - x); }
 float hgt(vec2 f, float k){ return .02 * circ(f.x, .022) + .045 * k * dome(f.y, .09); }
-vec4 slime(vec3 base, vec2 f0, vec2 fx, vec2 fy, float pq, float k){
+vec4 slime(vec3 base, vec2 f0, vec2 fx, vec2 fy, float pq, float k, vec2 tn){
   float g = length(vec2(fx.x - f0.x, fy.x - f0.x));
   float a = clamp((f0.x - T) / max(g, 1e-6) + .5, 0., 1.);
   float h0 = hgt(f0, k);
   vec2 dh = vec2(hgt(fx, k) - h0, -(hgt(fy, k) - h0)) / pq;
-  vec3 n = normalize(vec3(-dh, 1.));
+  vec3 n = normalize(vec3(-dh + tn, 1.));
   float diff = max(dot(n, L1), 0.);
   float s1 = max(dot(n, normalize(L1 + vec3(0, 0, 1))), 0.), s2 = max(dot(n, normalize(L2 + vec3(0, 0, 1))), 0.);
   float spec = pow(s1, 90.) * 1.3 + pow(s1, 14.) * .16 + pow(s2, 60.) * .35;
@@ -351,25 +421,38 @@ void main(){
   // the falling mark over its floor
   float aB = gridA(q, uHB);
   vec3 col = mix(uFloorB, uLineB, aB) * (1. - uShadowOn * logoShadow(q, uHB));
-  vec4 sb = slime(uSlimeB, FB(q), FB(q + dqx), FB(q + dqy), pq, 1.);
+  vec4 sb = slime(uSlimeB, FB(q), FB(q + dqx), FB(q + dqy), pq, 1., vec2(uTilt.x, -uTilt.y));
   if (uAOn > .5) {
-    // the landed splat's floor, with a window through the splat onto the falling mark's floor
-    vec2 qa = q / uSA;
-    vec3 colA = mix(uFloorA, uLineA, gridA(qa, 0.));
-    vec4 fa0 = FA(q, uv), fax = FA(q + dqx, uv + dux), fay = FA(q + dqy, uv + duy);
-    float sh = uShadowOn * uShadowA * logoShadow(qa, .001);
-    float ao = uLanded * .45 * smoothstep(0., T, fa0.x);
-    float ds = uShadowOn * .45 * smoothstep(.03, .6, texture(uField, uv).g / uFieldK);
-    colA *= (1. - sh) * (1. - ao) * (1. - ds);
-    col = mix(colA, col, step(.001, uDrain) * smoothstep(0., .006, fa0.z));
-    col = mix(col, sb.rgb, sb.a);
-    vec4 sa = slime(uSlimeA, fa0.xy, fax.xy, fay.xy, pq, uFlat);
-    // the next floor's grid shows on the splat before the splat opens onto it
-    float lines = uGIn * aB * smoothstep(.02, .05, fa0.w) * smoothstep(.01, .03, fa0.z);
-    sa.rgb = mix(sa.rgb, uLineB, lines * .85);
-    col = mix(col, sa.rgb, sa.a);
-  } else col = mix(col, sb.rgb, sb.a);
-  o = vec4(col, 1.);
+    vec2 g0 = FG(q, uv), gx = FG(q + dqx, uv + dux), gy = FG(q + dqy, uv + duy);
+    vec4 sa = slime(uSlimeA, g0, gx, gy, pq, uFlat, vec2(0));
+    if (uHole < .5) {
+      // the splat on its floor
+      vec3 colA = mix(uFloorA, uLineA, gridA(q, 0.));
+      float sh = uShadowOn * uShadowA * logoShadow(q, .001);
+      float ao = uAO * .45 * smoothstep(0., T, g0.x);
+      float ds = uShadowOn * .45 * smoothstep(.03, .6, texture(uField, uv).g / uFieldK);
+      col = mix(colA * (1. - sh) * (1. - ao) * (1. - ds), sa.rgb, sa.a);
+    } else {
+      // the goo drops below the floor: the old floor is drawn around the hole, and the goo shows only through it
+      // (blended in as the hole opens out from under the goo's edge, so nothing pops)
+      float inHole = 1.;
+      if (uFloorOn > .5) {
+        vec2 qa = q / uSA;
+        float h0 = FH(q, uv), hx = FH(q + dqx, uv + dux), hy = FH(q + dqy, uv + duy);
+        inHole = clamp((h0 - T) / max(length(vec2(hx - h0, hy - h0)), 1e-6) + .5, 0., 1.);
+        float edge = 1. - .45 * uHoleIn * (1. - smoothstep(T, 2.4 * T, h0));   // the cut edge shades the near side of the hole
+        float ds = uShadowOn * .45 * smoothstep(.03, .6, texture(uField, uv).g / uFieldK);
+        vec3 colA = mix(uFloorA, uLineA, gridA(qa, 0.)) * (1. - uAO * .45 * smoothstep(0., T, mix(g0.x, h0, uHoleIn))) * (1. - ds);
+        col = mix(colA, col * edge, inHole);
+        sa.rgb *= edge;
+      }
+      col = mix(col, sa.rgb, sa.a * uGoopA * mix(1., inHole, uHoleIn));   // and dissolves away before it is dropped
+    }
+    // the new mark rising out of the splat throws a soft shadow onto it
+    col *= 1. - .35 * uRiseSh * (1. - smoothstep(-.03, .03, sdfAt((q - LS * .05) / uSB) * uSB));
+  }
+  col = mix(col, mix(uLineB, vec3(1), .7), .55 * air(q, pq));
+  o = vec4(mix(col, sb.rgb, sb.a), 1.);
 }`);
 
 // ---- sizing ----
@@ -400,21 +483,25 @@ const clamp01 = x => Math.min(1, Math.max(0, x));
 const smooth = (a, b, x) => { const t = clamp01((x - a) / (b - a)); return t * t * (3 - 2 * t); };
 
 // ---- the cycle ----
-// phase 'fall': mark `cycle` is falling; `prev` is the splat it was squeezed out of, until the camera drops past it.
-// phase 'splat': mark `cycle` has landed; mark `cycle + 1` waits under its mound.
+// phase 'splat': mark `cycle` has landed and mark `cycle + 1` rises out of it.
+// phase 'fall': mark `cycle` is falling; `prev` is the splat it rose out of, falling too, until it's gone.
 let cycle = 0, phase = 'fall', tf = 0, tau = 0, sinceImpact = 1e9, splat = null, prev = null, clock = 0;
 let dirty = true, fieldDirty = true, paused = false;
+// the tilt spring (lean, its velocity, and the target a held touch sets), the canopy's flutter phase, the air's travel
+const tilt = { x: 0, y: 0, vx: 0, vy: 0, tx: 0, ty: 0 };
+let flutterPh = 0, airT = 0;
 const H0 = () => P.height * C;
-const pressEnd = () => P.hold + PRESS[1];
+const dropAt = () => P.hold + BEAT;
 const zeta = () => lerp(0.32, 0.75, P.goo), omega = () => lerp(24, 13, P.goo);
 // damped spring from 0 toward 1: the puddle shoots past its final size and settles back
-function spring(t) {
-  const z = zeta(), w = omega(), wd = w * Math.sqrt(1 - z * z);
+function spring(t, z = zeta(), w = omega()) {
+  const wd = w * Math.sqrt(1 - z * z);
   return 1 - Math.exp(-z * w * t) * (Math.cos(wd * t) + z * w / wd * Math.sin(wd * t));
 }
 
 function impact() {
   phase = 'splat'; tau = 0; sinceImpact = 0;
+  Object.assign(tilt, { x: 0, y: 0, vx: 0, vy: 0, tx: 0, ty: 0 });   // it has levelled out by now (FLAT)
   const R = rng(0x5eed + cycle * 7919), g = P.goo;
   const fingers = [], drops = [];
   const nF = P.fingers | 0, off = R() * Math.PI * 2;
@@ -441,6 +528,11 @@ function impact() {
 
 function stepSplat(h) {
   tau += h; sinceImpact += h;
+  if (!splat.hole && tau >= P.hold) {
+    // the floor gives way in exactly the splat's shape (landed goo only), a touch fatter so the goo sits inside it
+    const n = writeBeads(splat, { tauA: tau, hole: true }, 0);
+    splat.hole = beadData.slice(0, n * 4); splat.holeClock = clock; splat.holeSent = false;
+  }
   const g = P.goo, drag = lerp(3.2, 8.5, g), tens = lerp(0.8, 2.2, g);
   const spreadNow = P.spread * spring(tau);
   for (const f of splat.fingers) {
@@ -479,42 +571,66 @@ function stepSplat(h) {
   }
 }
 
-// What to draw right now. A = the landed splat (if any), on a floor plane that rushes past the camera once the
-// next mark falls; B = the falling mark, its floor below.
+// What to draw right now. A = the splat (if any): its goo, and the floor it landed on, which opens in its shape
+// and rushes past the camera once the new mark drops. B = the mark in the air, its floor far below.
 function look() {
-  const L = { y: 0, hB: H0(), Bk: cycle, AOn: 0, Ak: cycle - 1, SA: 1, sp: null, tauA: 0,
-    spread: 0, flat: 1, landed: 0, shadowA: 1, wobS: 0, gIn: 0, drain: 0, press: 0 };
-  if (phase === 'splat') { L.AOn = 1; L.Ak = cycle; L.Bk = cycle + 1; L.sp = splat; L.tauA = tau; }
+  const L = { y: 0, hB: H0(), Bk: cycle, AOn: 0, Ak: cycle - 1, SA: 1, sp: null, tauA: 0, tB: 1e9,
+    spread: 0, flat: 1, landed: 0, shadowA: 1, wobS: 0, ao: 0, hole: 0, floorOn: 1, sG: 1, tg: 0, fade: 1, erode: 0,
+    sB: 1, eB: 1, riseSh: 0, tilt: [0, 0], flap: 0, flapG: 0, air: 0 };
+  if (phase === 'splat') { L.AOn = 1; L.Ak = cycle; L.Bk = cycle + 1; L.sp = splat; L.tauA = L.tB = tau; }
   else {
     L.y = fallY(tf / P.fall); L.hB = H0() - L.y;
-    if (prev && L.y < C * PASS) { L.AOn = 1; L.sp = prev.splat; L.tauA = prev.tau; L.SA = C / (C - L.y); }
+    if (prev) { L.sp = prev.splat; L.tauA = L.tB = prev.tau + tf; L.floorOn = L.y < C * PASS ? 1 : 0; L.SA = C / (C - Math.min(L.y, C * PASS)); }
   }
-  if (!L.AOn) return L;
-  const t = L.tauA, sp = spring(t), r = t - P.hold;
+  // the new mark pops up out of the splat (overshooting toward the camera), then settles and locks
+  L.sB = 0.6 + 0.4 * spring(L.tB, 0.42, 12);
+  L.eB = smooth(0, 0.16, L.tB);
+  L.riseSh = L.eB * (1 - smooth(P.hold, dropAt(), L.tB));
+  if (phase === 'fall') {
+    const x = tf / P.fall, fl = smooth(0.25, 0.9, x), env = 1 - smooth(FLAT[0], FLAT[1], x), fa = FLUTTER * fl * P.flutter;
+    L.tilt = [(tilt.x + fa * Math.sin(flutterPh)) * env, (tilt.y + 0.7 * fa * Math.sin(flutterPh * 1.37 + 1)) * env];
+    L.flap = FLAP * P.flutter * fl;
+    L.air = x;
+  } else L.air = Math.exp(-10 * tau);   // the air stops with the mark
+  if (!L.sp) return L;
+  L.flapG = FLAP * P.flutter * Math.exp(-8 * L.tauA);   // the flap at impact, dying away in the goo
+  const t = L.tauA, sp = spring(t);
   L.spread = P.spread * sp;
   L.flat = 1 - 0.45 * clamp01(sp);
   L.landed = smooth(0, 0.1, t);
   L.shadowA = 1 - L.landed;
-  L.wobS = P.wobble * (0.07 * Math.exp(-t * 3.2) + 0.012) * smooth(0, 0.06, t);
-  L.gIn = smooth(GRID_IN[0], GRID_IN[1], r);
-  L.drain = smooth(DRAIN[0], DRAIN[1], r);
-  L.press = smooth(PRESS[0], PRESS[1], r);
+  L.ao = L.landed * (1 - 0.5 * smooth(P.hold, P.hold + 0.3, t));
+  L.wobS = wobS(t);
+  L.hole = t >= P.hold ? 1 : 0;
+  L.tg = Math.max(0, t - P.hold);
+  L.sG = C / (C + GOOP_V * L.tg + 0.5 * GOOP_A * L.tg * L.tg - L.y);
+  L.fade = 1 - smooth(FADE[0], FADE[1], t - dropAt());
+  L.erode = 1 - L.fade;
+  L.AOn = phase === 'splat' || L.floorOn || L.fade > 0 ? 1 : 0;
   return L;
 }
+const wobS = t => P.wobble * (0.07 * Math.exp(-t * 3.2) + 0.012) * smooth(0, 0.06, t);
 
 function advance(dt) {
   clock += dt;
+  const x = phase === 'fall' ? tf / P.fall : 0, n = Math.ceil(dt / SUB), s = dt / n;
+  for (let k = 0; k < n; k++) {
+    tilt.vx += (TILT_W * TILT_W * (tilt.tx - tilt.x) - 2 * TILT_Z * TILT_W * tilt.vx) * s; tilt.x += tilt.vx * s;
+    tilt.vy += (TILT_W * TILT_W * (tilt.ty - tilt.y) - 2 * TILT_Z * TILT_W * tilt.vy) * s; tilt.y += tilt.vy * s;
+  }
+  flutterPh += dt * 6.2832 * (2 + 7 * x);
+  airT += dt * (phase === 'fall' ? x : Math.exp(-10 * tau)) * 1.4;
   if (phase === 'fall') {
     tf += dt; sinceImpact += dt;
     if (tf >= P.fall) { const extra = tf - P.fall; tf = P.fall; prev = null; impact(); stepFor(extra); }
   } else {
     stepFor(dt);
-    if (tau >= pressEnd()) dropThrough(tau - pressEnd());
+    if (tau >= dropAt()) dropThrough(tau - dropAt());
   }
 }
-// the squeezed-out mark starts to fall, through the splat it came from
+// the new mark, locked to the camera, drops through the hole after the splat
 function dropThrough(t = 0) {
-  prev = { splat, tau };
+  prev = { splat, tau: dropAt() };
   cycle++; phase = 'fall'; tf = t; splat = null; fieldDirty = true;
 }
 let acc = 0;
@@ -538,12 +654,16 @@ function catmull(p0, p1, p2, p3, t) {
   return 0.5 * (2 * p1 + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 + (-p0 + 3 * p1 - 3 * p2 + p3) * t3);
 }
 let nBodies = 0, nShadows = 0;
-function buildBeads(L) {
-  let n = 0;
-  const splat = L.sp, y = L.y;
-  // the goo squeezes out of the mark's edge over the first instants instead of appearing all at once
-  const S = L.SA, sr = S * smooth(0, 0.07, L.tauA);
-  const push = (x, y, R, w) => { if (n >= MAX_BEADS) return; const o = n * 4; beadData[o] = x * S; beadData[o + 1] = y * S; beadData[o + 2] = R * sr; beadData[o + 3] = w * FIELD_K; n++; };
+// Writes the splat's beads into beadData from index n, in its floor's units (the draw scales them). With o.hole it
+// writes the landed goo as it is (the hole's shape); otherwise the goo as it falls: drifting apart, then dissolving.
+function writeBeads(splat, o, n) {
+  const grow = smooth(0, 0.07, o.tauA), fade = o.hole ? 1 : (o.fade ?? 1), tg = o.hole ? 0 : (o.tg || 0);
+  const drift = 0.5 * tg + 1.2 * tg * tg, fat = 1;   // the pieces scatter as they fall away
+  const push = (x, y, R, w, dx, dy) => {
+    if (n >= MAX_BEADS) return;
+    const k = n * 4; beadData[k] = x + dx * drift; beadData[k + 1] = y + dy * drift; beadData[k + 2] = R * grow * fade * fat; beadData[k + 3] = w * FIELD_K; n++;
+  };
+  if (fade <= 0.01) return n;
   for (const f of splat.fingers) {
     const nd = f.nodes;
     let total = 0;
@@ -558,26 +678,32 @@ function buildBeads(L) {
       for (let t = 0; t < 1;) {
         const e = t * t * (3 - 2 * t);
         const r = lerp(ra, rb, e) * (1 - pinch * Math.sin(Math.PI * t));
-        const dt = Math.min(1 - t, Math.max(0.4 * Math.max(r, 0.004) / len, 1 / 64));
-        if (r >= 0.003) {
+        const dt = Math.min(1 - t, Math.max(0.4 * Math.max(r * fade, 0.004) / len, 1 / 64));
+        if (r * fade >= 0.003) {
           const R = r / 0.43;
-          push(catmull(p0.x, a.x, b.x, p3.x, t), catmull(p0.y, a.y, b.y, p3.y, t), R, Math.min(1, dt * len / (R * 0.914)));
+          push(catmull(p0.x, a.x, b.x, p3.x, t), catmull(p0.y, a.y, b.y, p3.y, t), R, Math.min(1, dt * len / (R * fade * 0.914)), f.dx, f.dy);
         }
         t += dt;
       }
     }
     const tip = nd[NODES - 1];
-    push(tip.x, tip.y, tip.r / 0.454, 1);
+    push(tip.x, tip.y, tip.r / 0.454, 1, f.dx, f.dy);
   }
   for (const d of splat.drops) {
-    // push() scales by S again, so this is the droplet's own perspective relative to its floor
-    const s = C / Math.max(0.05, C - y - Math.min(d.z, C * 0.7)) / S, r = d.r * (1 + 0.4 * d.land);
-    push(d.x * s, d.y * s, r * s / 0.454, 1);
+    if (o.hole && d.flying) continue;
+    const s = C / Math.max(0.05, C - Math.min(d.z, C * 0.7)), r = d.r * (1 + 0.4 * d.land), v = Math.hypot(d.vx, d.vy) || 1;
+    push(d.x * s, d.y * s, r * s / 0.454, 1, d.vx / v * 1.3, d.vy / v * 1.3);
   }
-  nBodies = n;
-  if (P.shadow) for (const d of splat.drops) {
-    if (d.z <= 0.001) continue;
-    push(d.x + d.z * LS[0], d.y + d.z * LS[1], d.r * (1 + 1.5 * d.z) / 0.454, 0.6 / (1 + 3 * d.z));
+  return n;
+}
+function buildBeads(L) {
+  nBodies = writeBeads(L.sp, L, 0);
+  let n = nBodies;
+  if (P.shadow && L.floorOn) for (const d of L.sp.drops) {
+    if (d.z <= 0.001 || n >= MAX_BEADS) continue;
+    const k = n * 4;
+    beadData[k] = d.x + d.z * LS[0]; beadData[k + 1] = d.y + d.z * LS[1]; beadData[k + 2] = d.r * (1 + 1.5 * d.z) / 0.454; beadData[k + 3] = 0.6 / (1 + 3 * d.z) * FIELD_K;
+    n++;
   }
   nShadows = n - nBodies;
 }
@@ -610,12 +736,24 @@ function render() {
       gl.bindVertexArray(beadVao);
       gl.bindBuffer(gl.ARRAY_BUFFER, beadBuf);
       gl.bufferSubData(gl.ARRAY_BUFFER, 0, beadData, 0, (nBodies + nShadows) * 4);
-      gl.uniform2f(beadProg.u.uMask, 1, 0);
-      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, nBodies);
+      gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 0, 0);
+      if (nBodies) {
+        gl.uniform3f(beadProg.u.uMask, 1, 0, 0); gl.uniform1f(beadProg.u.uK, L.sG);
+        gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, nBodies);
+      }
       if (nShadows) {
-        gl.uniform2f(beadProg.u.uMask, 0, 1);
+        gl.uniform3f(beadProg.u.uMask, 0, 1, 0); gl.uniform1f(beadProg.u.uK, 1);
         gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 0, nBodies * 16);
         gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, nShadows);
+      }
+      const hole = L.sp.hole;
+      if (L.hole && L.floorOn && hole) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, holeBuf);
+        if (!L.sp.holeSent) { gl.bufferSubData(gl.ARRAY_BUFFER, 0, hole); L.sp.holeSent = true; }
+        gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 0, 0);
+        gl.uniform3f(beadProg.u.uMask, 0, 0, 1); gl.uniform1f(beadProg.u.uK, L.SA);
+        gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, hole.length / 4);
+        gl.bindBuffer(gl.ARRAY_BUFFER, beadBuf);
         gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 0, 0);
       }
       gl.disable(gl.BLEND);
@@ -641,10 +779,14 @@ function render() {
   gl.uniform3fv(u.uFloorA, A.floor); gl.uniform3fv(u.uLineA, A.line); gl.uniform3fv(u.uSlimeA, A.slime);
   gl.uniform3fv(u.uFloorB, B.floor); gl.uniform3fv(u.uLineB, B.line); gl.uniform3fv(u.uSlimeB, B.slime);
   gl.uniform1f(u.uHB, L.hB); gl.uniform1f(u.uSA, L.SA); gl.uniform1f(u.uAOn, L.AOn);
-  gl.uniform1f(u.uSpread, L.spread);
-  gl.uniform1f(u.uWobL, P.wobble * 0.014); gl.uniform1f(u.uWobS, L.wobS);
-  gl.uniform1f(u.uFlat, L.flat); gl.uniform1f(u.uLanded, L.landed); gl.uniform1f(u.uShadowA, L.shadowA);
-  gl.uniform1f(u.uGIn, L.gIn); gl.uniform1f(u.uDrain, L.drain); gl.uniform1f(u.uPress, L.press);
+  gl.uniform1f(u.uSpread, L.spread); gl.uniform1f(u.uSpreadH, P.spread * spring(P.hold));
+  gl.uniform1f(u.uWobL, P.wobble * 0.014); gl.uniform1f(u.uWobS, L.wobS); gl.uniform1f(u.uWobSH, wobS(P.hold));
+  gl.uniform1f(u.uFlat, L.flat); gl.uniform1f(u.uLanded, L.landed); gl.uniform1f(u.uShadowA, L.shadowA); gl.uniform1f(u.uAO, L.ao);
+  gl.uniform1f(u.uHole, L.hole); gl.uniform1f(u.uHoleIn, smooth(0, 0.18, L.tg)); gl.uniform1f(u.uFloorOn, L.floorOn); gl.uniform1f(u.uSG, L.sG); gl.uniform1f(u.uErode, L.erode);
+  gl.uniform1f(u.uHoleTime, L.sp?.holeClock ?? 0);
+  gl.uniform1f(u.uSB, L.sB); gl.uniform1f(u.uEB, L.eB); gl.uniform1f(u.uRiseSh, L.riseSh); gl.uniform1f(u.uGoopA, smooth(0, 0.35, L.fade));
+  gl.uniform2f(u.uTilt, L.tilt[0], L.tilt[1]); gl.uniform1f(u.uFlap, L.flap); gl.uniform1f(u.uFlapG, L.flapG);
+  gl.uniform1f(u.uAir, lab.calm ? 0 : L.air); gl.uniform1f(u.uAirT, airT);
   gl.bindVertexArray(tri);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
 }
@@ -652,24 +794,35 @@ function render() {
 function hud() {
   const L = look();
   let s;
-  if (lab.calm) s = 'paused mid-squeeze (reduced motion)';
-  else if (phase === 'fall') s = (L.AOn ? 'falling through the splat · ' : 'falling · ') + `<b>${L.hB.toFixed(1)}</b> to the floor · floor at <b>${(C / (C + L.hB) * 100).toFixed(0)}%</b>`;
-  else if (tau < P.hold) s = `splat · <b>${tau.toFixed(2)} s</b>`;
-  else s = L.press > 0 ? 'squeezing out the next one' : 'the next floor shows through';
+  if (lab.calm) s = 'paused as the floor gives way (reduced motion)';
+  else if (phase === 'fall') s = (L.AOn ? 'falling with the old splat · ' : 'falling · ') + `<b>${L.hB.toFixed(1)}</b> to the floor · floor at <b>${(C / (C + L.hB) * 100).toFixed(0)}%</b>`;
+  else if (tau < P.hold) s = `splat · <b>${tau.toFixed(2)} s</b> · the next one rises`;
+  else s = 'the floor gives way';
   lab.hud(`${s}<br>drop <b>${cycle + 1}</b> · ${Wpx}×${Hpx} px · <b>${ms.toFixed(2)} ms</b>`);
 }
 
-// Reduced motion: one good still, the next mark half squeezed out of the splat, its floor showing through.
+// Reduced motion: one good still, the floor giving way under the splat, the new mark locked above it.
 function still() {
   cycle = 0; phase = 'fall'; tf = 0; clock = 1.3; acc = 0; prev = null;
   impact();
-  stepFor(P.hold + 0.78);
+  stepFor(P.hold + 0.3);
   sinceImpact = 1e9;
   dirty = true;
 }
 
 // ---- wiring ----
-canvas.addEventListener('pointerdown', () => dropNow());
+// a touch mid-fall leans the mark toward it, harder the further out; letting go springs it back (with a wobble)
+let touching = false;
+function lean(e) {
+  if (!touching || phase !== 'fall' || lab.calm) { tilt.tx = tilt.ty = 0; return; }
+  const r = canvas.getBoundingClientRect(), fl = fitLogo(lab.square());
+  const qx = (e.clientX - r.left - fl.cx) / fl.scale, qy = (e.clientY - r.top - fl.cy) / fl.scale, d = Math.hypot(qx, qy) || 1;
+  const m = TILT * Math.min(1, d / 0.6);
+  tilt.tx = qx / d * m; tilt.ty = qy / d * m;
+}
+canvas.addEventListener('pointerdown', e => { touching = true; canvas.setPointerCapture?.(e.pointerId); lean(e); });
+canvas.addEventListener('pointermove', lean);
+for (const ev of ['pointerup', 'pointercancel']) canvas.addEventListener(ev, () => { touching = false; tilt.tx = tilt.ty = 0; });
 lab.on('resize', fit);
 lab.on('palette', () => { dirty = true; });
 lab.on('change', key => {
@@ -698,21 +851,22 @@ window.__lab = {
   step(n = 1, dt = 1 / 60) { for (let k = 0; k < n; k++) advance(dt * P.speed); render(); hud(); return this.state(); },
   renderOnce() { render(); hud(); },
   // jump('fall', 0.8) → 80% of the way down (no splat above); jump('splat', 0.3) → 0.3 s after impact;
-  // jump('reveal', 0.6) → 0.6 s after it settles (grid, drain, squeeze); jump('through', 0.5) → 0.5 s into the next fall
+  // jump('hole', 0.2) → 0.2 s after the floor opens; jump('through', 0.5) → 0.5 s into the next fall
   jump(what = 'splat', x = 0.3) {
     acc = 0; splat = null; prev = null; fieldDirty = true;
     if (what === 'fall') { phase = 'fall'; tf = x * P.fall; }
     else {
       phase = 'fall'; tf = P.fall; impact();
-      stepFor(what === 'reveal' ? P.hold + x : what === 'through' ? pressEnd() : x);
+      stepFor(what === 'hole' ? P.hold + x : what === 'through' ? dropAt() : x);
       if (what === 'through') dropThrough(x);
     }
     sinceImpact = 1e9;
     render(); hud(); return this.state();
   },
   pause(on = true) { paused = on; },
+  lean(x, y) { tilt.tx = x; tilt.ty = y; },   // the target lean, as a held touch sets it
   still() { still(); render(); hud(); return this.state(); },   // the reduced-motion frame
-  state() { const L = look(); return { phase, cycle, tf: +tf.toFixed(3), tau: +tau.toFixed(3), hB: +L.hB.toFixed(3), y: +L.y.toFixed(3), throughSplat: !!(phase === 'fall' && L.AOn), beads: nBodies, shadows: nShadows, halfOK, ms: +ms.toFixed(2) }; },
+  state() { const L = look(); return { phase, cycle, tf: +tf.toFixed(3), tau: +tau.toFixed(3), hB: +L.hB.toFixed(3), y: +L.y.toFixed(3), withOldSplat: !!(phase === 'fall' && L.AOn), hole: L.hole, floorOn: L.floorOn, sG: +L.sG.toFixed(3), sB: +L.sB.toFixed(3), beads: nBodies, shadows: nShadows, halfOK, ms: +ms.toFixed(2) }; },
   measure(frames = 60) { const t0 = performance.now(); for (let k = 0; k < frames; k++) { advance(1 / 60); render(); } gl.finish(); return (performance.now() - t0) / frames; }
 };
 </script>

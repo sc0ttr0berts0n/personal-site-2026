@@ -255,9 +255,9 @@ export const LABS = [
     "slug": "splat",
     "number": "12",
     "title": "Splat!",
-    "blurb": "A fine grid, slowly zooming. It’s really a camera locked onto the mark, the mark is made of slime, and it’s falling fast. It hits the floor and splats. Then the next floor’s grid shows through the splat, the pressure squeezes out the next mark in the next colour, and down it goes, through the hole the splat left.",
+    "blurb": "A fine grid, slowly zooming. It’s really a camera locked onto the mark, the mark is made of slime, and it’s falling fast. It hits the floor and splats, and the next mark, in the next colour, pops up out of the splat. Then the floor gives way in the shape of the splat, and down they both go.",
     "teaches": "perspective (screen size goes as 1 / distance, so a steady fall reads as an accelerating zoom) · metaballs: an additive field cut at one level, with one-pixel analytic antialiasing · springs and plastic rope chains for goo",
-    "hint": "tap to drop it now",
+    "hint": "tap it mid-fall to tilt it",
     "href": "labs/splat.html",
     "versions": []
   }
