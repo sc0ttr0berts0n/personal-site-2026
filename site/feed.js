@@ -316,7 +316,11 @@ function reloadCurrent() {
 const closing = new Map();   // dialog → cancels its pending close, so a quick reopen isn't shut by it
 function openDialog(d) {
   closing.get(d)?.();
-  if (!d.open) d.showModal();
+  if (!d.open) {
+    d.showModal();
+    // showModal focuses the first button, the handle, which then wears a focus ring; start on the sheet instead
+    d.tabIndex = -1; d.focus({ preventScroll: true });
+  }
   requestAnimationFrame(() => requestAnimationFrame(() => d.classList.add('open')));
 }
 function closeDialog(d) {
