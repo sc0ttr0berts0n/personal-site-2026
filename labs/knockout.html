@@ -1,0 +1,770 @@
+<meta charset="utf-8">
+<script src="../embed/lab-embed.js"></script>
+<title>Knockout</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@200;300&family=Familjen+Grotesk:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="shared/lab.css">
+<script type="module">
+import * as pl from 'https://cdn.jsdelivr.net/npm/planck@1.4.3/dist/planck.mjs';
+import { createLab } from './shared/lab.js';
+import { LOGO_PIECES, logoPolygons, fitLogo } from './shared/logo.js';
+import { LOGO_BOUNDS } from './shared/logo-paths.js';
+import { ramp } from './shared/palettes.js';
+
+const Vec2 = pl.Vec2;
+
+// ---- units: 1 m = one logo width. Box2D likes bodies near 1 unit, so the solver runs 5× larger. ----
+const S = 5;                    // solver units per metre
+const AREAL = 28;               // kg/m²: the chevrons and plinths are 4 cm hardwood (700 kg/m³)
+const CAP_MU = 1.2;             // rubber pads on the plinth tops (a 43° face needs μ ≥ tan 43° ≈ 0.93)
+const H = 1 / 240;              // fixed physics step, s
+const SKIN = 0.015 / S;         // Box2D rests polygons this far apart (two skins minus slop), m
+const POST_HW = 0.007, FOOT_OVER = 0.015, FOOT_H = 0.012;
+const SPAWN = { x: -0.7, y: 0 };    // the launcher swaps sides after every shot (x flips sign)
+const K_PULL = 20, MAX_PULL = 0.45; // launch speed = K · pull, so 9 m/s at full stretch
+
+const lab = createLab({
+  number: '04',
+  title: 'Knockout',
+  blurb: 'The mark stands on three slim plinths with rubber caps. Pull back anywhere and let go to throw a ball at it.',
+  teaches: 'momentum and impulse J = Δp, restitution, torque about the center of mass, static friction on a slope (μ ≥ tan θ)',
+  hint: 'drag back anywhere · release to fling<br>mark = 1 m wide',
+  palettes: ['cmy', 'spectrum', 'synthwave', 'ember', 'reef', 'aurora', 'ultraviolet', 'gold'],
+  defaultPalette: 'cmy',
+  params: {
+    gravity:     { type: 'range', label: 'Gravity', min: 1.6, max: 25, step: 0.01, value: 9.81, unit: ' m/s²' },
+    ballRadius:  { type: 'range', label: 'Ball radius', min: 1.5, max: 14, step: 0.5, value: 4.8, unit: ' cm' },
+    ballDensity: { type: 'range', label: 'Ball density', min: 0.1, max: 11.3, step: 0.1, value: 4.9, unit: ' g/cm³' },
+    restitution: { type: 'range', label: 'Restitution', min: 0, max: 0.95, step: 0.05, value: 0.3 },
+    friction:    { type: 'range', label: 'Friction μ', min: 0, max: 1, step: 0.05, value: 0.5 },
+    floor:       { type: 'range', label: 'Plinth height', min: 4, max: 24, step: 1, value: 14, unit: ' cm' },
+    timeScale:   { type: 'range', label: 'Time scale', min: 0.1, max: 1, step: 0.05, value: 1, unit: '×' },
+    balls:       { type: 'range', label: 'Balls per fling', min: 1, max: 5, step: 1, value: 1 },
+    split:       { type: 'toggle', label: 'Volley balls split 5 → 5 → 5', value: true },
+    splitForce:  { type: 'range', label: 'Split force', min: 0.5, max: 8, step: 0.1, value: 5, unit: '×' },
+    trails:      { type: 'toggle', label: 'Motion trails', value: true },
+    autoReset:   { type: 'toggle', label: 'Auto reset when settled', value: true }
+  },
+  actions: [
+    { label: 'Reset', primary: true, action: () => reset() },
+    { label: 'Drop ball', action: () => dropBall() },
+    { label: 'Earthquake', action: () => earthquake() }
+  ]
+});
+const P = lab.params;
+
+// ---- geometry ----
+const LW = LOGO_BOUNDS.w, LCX = LOGO_BOUNDS.x + LW / 2, LCY = LOGO_BOUNDS.y + LOGO_BOUNDS.h / 2;
+const raw = ([x, y]) => [(x - LCX) / LW, (y - LCY) / LW];
+const LOGO_BOTTOM = (LOGO_BOUNDS.y + LOGO_BOUNDS.h - LCY) / LW;
+
+// exact outlines for drawing, one Path2D per chevron (same commands as logoPath2D)
+const PIECE_PATHS = LOGO_PIECES.map(piece => {
+  const p = new Path2D();
+  for (const { cmd, pts } of piece) {
+    if (cmd === 'M') p.moveTo(...pts[0]);
+    else if (cmd === 'L') p.lineTo(...pts[0]);
+    else if (cmd === 'C') p.bezierCurveTo(...pts[0], ...pts[1], ...pts[2]);
+    else p.closePath();
+  }
+  return p;
+});
+// left "<", right ">", middle zig: colour them left to right
+const PIECE_T = [0.08, 0.92, 0.5];
+const COM = [[-0.2445, -0.1196], [0.2445, 0.1171], [0, 0]];
+
+// Each plinth stands under one face of a chevron, its top cut to the face's slope.
+// Every face of the mark is tilted about 43°, so the rubber caps carry it by friction.
+const MOUNTS = [
+  { piece: 0, x: 205, a: [184.501, 416.653], b: [432.387, 646.177] },
+  { piece: 0, x: 354, a: [184.501, 416.653], b: [432.387, 646.177] },
+  { piece: 2, x: 398, a: [366.698, 740.297], b: [430.262, 799.153] },
+  { piece: 2, x: 517, a: [430.262, 799.153], b: [652.674, 593.214] },
+  { piece: 1, x: 563, a: [531.901, 738.324], b: [595.465, 797.18] },
+  { piece: 1, x: 772, a: [595.465, 797.18], b: [815.746, 593.208] }
+].map(m => {
+  const a = raw(m.a), b = raw(m.b), x = raw([m.x, 0])[0];
+  const k = (b[1] - a[1]) / (b[0] - a[0]);
+  const top = X => a[1] + (X - a[0]) * k + SKIN * Math.hypot(1, k);
+  return { piece: m.piece, x, topL: top(x - POST_HW), topR: top(x + POST_HW) };
+});
+// Two posts on separate feet would rock (a 43° face pushes sideways), so each chevron's
+// pair of posts shares one base rail: one rigid plinth per chevron, like a museum mount.
+const STANDS = [0, 2, 1].map(piece => {
+  const posts = MOUNTS.filter(m => m.piece === piece);
+  return { piece, posts, x: (posts[0].x + posts[1].x) / 2 };
+});
+
+// ---- convex decomposition: ear clipping, then Hertel–Mehlhorn merging ----
+const turn = (a, b, c) => (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0]);
+const edgeFn = (a, b, p) => (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]);
+const signedArea = p => p.reduce((s, a, i) => { const b = p[(i + 1) % p.length]; return s + a[0] * b[1] - b[0] * a[1]; }, 0) / 2;
+function cleanPoly(poly) {
+  const p = poly.slice();
+  for (let changed = true; changed;) {
+    changed = false;
+    for (let i = 0; i < p.length; i++) {
+      const a = p[(i + p.length - 1) % p.length], b = p[i], c = p[(i + 1) % p.length];
+      if (Math.abs(turn(a, b, c)) < 1e-10 || Math.hypot(b[0] - a[0], b[1] - a[1]) < 1e-5) { p.splice(i, 1); changed = true; break; }
+    }
+  }
+  return p;
+}
+function decompose(input) {
+  const poly = cleanPoly(input), sg = Math.sign(signedArea(poly));
+  const idx = poly.map((_, i) => i), tris = [];
+  const angle = (a, b, c) => { const u = [a[0] - b[0], a[1] - b[1]], v = [c[0] - b[0], c[1] - b[1]]; return Math.acos(Math.max(-1, Math.min(1, (u[0] * v[0] + u[1] * v[1]) / Math.hypot(...u) / Math.hypot(...v)))); };
+  while (idx.length > 3) {
+    let best = -1, bestQ = -1;
+    for (let i = 0; i < idx.length; i++) {
+      const ia = idx[(i + idx.length - 1) % idx.length], ib = idx[i], ic = idx[(i + 1) % idx.length];
+      const a = poly[ia], b = poly[ib], c = poly[ic];
+      if (sg * turn(a, b, c) <= 1e-12) continue;
+      let ok = true;
+      for (const j of idx) {
+        if (j === ia || j === ib || j === ic) continue;
+        const p = poly[j];
+        if (sg * edgeFn(a, b, p) >= -1e-12 && sg * edgeFn(b, c, p) >= -1e-12 && sg * edgeFn(c, a, p) >= -1e-12) { ok = false; break; }
+      }
+      if (!ok) continue;
+      const q = Math.min(angle(c, a, b), angle(a, b, c), angle(b, c, a));
+      if (q > bestQ) { bestQ = q; best = i; }
+    }
+    if (best < 0) best = 0; // degenerate fallback, never hit for the mark
+    const n = idx.length;
+    tris.push([idx[(best + n - 1) % n], idx[best], idx[(best + 1) % n]]);
+    idx.splice(best, 1);
+  }
+  tris.push(idx.slice());
+  const parts = tris;
+  const convex = ix => ix.every((v, i) => sg * turn(poly[ix[(i + ix.length - 1) % ix.length]], poly[v], poly[ix[(i + 1) % ix.length]]) >= -1e-12);
+  for (let again = true; again;) {
+    again = false;
+    for (let i = 0; i < parts.length && !again; i++) for (let j = i + 1; j < parts.length && !again; j++) {
+      const A = parts[i], B = parts[j];
+      for (let k = 0; k < A.length && !again; k++) {
+        const u = A[k], v = A[(k + 1) % A.length];
+        const m = B.findIndex((x, q) => x === v && B[(q + 1) % B.length] === u);
+        if (m < 0) continue;
+        const a2 = A.map((_, s) => A[(k + 1 + s) % A.length]);   // v … u
+        const b2 = B.map((_, s) => B[(m + 1 + s) % B.length]);   // u … v
+        const M = a2.concat(b2.slice(1, -1));
+        if (M.length <= 8 && convex(M)) { parts[i] = M; parts.splice(j, 1); again = true; }
+      }
+    }
+  }
+  return parts.map(ix => ix.map(n => poly[n]));
+}
+const CONVEX = logoPolygons({ curveSegments: 3 }).map(decompose);
+
+// ---- world ----
+let world, floorBody, walls = [], pieces = [], plinths = [], balls = [], floorY = 0;
+const dynamic = () => [...pieces, ...plinths, ...balls];
+const contactRec = new WeakMap();
+let stepHits = [];
+
+function buildWorld() {
+  world = new pl.World({ gravity: Vec2(0, P.gravity * S), allowSleep: true });
+  balls = []; pieces = []; plinths = []; walls = [];
+  floorY = LOGO_BOTTOM + P.floor / 100;
+
+  // static, so the sleeping rest pose is not woken; it turns kinematic only to shake
+  floorBody = world.createBody({ type: 'static', position: Vec2(0, floorY * S) });
+  floorBody.createFixture({ shape: pl.Box(40 * S, 2 * S, Vec2(0, 2 * S), 0), friction: P.friction, restitution: P.restitution, userData: { kind: 'floor' } });
+  floorBody.setUserData({ kind: 'floor', rest: { x: 0, y: floorY, a: 0 } });
+  for (let i = 0; i < 2; i++) {
+    const w = world.createBody({ type: 'static' });
+    w.createFixture({ shape: pl.Box(0.5 * S, 30 * S), friction: P.friction, restitution: P.restitution, userData: { kind: 'wall' } });
+    w.setUserData({ kind: 'wall' });
+    walls.push(w);
+  }
+  placeWalls();
+
+  const rho = AREAL / (S * S);
+  CONVEX.forEach((parts, i) => {
+    const b = world.createBody({ type: 'dynamic', position: Vec2(0, 0), angularDamping: 0.02 });
+    for (const part of parts) b.createFixture({ shape: pl.Polygon(part.map(([x, y]) => Vec2(x * S, y * S))), density: rho, friction: P.friction, restitution: P.restitution, userData: { kind: 'piece', i } });
+    b.setUserData({ kind: 'piece', i, rest: { x: 0, y: 0, a: 0 }, prev: { x: 0, y: 0, a: 0 }, ghosts: [] });
+    pieces.push(b);
+  });
+  STANDS.forEach((st, i) => {
+    const y0 = floorY - SKIN; // local origin: base rail underside, between the posts
+    const b = world.createBody({ type: 'dynamic', position: Vec2(st.x * S, y0 * S) });
+    const V = (x, y) => Vec2(x * S, y * S);
+    const [pa, pb] = st.posts.map(m => ({ x: m.x - st.x, tl: m.topL - y0, tr: m.topR - y0 }));
+    const L = pa.x - POST_HW - FOOT_OVER, R = pb.x + POST_HW + FOOT_OVER;
+    const fd = { density: rho, friction: P.friction, restitution: P.restitution };
+    b.createFixture({ shape: pl.Polygon([V(L, 0), V(R, 0), V(R, -FOOT_H), V(L, -FOOT_H)]), ...fd, userData: { kind: 'plinth', i } });
+    for (const p of [pa, pb]) b.createFixture({ shape: pl.Polygon([V(p.x - POST_HW, -FOOT_H), V(p.x + POST_HW, -FOOT_H), V(p.x + POST_HW, p.tr), V(p.x - POST_HW, p.tl)]), ...fd, userData: { kind: 'plinth', i, cap: true } });
+    const post = p => [[p.x + POST_HW, -FOOT_H], [p.x + POST_HW, p.tr], [p.x - POST_HW, p.tl], [p.x - POST_HW, -FOOT_H]];
+    b.setUserData({ kind: 'plinth', i, piece: st.piece, rest: { x: st.x, y: y0, a: 0 }, prev: { x: st.x, y: y0, a: 0 }, ghosts: [],
+      outline: [[L, 0], [R, 0], [R, -FOOT_H], ...post(pb), ...post(pa), [L, -FOOT_H]],
+      caps: [pa, pb].map(p => [[p.x + POST_HW, p.tr], [p.x - POST_HW, p.tl]]) });
+    plinths.push(b);
+  });
+
+  world.on('pre-solve', c => {
+    const a = c.getFixtureA().getUserData(), b = c.getFixtureB().getUserData();
+    if ((a.cap && b.kind === 'piece') || (b.cap && a.kind === 'piece')) c.setFriction(CAP_MU);
+  });
+  world.on('begin-contact', c => {
+    const a = c.getFixtureA().getUserData(), b = c.getFixtureB().getUserData();
+    contactRec.set(c, { t0: simTime, J: 0, peak: 0, ball: a.kind === 'ball' || b.kind === 'ball', mark: [a.kind, b.kind].some(k => k === 'piece' || k === 'plinth') });
+  });
+  world.on('post-solve', (c, imp) => {
+    const n = c.getManifold().pointCount;
+    let j = 0;
+    for (let i = 0; i < n; i++) j += imp.normalImpulses[i];
+    j /= S; // solver impulse → N·s
+    if (j > 0.01) stepHits.push(c, j);
+  });
+  restAsleep();
+}
+
+// Put the mark to sleep in its rest pose. Creating or moving contacts wakes bodies in Box2D,
+// so refresh the contact list with zero-length steps first, then sleep everything.
+function restAsleep() {
+  const bodies = [...pieces, ...plinths];
+  for (const b of bodies) b.setAwake(true);
+  world.step(0); world.findNewContacts(); world.step(0);
+  for (const b of bodies) {
+    const r = b.getUserData().rest;
+    b.setTransform(Vec2(r.x * S, r.y * S), r.a);
+    b.setAwake(false);
+  }
+  stepHits = [];
+}
+
+function placeWalls() {
+  if (!walls.length) return;
+  const l = (0 - fit.cx) / fit.scale, r = (sq.w - fit.cx) / fit.scale;
+  walls[0].setTransform(Vec2((l - 0.5) * S, -10 * S), 0);
+  walls[1].setTransform(Vec2((r + 0.5) * S, -10 * S), 0);
+}
+
+// ---- canvas & layout ----
+const { canvas, ctx } = lab.canvas();
+canvas.style.touchAction = 'none';
+let sq = lab.square(), fit = fitLogo(sq), dpr = Math.min(2, window.devicePixelRatio || 1);
+lab.on('resize', s => { sq = s; fit = fitLogo(s); dpr = Math.min(2, window.devicePixelRatio || 1); placeWalls(); render(); });
+const X = lx => fit.cx + lx * fit.scale, Y = ly => fit.cy + ly * fit.scale;
+// snap a coordinate so a line of CSS width lw lands on whole device pixels
+const crisp = (v, lw = 1) => { const w = Math.round(lw * dpr); return (Math.round(v * dpr - (w % 2) / 2) + (w % 2) / 2) / dpr; };
+
+// ---- state ----
+let simTime = 0, acc = 0, lastHit = 0, lastHitAge = 1e9;
+let phase = 'rest', idleT = 0, settledFor = 0, liveT = 0, demoReset = false;
+let trans = null, fading = [], sparks = [], flashes = [], quake = null;
+let drag = null, demo = null, volley = null, readyT = 1, splits = null;
+const VOLLEY = 5, VOLLEY_GAP = 0.75;   // idle demo: shots per volley, seconds between them
+const SPLIT_AT = [0.5, 1.6];         // after the last shot: balls burst into 5, then each of those into 5
+
+function xfOf(b, alpha) {
+  const u = b.getUserData(), p = b.getPosition(), a = b.getAngle();
+  if (trans && trans.from.has(b)) {
+    const f = trans.from.get(b), r = u.rest;
+    const [s0, s1] = u.kind === 'plinth' ? [0, 0.7] : [0.25, 1];
+    const t = Math.min(1, Math.max(0, (trans.t / trans.dur - s0) / (s1 - s0)));
+    const e = t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2;
+    let da = (r.a - f.a) % (2 * Math.PI);
+    if (da > Math.PI) da -= 2 * Math.PI; if (da < -Math.PI) da += 2 * Math.PI;
+    return { x: f.x + (r.x - f.x) * e, y: f.y + (r.y - f.y) * e, a: f.a + da * e };
+  }
+  const q = u.prev || { x: p.x / S, y: p.y / S, a };
+  return { x: q.x + (p.x / S - q.x) * alpha, y: q.y + (p.y / S - q.y) * alpha, a: q.a + (a - q.a) * alpha };
+}
+
+function setRest(b) {
+  const r = b.getUserData().rest;
+  b.setTransform(Vec2(r.x * S, r.y * S), r.a);
+  b.setLinearVelocity(Vec2(0, 0)); b.setAngularVelocity(0);
+  b.setAwake(false);
+  const u = b.getUserData();
+  if (u.prev) { u.prev = { ...r }; u.ghosts = []; }
+}
+
+function reset({ rebuild = false } = {}) {
+  const from = new Map();
+  const alpha = acc / H;
+  const old = [...pieces, ...plinths].map(b => xfOf(b, alpha));
+  for (const b of balls) { const x = xfOf(b, alpha); fading.push({ ...x, r: b.getUserData().r, hue: b.getUserData().hue, life: 1 }); }
+  balls.forEach(b => world.destroyBody(b)); balls = [];
+  if (quake) endQuake();
+  if (rebuild) buildWorld();
+  else { [...pieces, ...plinths].forEach(setRest); restAsleep(); }
+  [...pieces, ...plinths].forEach((b, i) => from.set(b, old[i]));
+  trans = lab.calm ? null : { t: 0, dur: 0.6, from };
+  phase = trans ? 'reset' : 'rest';
+  idleT = 0; settledFor = 0; liveT = 0; demoReset = false; demo = null; volley = null; splits = null; acc = 0;
+  render();
+}
+
+// ---- balls ----
+const ballMass = () => 4 / 3 * Math.PI * (P.ballRadius / 100) ** 3 * P.ballDensity * 1000;
+let hueN = 0;
+function makeBall(x, y, vx, vy, r = P.ballRadius / 100, gen = 0) {
+  const m = 4 / 3 * Math.PI * r ** 3 * P.ballDensity * 1000;
+  const b = world.createBody({ type: 'dynamic', position: Vec2(x * S, y * S), bullet: gen === 0, angularDamping: 0.05 });
+  // a disk whose mass equals the real sphere's
+  b.createFixture({ shape: pl.Circle(r * S), density: m / (Math.PI * (r * S) ** 2), friction: P.friction, restitution: P.restitution, userData: { kind: 'ball' } });
+  b.setLinearVelocity(Vec2(vx * S, vy * S));
+  b.setUserData({ kind: 'ball', r, m, gen, hue: (hueN++ * 0.37) % 1, prev: { x, y, a: 0 }, trail: [], age: 0, still: 0 });
+  balls.push(b);
+  while (balls.length > 140) { const o = balls.shift(); const x = xfOf(o, 1); fading.push({ ...x, r: o.getUserData().r, hue: o.getUserData().hue, life: 1 }); world.destroyBody(o); }
+  return b;
+}
+// burst every ball of generation `gen` into 5 of a fifth the mass, kicked outward on top of its own velocity
+function splitBalls(gen) {
+  const kick = (gen === 0 ? 2.6 : 2.0) * P.splitForce;
+  for (const b of balls.filter(b => b.getUserData().gen === gen)) {
+    const u = b.getUserData(), p = b.getPosition(), v = b.getLinearVelocity();
+    const x = p.x / S, y = p.y / S, cr = u.r / Math.cbrt(5), a0 = Math.random() * Math.PI * 2;
+    world.destroyBody(b); balls.splice(balls.indexOf(b), 1);
+    burst(x, y, 14 - gen * 6, true);
+    for (let i = 0; i < 5; i++) {
+      const a = a0 + i * 2 * Math.PI / 5, d = cr * 1.75;
+      makeBall(x + Math.cos(a) * d, y + Math.sin(a) * d, v.x / S + Math.cos(a) * kick, v.y / S + Math.sin(a) * kick - 0.6, cr, gen + 1);
+    }
+  }
+  for (const b of balls) b.setAwake(true);
+  for (const b of [...pieces, ...plinths]) b.setAwake(true);
+}
+function goLive() { if (phase !== 'live') { phase = 'live'; liveT = 0; } settledFor = 0; }
+function fling(vx, vy) {
+  finishTransition();
+  const n = P.balls, r = P.ballRadius / 100, sp = Math.hypot(vx, vy) || 1;
+  const nx = -vy / sp, ny = vx / sp;
+  for (let i = 0; i < n; i++) {
+    const o = (i - (n - 1) / 2) * r * 2.3;
+    makeBall(SPAWN.x + nx * o, SPAWN.y + ny * o, vx, vy);
+  }
+  SPAWN.x = -SPAWN.x;                 // next shot comes from the other side
+  readyT = -0.4; goLive(); liveT = 0;
+}
+function dropBall() {
+  finishTransition(); idleT = 0;
+  const top = (0 - fit.cy) / fit.scale;
+  makeBall((Math.random() - 0.5) * 0.7, Math.min(-0.62, top + 0.1), 0, 0);
+  goLive(); liveT = 0;
+}
+function earthquake() {
+  finishTransition(); idleT = 0;
+  quake = { t: 0, dur: 2.0 };
+  floorBody.setType('kinematic');
+  for (const b of dynamic()) b.setAwake(true);
+  goLive(); liveT = 0;
+}
+function endQuake() {
+  quake = null;
+  floorBody.setLinearVelocity(Vec2(0, 0));
+  floorBody.setTransform(Vec2(0, floorY * S), 0);
+  floorBody.setType('static');
+}
+function finishTransition() { if (trans) { trans = null; phase = 'rest'; } }
+
+// ---- params ----
+lab.on('change', key => {
+  if (key === 'floor') { reset({ rebuild: true }); return; }
+  if (key === 'gravity') { world.setGravity(Vec2(0, P.gravity * S)); for (const b of dynamic()) if (phase === 'live') b.setAwake(true); }
+  if (key === 'friction' || key === 'restitution') {
+    for (let b = world.getBodyList(); b; b = b.getNext()) for (let f = b.getFixtureList(); f; f = f.getNext()) { f.setFriction(P.friction); f.setRestitution(P.restitution); }
+    for (let c = world.getContactList(); c; c = c.getNext()) { c.resetFriction(); c.resetRestitution(); }
+  }
+  idleT = 0;
+});
+
+// ---- pointer: slingshot ----
+const toLogo = e => { const r = canvas.getBoundingClientRect(); return { x: (e.clientX - r.left - fit.cx) / fit.scale, y: (e.clientY - r.top - fit.cy) / fit.scale }; };
+function pullOf(d) {
+  let px = d.mode === 'ball' ? SPAWN.x - d.cur.x : d.down.x - d.cur.x;
+  let py = d.mode === 'ball' ? SPAWN.y - d.cur.y : d.down.y - d.cur.y;
+  const l = Math.hypot(px, py);
+  if (l > MAX_PULL) { px *= MAX_PULL / l; py *= MAX_PULL / l; }
+  return { x: px, y: py };
+}
+canvas.addEventListener('pointerdown', e => {
+  if (e.button > 0) return;
+  const p = toLogo(e);
+  finishTransition(); demo = null; volley = null; idleT = 0;
+  const near = Math.hypot(p.x - SPAWN.x, p.y - SPAWN.y) < Math.max(0.09, P.ballRadius / 100 * 2);
+  drag = { id: e.pointerId, mode: near ? 'ball' : 'free', down: p, cur: p };
+  canvas.setPointerCapture(e.pointerId);
+});
+canvas.addEventListener('pointermove', e => { if (drag && e.pointerId === drag.id) drag.cur = toLogo(e); });
+const release = cancel => e => {
+  if (!drag || e.pointerId !== drag.id) return;
+  const pull = pullOf(drag);
+  drag = null; idleT = 0;
+  if (!cancel && Math.hypot(pull.x, pull.y) > 0.03) fling(pull.x * K_PULL, pull.y * K_PULL);
+};
+canvas.addEventListener('pointerup', release(false));
+canvas.addEventListener('pointercancel', release(true));
+
+// ---- impacts ----
+function burst(x, y, j, flash) {
+  const n = Math.min(26, Math.round(2 + j * 0.9));
+  const sp = 0.4 + Math.sqrt(j) * 0.35;
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2, v = sp * (0.3 + Math.random());
+    sparks.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 0.4, life: 1, max: 0.35 + Math.random() * 0.45, c: Math.random() });
+  }
+  if (flash) flashes.push({ x, y, R: 0.015 + 0.012 * Math.sqrt(j), t: 0, dur: 0.18 + Math.min(0.25, j * 0.015) });
+  if (sparks.length > 600) sparks.splice(0, sparks.length - 600);
+}
+function processHits() {
+  for (let i = 0; i < stepHits.length; i += 2) {
+    const c = stepHits[i], j = stepHits[i + 1];
+    const rec = contactRec.get(c);
+    if (!rec) continue;
+    if (simTime - rec.t0 < 0.05) rec.J += j;       // the impact, not the resting load afterwards
+    if (j > Math.max(0.8, rec.peak * 2)) {
+      const first = rec.peak === 0; rec.peak = j;
+      const wm = c.getWorldManifold(null);
+      if (wm && wm.pointCount) burst(wm.points[0].x / S, wm.points[0].y / S, j, first);
+    }
+    if (rec.ball && rec.mark && simTime - rec.t0 < 0.05) {
+      if (rec.J > 0.3) { lastHit = rec.J; lastHitAge = 0; }
+    }
+  }
+  stepHits = [];
+}
+
+// ---- simulation ----
+function physicsStep() {
+  for (const b of dynamic()) {
+    const p = b.getPosition(), u = b.getUserData();
+    u.prev = { x: p.x / S, y: p.y / S, a: b.getAngle() };
+  }
+  if (quake) {
+    quake.t += H;
+    const env = Math.sin(Math.PI * Math.min(1, quake.t / quake.dur));
+    const w = 2 * Math.PI * 5.5;
+    floorBody.setLinearVelocity(Vec2(0.009 * w * Math.cos(w * quake.t) * env * S, 0.004 * 1.3 * w * Math.cos(1.3 * w * quake.t) * env * S));
+    if (quake.t >= quake.dur) { endQuake(); }
+  }
+  world.step(H, 30, 8); // 30 velocity iterations: friction on the 43° caps converges without creep
+  simTime += H;
+  processHits();
+}
+
+const knocked = () => pieces.filter(b => { const p = b.getPosition(); return Math.hypot(p.x, p.y) / S > 0.02 || Math.abs(b.getAngle()) > 0.06; }).length;
+const toppled = () => plinths.filter(b => { const p = b.getPosition(), r = b.getUserData().rest; return Math.hypot(p.x / S - r.x, p.y / S - r.y) > 0.04 || Math.abs(b.getAngle()) > 0.25; }).length;
+
+// the slowest launch (from vMin up) that reaches `to`; a higher floor gives a harder, flatter shot
+function solveLaunch(to, vMin = 4.5) {
+  const g = P.gravity, dx = to.x - SPAWN.x, dy = -(to.y - SPAWN.y);
+  for (let v = vMin; v <= Math.max(K_PULL * MAX_PULL, vMin + 2); v += 0.25) {
+    const disc = v ** 4 - g * (g * dx * dx + 2 * dy * v * v);
+    if (disc < 0) continue;
+    const th = Math.atan2(v * v - Math.sqrt(disc), g * dx);
+    return { x: v * Math.cos(th) / K_PULL, y: -v * Math.sin(th) / K_PULL };
+  }
+  return { x: 0.3, y: -0.3 };
+}
+
+function update(dt) {
+  if (trans) {
+    trans.t += dt;
+    if (trans.t >= trans.dur) { trans = null; phase = 'rest'; idleT = 0; }
+  }
+  const simDt = dt * P.timeScale;
+
+  if (!trans) {
+    acc += simDt;
+    let n = 0;
+    while (acc >= H && n < 16) { physicsStep(); acc -= H; n++; }
+    if (n === 16) acc = 0;
+  }
+  lastHitAge += dt;
+
+  // idle demo: after a few quiet seconds, a volley of shots from alternating sides, then settle and reset
+  if (!lab.calm && phase === 'rest' && !drag && !trans) {
+    idleT += dt;
+    if (!volley && idleT > 1.2) volley = { left: VOLLEY };
+  }
+  if (volley && !demo && !drag) {
+    // aim at where a piece is now, so later shots chase the ones already knocked about
+    const i = Math.floor(Math.random() * 3), c = pieces[i].getWorldCenter();
+    let to = { x: c.x / S, y: c.y / S };
+    if (Math.abs(to.x) > 0.6 || Math.abs(to.y) > 0.6) to = { x: COM[i][0], y: COM[i][1] };
+    // each shot in the volley hits harder than the last: 5, 7, 9, 11, 13 m/s floors
+    const shot = VOLLEY - volley.left;
+    demo = { t: 0, dur: VOLLEY_GAP, pull: solveLaunch({ x: to.x + (Math.random() - 0.5) * 0.1, y: to.y - 0.06 }, 5 + shot * 2) };
+  }
+  if (demo) {
+    demo.t += dt;
+    if (demo.t > demo.dur) {
+      const p = demo.pull; demo = null; fling(p.x * K_PULL, p.y * K_PULL); demoReset = true;
+      if (--volley.left <= 0) { volley = null; if (P.split) splits = { t: 0, stage: 0 }; }
+    }
+  }
+  if (splits) {
+    splits.t += simDt;
+    if (splits.t > SPLIT_AT[splits.stage]) { splitBalls(splits.stage); liveT = 0; if (++splits.stage >= SPLIT_AT.length) splits = null; }
+  }
+
+  // settle and auto reset
+  if (phase === 'live') {
+    liveT += dt;
+    const calm = [...pieces, ...plinths].every(b => !b.isAwake() || (b.getLinearVelocity().length() / S < 0.03 && Math.abs(b.getAngularVelocity()) < 0.06))
+      && balls.every(b => !b.isAwake() || b.getLinearVelocity().length() / S < 0.05);
+    settledFor = calm && !quake ? settledFor + dt : 0;
+    // a demo volley gets a short beat after its last shot; a hand-thrown shot waits until things are still
+    if (!volley && !splits && (P.autoReset || demoReset) && (settledFor > 0.8 || liveT > (demoReset ? 2.5 : 16))) reset();
+  }
+
+  // balls: trails, age out the ones resting on the floor
+  for (const b of balls) {
+    const u = b.getUserData(), p = b.getPosition();
+    u.age += dt;
+    if (P.trails && b.isAwake()) { u.trail.push({ x: p.x / S, y: p.y / S }); if (u.trail.length > [36, 18, 10][u.gen]) u.trail.shift(); }
+    else if (u.trail.length) u.trail.shift();
+  }
+  // ghost trails for pieces and plinths
+  if (P.trails) for (const b of [...pieces, ...plinths]) {
+    const u = b.getUserData();
+    const moving = b.isAwake() && (b.getLinearVelocity().length() / S > 0.25 || Math.abs(b.getAngularVelocity()) > 1.5);
+    u.gt = (u.gt || 0) + 1;
+    if (moving && u.gt % 3 === 0) { const p = b.getPosition(); u.ghosts.push({ x: p.x / S, y: p.y / S, a: b.getAngle(), life: 1 }); if (u.ghosts.length > 7) u.ghosts.shift(); }
+    for (const g of u.ghosts) g.life -= dt * 2.6;
+    u.ghosts = u.ghosts.filter(g => g.life > 0);
+  }
+
+  const sdt = Math.max(simDt, dt * 0.15);
+  for (const s of sparks) { s.vy += P.gravity * 0.35 * sdt; s.x += s.vx * sdt; s.y += s.vy * sdt; s.vx *= 0.985; s.life -= sdt / s.max; }
+  sparks = sparks.filter(s => s.life > 0);
+  for (const f of flashes) f.t += Math.max(simDt, dt * 0.3);
+  flashes = flashes.filter(f => f.t < f.dur);
+  for (const f of fading) f.life -= dt * 2.5;
+  fading = fading.filter(f => f.life > 0);
+  if (readyT < 1) readyT = Math.min(1, readyT + dt * 2.5);
+}
+
+// ---- drawing ----
+const vivid = () => lab.palette.key !== 'bench';
+const pieceColor = i => vivid() ? ramp(lab.palette, PIECE_T[i]) : lab.palette.ink;
+const ballColor = () => vivid() ? lab.palette.colors[0] === '#ffffff' ? lab.palette.colors[1] : lab.palette.ink : lab.palette.ink;
+function rgba(hex, a) { const n = parseInt(hex.slice(1), 16); return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${a})`; }
+
+function trajectory(pull) {
+  const vx = pull.x * K_PULL, vy = pull.y * K_PULL, g = P.gravity, r = P.ballRadius / 100;
+  const pts = [], fx = pieces.concat(plinths).flatMap(b => { const out = []; for (let f = b.getFixtureList(); f; f = f.getNext()) out.push(f); return out; });
+  const l = (0 - fit.cx) / fit.scale, rr = (sq.w - fit.cx) / fit.scale;
+  let hit = false;
+  for (let i = 1; i <= 90 && !hit; i++) {
+    const t = i / 60, x = SPAWN.x + vx * t, y = SPAWN.y + vy * t + 0.5 * g * t * t;
+    if (y > floorY - r || x < l + r || x > rr - r) break;
+    for (let k = 0; k < 5 && !hit; k++) {
+      const a = k * Math.PI / 2, q = Vec2((x + (k < 4 ? Math.cos(a) * r : 0)) * S, (y + (k < 4 ? Math.sin(a) * r : 0)) * S);
+      for (const f of fx) if (f.testPoint(q)) { hit = true; break; }
+    }
+    pts.push({ x, y, hit });
+  }
+  return pts;
+}
+
+function drawBall(x, y, r, a, alpha = 1) {
+  const c = ballColor();
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  if (vivid()) { ctx.shadowColor = c; ctx.shadowBlur = 16 * dpr; }
+  ctx.fillStyle = c;
+  ctx.beginPath(); ctx.arc(X(x), Y(y), r * fit.scale, 0, Math.PI * 2); ctx.fill();
+  ctx.shadowBlur = 0;
+  // a spoke so spin reads
+  ctx.strokeStyle = lab.palette.bg; ctx.lineWidth = Math.max(1, r * fit.scale * 0.16);
+  ctx.beginPath(); ctx.moveTo(X(x), Y(y)); ctx.lineTo(X(x + Math.cos(a) * r * 0.72), Y(y + Math.sin(a) * r * 0.72)); ctx.stroke();
+  ctx.restore();
+}
+
+// The outline sits OUTLINE_INSET px inside each piece's edge, so an intact mark covers it completely.
+// Canvas has no inward offset, so: clip to the piece, stroke a band from the edge inward, then erase
+// the outer OUTLINE_INSET of it. That needs its own layer; it only changes with size or palette.
+const OUTLINE_INSET = 2, OUTLINE_W = 1.2;
+let outline = null;
+function bodyOutline(pal, s) {
+  const m = ctx.getTransform(), key = [ctx.canvas.width, ctx.canvas.height, m.a, s, fit.cx, fit.cy, pal.ink].join('|');
+  if (outline?.key === key) return outline.c;
+  const c = outline?.c || document.createElement('canvas');
+  c.width = ctx.canvas.width; c.height = ctx.canvas.height;
+  const o = c.getContext('2d');
+  o.setTransform(m); o.translate(X(0), Y(0)); o.scale(s, s);
+  o.lineJoin = 'round'; o.strokeStyle = rgba(pal.ink, 0.42);
+  for (const path of PIECE_PATHS) {
+    o.save(); o.clip(path);
+    o.setLineDash([5 / s, 4 / s]); o.lineWidth = 2 * (OUTLINE_INSET + OUTLINE_W) / s; o.stroke(path);
+    o.globalCompositeOperation = 'destination-out'; o.setLineDash([]); o.lineWidth = 2 * OUTLINE_INSET / s; o.stroke(path);
+    o.restore();
+  }
+  outline = { key, c };
+  return c;
+}
+
+function render() {
+  const pal = lab.palette, alpha = trans ? 1 : acc / H;
+  ctx.clearRect(0, 0, sq.w, sq.h);
+  const s = fit.scale;
+
+  // floor: one crisp line, a dimmed bench below it, hatch ticks
+  const fy = crisp(Y(floorY + (floorBody ? floorBody.getPosition().y / S - floorY : 0)));
+  const fx0 = floorBody ? floorBody.getPosition().x / S * s : 0;
+  ctx.fillStyle = rgba(pal.bg, 0.55);
+  ctx.fillRect(0, fy, sq.w, sq.h - fy);
+  ctx.strokeStyle = rgba(pal.ink, 0.22); ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let x = ((fx0 % 12) + 12) % 12 - 12; x < sq.w + 12; x += 12) { ctx.moveTo(x, fy + 1); ctx.lineTo(x - 7, fy + 8); }
+  ctx.stroke();
+  ctx.strokeStyle = rgba(pal.ink, 0.75);
+  ctx.beginPath(); ctx.moveTo(0, fy); ctx.lineTo(sq.w, fy); ctx.stroke();
+
+  // launcher: a dashed stand (not physical) under the waiting ball
+  const r0 = P.ballRadius / 100;
+  ctx.save();
+  ctx.setLineDash([3, 4]); ctx.strokeStyle = rgba(pal.ink, 0.3);
+  const sx = crisp(X(SPAWN.x));
+  ctx.beginPath(); ctx.moveTo(sx, Y(SPAWN.y + r0) + 3); ctx.lineTo(sx, fy); ctx.stroke();
+  ctx.restore();
+
+  // body outline: the mark's silhouette stays chalked where it stands, so knocked pieces read as missing
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(bodyOutline(pal, s), 0, 0); ctx.restore();
+
+  // ghost trails
+  if (P.trails) {
+    ctx.save();
+    for (const b of pieces) {
+      const u = b.getUserData();
+      for (const g of u.ghosts) {
+        ctx.save();
+        ctx.translate(X(g.x), Y(g.y)); ctx.rotate(g.a); ctx.scale(s, s);
+        ctx.globalAlpha = g.life * 0.22; ctx.lineWidth = 1 / s; ctx.strokeStyle = pieceColor(u.i);
+        ctx.stroke(PIECE_PATHS[u.i]);
+        ctx.restore();
+      }
+    }
+    ctx.restore();
+  }
+
+  // plinths
+  for (const b of plinths) {
+    const u = b.getUserData(), t = xfOf(b, alpha), c = Math.cos(t.a), sn = Math.sin(t.a);
+    const atRest = Math.abs(t.a) < 1e-4;
+    const pt = ([x, y]) => { let px = X(t.x + x * c - y * sn), py = Y(t.y + x * sn + y * c); if (atRest) { px = crisp(px); py = crisp(py); } return [px, py]; };
+    ctx.beginPath();
+    u.outline.forEach((v, i) => { const [x, y] = pt(v); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+    ctx.closePath();
+    ctx.fillStyle = rgba(pal.bg, 0.9); ctx.fill();
+    ctx.lineWidth = 1; ctx.strokeStyle = rgba(pal.ink, 0.62); ctx.stroke();
+    // rubber cap
+    ctx.lineWidth = 2; ctx.lineCap = 'round'; ctx.strokeStyle = vivid() ? ramp(pal, PIECE_T[u.piece]) : pal.ink;
+    ctx.beginPath();
+    for (const cap of u.caps) { const [a1, a2] = cap.map(pt); ctx.moveTo(...a1); ctx.lineTo(...a2); }
+    ctx.stroke(); ctx.lineCap = 'butt';
+  }
+
+  // the mark
+  for (const b of pieces) {
+    const u = b.getUserData(), t = xfOf(b, alpha), col = pieceColor(u.i);
+    ctx.save();
+    ctx.translate(X(t.x), Y(t.y)); ctx.rotate(t.a); ctx.scale(s, s);
+    if (vivid()) { ctx.shadowColor = rgba(col, 0.55); ctx.shadowBlur = 22 * dpr; }
+    ctx.fillStyle = col;
+    ctx.fill(PIECE_PATHS[u.i]);
+    ctx.restore();
+  }
+
+  // ball trails, balls, fading balls
+  if (P.trails) {
+    ctx.save(); ctx.lineCap = 'round';
+    for (const b of balls) {
+      const tr = b.getUserData().trail, r = b.getUserData().r;
+      for (let i = 1; i < tr.length; i++) {
+        const k = i / tr.length;
+        ctx.strokeStyle = rgba(ballColor(), 0.35 * k); ctx.lineWidth = Math.max(1, r * s * 1.4 * k);
+        ctx.beginPath(); ctx.moveTo(X(tr[i - 1].x), Y(tr[i - 1].y)); ctx.lineTo(X(tr[i].x), Y(tr[i].y)); ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+  for (const b of balls) { const t = xfOf(b, alpha); drawBall(t.x, t.y, b.getUserData().r, t.a); }
+  for (const f of fading) drawBall(f.x, f.y, f.r, f.a, Math.max(0, f.life));
+
+  // slingshot: waiting ball, band, dotted path
+  const pull = drag ? pullOf(drag) : demo ? (() => { const e = Math.min(1, demo.t / (demo.dur * 0.75)); const k = 1 - (1 - e) ** 3; return { x: demo.pull.x * k, y: demo.pull.y * k }; })() : null;
+  if (phase !== 'reset' && readyT > 0) {
+    const k = readyT < 1 ? readyT : 1;
+    drawBall(SPAWN.x, SPAWN.y, r0 * (0.6 + 0.4 * k), -Math.PI / 2, k);
+    ctx.font = `400 10px "JetBrains Mono", monospace`; ctx.fillStyle = rgba(pal.ink, 0.55 * k);
+    const side = Math.sign(SPAWN.x) || -1;   // label sits on the inboard side of the launcher
+    ctx.textAlign = side < 0 ? 'left' : 'right';
+    ctx.fillText(`${ballMass().toFixed(2)} kg`, X(SPAWN.x) - side * (r0 * s + 8), Y(SPAWN.y) + 3);
+    ctx.textAlign = 'left';
+  }
+  if (pull && Math.hypot(pull.x, pull.y) > 0.005) {
+    const hx = SPAWN.x - pull.x, hy = SPAWN.y - pull.y;
+    ctx.strokeStyle = rgba(pal.ink, 0.6); ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(X(SPAWN.x), Y(SPAWN.y)); ctx.lineTo(X(hx), Y(hy)); ctx.stroke();
+    ctx.beginPath(); ctx.arc(X(hx), Y(hy), 5, 0, Math.PI * 2); ctx.stroke();
+    const pts = trajectory(pull);
+    pts.forEach((p, i) => {
+      if (i % 2) return;
+      ctx.fillStyle = rgba(ballColor(), 0.85 * (1 - i / 100));
+      ctx.beginPath(); ctx.arc(X(p.x), Y(p.y), 1.6, 0, Math.PI * 2); ctx.fill();
+    });
+    const last = pts[pts.length - 1];
+    if (last && last.hit) {
+      ctx.strokeStyle = rgba(ballColor(), 0.9); ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(X(last.x), Y(last.y), r0 * s, 0, Math.PI * 2); ctx.stroke();
+    }
+  }
+
+  // sparks and flashes, additive
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  for (const f of flashes) {
+    const k = f.t / f.dur;
+    ctx.strokeStyle = rgba(pal.ink, 0.8 * (1 - k)); ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(X(f.x), Y(f.y), f.R * s * (0.3 + k), 0, Math.PI * 2); ctx.stroke();
+    if (k < 0.35) { ctx.fillStyle = rgba(pal.ink, 0.9 * (1 - k / 0.35)); ctx.beginPath(); ctx.arc(X(f.x), Y(f.y), f.R * s * 0.35, 0, Math.PI * 2); ctx.fill(); }
+  }
+  ctx.lineCap = 'round'; ctx.lineWidth = 1.4;
+  for (const p of sparks) {
+    ctx.strokeStyle = rgba(vivid() ? ramp(pal, p.c) : pal.ink, Math.min(1, p.life * 1.3));
+    ctx.beginPath(); ctx.moveTo(X(p.x), Y(p.y)); ctx.lineTo(X(p.x - p.vx * 0.025), Y(p.y - p.vy * 0.025)); ctx.stroke();
+  }
+  ctx.restore();
+}
+
+let hudTick = 0;
+function hud() {
+  let v = 0;
+  for (const b of balls) v = Math.max(v, b.getLinearVelocity().length() / S);
+  const launch = drag ? Math.hypot(...Object.values(pullOf(drag))) * K_PULL : null;
+  lab.hud(
+    `ball <b>${ballMass().toFixed(2)} kg</b> · ${launch !== null ? `launch <b>${launch.toFixed(2)} m/s</b>` : `v <b>${v.toFixed(2)} m/s</b>`}` +
+    ` · last hit <b>${lastHit.toFixed(2)} N·s</b> · knocked off <b>${knocked()}/3</b> · plinths down <b>${toppled()}/3</b>`);
+}
+
+buildWorld();
+render();
+lab.on('palette', () => render());
+
+lab.loop(dt => {
+  update(dt);
+  render();
+  if (++hudTick % 6 === 0) hud();
+});
+
+// test hooks: advance and draw without requestAnimationFrame
+window.__lab = {
+  step(n = 1) { for (let i = 0; i < n; i++) update(1 / 60); render(); hud(); return this.state(); },
+  renderOnce() { render(); hud(); },
+  fling, reset, dropBall, earthquake,
+  wakeAll() { for (const b of [...pieces, ...plinths]) b.setAwake(true); goLive(); },
+  state: () => ({ phase, knocked: knocked(), toppled: toppled(), balls: balls.length,
+    drift: pieces.map(b => { const p = b.getPosition(); return +(Math.hypot(p.x, p.y) / S).toFixed(5); }),
+    parts: CONVEX.map(c => c.length), lastHit: +lastHit.toFixed(3) }),
+  world: () => world
+};
+</script>

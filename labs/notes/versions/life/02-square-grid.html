@@ -1,0 +1,561 @@
+<meta charset="utf-8">
+<title>Life</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@200;300&family=Familjen+Grotesk:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="shared/lab.css">
+<script type="module">
+import { createLab } from '../../../shared/lab.js';
+import { LOGO_PIECES, logoPolygons, fitLogo } from '../../../shared/logo.js';
+import { ramp, hex } from '../../../shared/palettes.js';
+
+const lab = createLab({
+  number: '11',
+  title: 'Life',
+  blurb: 'The mark, laid out cell by cell as a still life in Conway’s Game of Life: every arm is a row of long barges, so it holds perfectly still. One glider is enough to unravel it. When the chaos burns down, it rebuilds.',
+  teaches: 'Conway’s Game of Life (born on 3 neighbours, survives on 2 or 3), still lifes, gliders and spaceships, and how one collision cascades through a fragile pattern',
+  hint: 'tap to drop the brush · drag to draw cells<br>gliders aim at the mark',
+  palettes: ['cmy', 'spectrum', 'synthwave', 'ember', 'reef', 'aurora', 'ultraviolet', 'gold'],
+  defaultPalette: 'ember',
+  params: {
+    hLife:    { type: 'heading', label: 'Life' },
+    speed:    { type: 'range', label: 'Speed', min: 2, max: 60, step: 1, value: 18, unit: ' gen/s' },
+    res:      { type: 'range', label: 'Cells across the square', min: 100, max: 300, step: 10, value: 120 },
+    brush:    { type: 'select', label: 'Brush', value: 'glider', options: [['glider', 'Glider, aimed at the mark'], ['lwss', 'Spaceship (LWSS)'], ['cell', 'Single cells'], ['r', 'R-pentomino'], ['acorn', 'Acorn']] },
+    hCycle:   { type: 'heading', label: 'Cycle' },
+    auto:     { type: 'toggle', label: 'Fire gliders when idle', value: true },
+    hold:     { type: 'range', label: 'Rest before firing', min: 1, max: 12, step: 0.5, value: 3, unit: ' s' },
+    rebuild:  { type: 'toggle', label: 'Rebuild after the chaos', value: true },
+    chaos:    { type: 'range', label: 'Chaos before rebuild', min: 150, max: 2000, step: 50, value: 200, unit: ' gen' },
+    hLook:    { type: 'heading', label: 'Look' },
+    ageColor: { type: 'toggle', label: 'Colour new cells by age', value: true },
+    trails:   { type: 'toggle', label: 'Ghost trails', value: true },
+    glow:     { type: 'toggle', label: 'Glow', value: true }
+  },
+  actions: [
+    { label: 'Fire glider', primary: true, action: () => fire() },
+    { label: 'Pause', action: () => togglePause() },
+    { label: 'Step', action: () => stepOnce() },
+    { label: 'Rebuild', action: () => startRebuild(true) }
+  ]
+});
+const P = lab.params;
+const pauseBtn = [...document.querySelectorAll('.lab-panel > .btns .btn')].find(b => b.textContent === 'Pause');
+
+// ---- patterns ----
+const parse = rows => { const out = []; rows.forEach((r, y) => [...r].forEach((c, x) => { if (c === 'X') out.push([x, y]); })); return out; };
+const GLIDER = parse(['.X.', '..X', 'XXX']);                  // travels +x +y
+const LWSS = parse(['X..X.', '....X', 'X...X', '.XXXX']);     // travels +x
+const RPENT = parse(['.XX', 'XX.', '.X.']);
+const ACORN = parse(['.X.....', '...X...', 'XX..XXX']);
+
+// ---- grid ----
+const M = 8;                       // dead margin around the visible cells; anything that drifts in is erased
+const AGE_SPAN = 48;               // generations for a new cell to cool from hot to cold
+const PIECE_T = [0.08, 0.92, 0.5]; // left "<", right ">", middle zig, as in the other labs
+const POLYS = logoPolygons({ curveSegments: 8 });
+
+let sq = lab.square(), fit = fitLogo(sq), dpr = 1;
+let cellDev = 4, GW = 0, GH = 0, x0 = 0, y0 = 0, visW = 0, visH = 0;
+let cur, nxt, age, orig, col, vis, pr, prOwner, prN = 0;
+let bb = { x0: 0, y0: 0, x1: 0, y1: 0 }, occT, occ, diff;
+let logoC = { x: 0, y: 0 };
+let cellCv = document.createElement('canvas'), cellCtx = cellCv.getContext('2d'), img = null, px32 = null;
+
+const { canvas, ctx } = lab.canvas();
+canvas.style.touchAction = 'none';
+
+function inPoly(poly, x, y) {
+  let c = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [xi, yi] = poly[i], [xj, yj] = poly[j];
+    if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) c = !c;
+  }
+  return c;
+}
+
+// The still life. Each arm of each chevron is filled with "long barges": two full diagonals of cells with an
+// empty diagonal between them (every cell has exactly 2 or 3 neighbours, every gap cell 2 or 4). Barges sit
+// 6 diagonals apart, which is far enough that neighbouring barges can never feed a birth, and a barge's end cap
+// is stable on its own, so each one can stop wherever the edge of the mark cuts it.
+function buildMark(owner, W, H) {
+  const inM = (x, y) => x >= 0 && y >= 0 && x < W && y < H && owner[y * W + x] >= 0;
+  // which diagonal does the mark run along at this cell? the one with the longer run through it
+  const fam = new Int8Array(W * H).fill(-1);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    if (!inM(x, y)) continue;
+    const run = (dx, dy) => { let n = 0, a = x, b = y; while (inM(a, b)) { n++; a += dx; b += dy; } a = x - dx; b = y - dy; while (inM(a, b)) { n++; a -= dx; b -= dy; } return n; };
+    fam[y * W + x] = run(1, 1) >= run(1, -1) ? 0 : 1;
+  }
+  // family 0 barges run along x−y = c, family 1 along x+y = c; u is the diagonal, v steps along it
+  const cellAt = (f, u, v) => f === 0 ? [(v + u) / 2, (v - u) / 2] : [(u + v) / 2, (u - v) / 2];
+  const okCell = (f, u, v, o) => { const [x, y] = cellAt(f, u, v); return inM(x, y) && fam[y * W + x] === f && owner[y * W + x] === o; };
+  const umax = W + H + 4;
+  const collect = (f, ph, o) => {
+    const out = [];
+    for (let c = -umax + ph; c <= umax; c += 6) {
+      let run = null;
+      for (let v = -umax; v <= umax; v++) {
+        if ((v + c + 1) & 1) continue;
+        if (okCell(f, c + 1, v, o) && okCell(f, c - 1, v, o)) { if (!run) run = { f, c, o, v0: v, v1: v }; else run.v1 = v; }
+        else if (run) { if (run.v1 > run.v0) out.push(run); run = null; }
+      }
+      if (run && run.v1 > run.v0) out.push(run);
+    }
+    return out;
+  };
+  const rungs = r => (r.v1 - r.v0) / 2 + 1;
+  const runs = [];
+  for (const f of [0, 1]) for (let o = 0; o < 3; o++) {
+    let best = null;
+    for (let ph = 0; ph < 6; ph++) { const rs = collect(f, ph, o), n = rs.reduce((s, r) => s + rungs(r), 0); if (!best || n > best.n) best = { rs, n }; }
+    runs.push(...best.rs);
+  }
+  const A = new Uint8Array(W * H), id = new Int32Array(W * H);
+  const paint = () => {
+    A.fill(0); id.fill(-1);
+    runs.forEach((r, k) => { if (r.dead) return; for (let v = r.v0; v <= r.v1; v += 2) for (const u of [r.c - 1, r.c + 1]) { const [x, y] = cellAt(r.f, u, v); A[y * W + x] = 1; id[y * W + x] = k; } });
+  };
+  paint();
+  const stableAt = i => {
+    const x = i % W, y = (i / W) | 0; let n = 0;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { if (!dx && !dy) continue; const a = x + dx, b = y + dy; if (a >= 0 && b >= 0 && a < W && b < H) n += A[b * W + a]; }
+    return A[i] ? (n === 2 || n === 3) : n !== 3;
+  };
+  // where barges of the two directions meet (the chevron tips), trim the nearest barge end until nothing changes
+  for (let guard = 0; guard < 4000; guard++) {
+    let u = -1;
+    for (let i = 0; i < W * H; i++) if (!stableAt(i)) { u = i; break; }
+    if (u < 0) break;
+    const ux = u % W, uy = (u / W) | 0;
+    let bk = -1, bd = 1e9, bend = 0;
+    for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+      const x = ux + dx, y = uy + dy; if (x < 0 || y < 0 || x >= W || y >= H) continue;
+      const k = id[y * W + x]; if (k < 0) continue;
+      const r = runs[k];
+      for (const [end, v] of [[0, r.v0], [1, r.v1]]) {
+        const [ex, ey] = cellAt(r.f, r.c, v), d = Math.hypot(ex - ux, ey - uy) - rungs(r) * 0.01;
+        if (d < bd) { bd = d; bk = k; bend = end; }
+      }
+    }
+    if (bk < 0) { // never seen; fall back to clearing the spot
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { const x = ux + dx, y = uy + dy; if (x >= 0 && y >= 0 && x < W && y < H) A[y * W + x] = 0; }
+      continue;
+    }
+    const r = runs[bk];
+    if (bend === 0) r.v0 += 2; else r.v1 -= 2;
+    if (r.v1 <= r.v0) r.dead = true;   // a barge needs two rungs (two rungs is a tub)
+    paint();
+  }
+  return A;
+}
+
+function setup() {
+  sq = lab.square(); fit = fitLogo(sq); dpr = Math.min(2, window.devicePixelRatio || 1);
+  const CW = canvas.width, CH = canvas.height;
+  cellDev = Math.max(2, Math.round(sq.size * dpr / P.res));
+  // cell edges on whole device pixels, with a cell corner on the logo's center
+  const lcx = fit.cx * dpr, lcy = fit.cy * dpr;
+  const ox = ((lcx % cellDev) + cellDev) % cellDev, oy = ((lcy % cellDev) + cellDev) % cellDev;
+  visW = Math.ceil((CW - ox) / cellDev) + 1; visH = Math.ceil((CH - oy) / cellDev) + 1;
+  GW = visW + 2 * M; GH = visH + 2 * M;
+  x0 = ox - (M + 1) * cellDev; y0 = oy - (M + 1) * cellDev;
+  const n = GW * GH;
+  cur = new Uint8Array(n); nxt = new Uint8Array(n); age = new Uint16Array(n); orig = new Uint8Array(n);
+  col = new Uint8Array(n); vis = new Float32Array(n); pr = new Uint8Array(n); prOwner = new Int8Array(n).fill(-1);
+  occT = new Uint8Array(n); occ = new Float32Array(n); diff = new Uint8Array(n);
+  // logo in cell coordinates
+  const fx = (lcx - x0) / cellDev, fy = (lcy - y0) / cellDev, scl = fit.scale * dpr / cellDev;
+  logoC = { x: fx, y: fy };
+  const pad = 4;
+  bb = { x0: Math.max(1, Math.floor(fx - 0.5 * scl) - pad), y0: Math.max(1, Math.floor(fy - 0.5 * scl) - pad) };
+  bb.x1 = Math.min(GW - 1, Math.ceil(fx + 0.5 * scl) + pad); bb.y1 = Math.min(GH - 1, Math.ceil(fy + 0.5 * scl) + pad);
+  const SW = bb.x1 - bb.x0, SH = bb.y1 - bb.y0, own = new Int8Array(SW * SH).fill(-1);
+  for (let j = 0; j < SH; j++) for (let i = 0; i < SW; i++) {
+    const lx = (bb.x0 + i + 0.5 - fx) / scl, ly = (bb.y0 + j + 0.5 - fy) / scl;
+    if (Math.abs(lx) > 0.52 || Math.abs(ly) > 0.5) continue;
+    for (let p = 0; p < POLYS.length; p++) if (inPoly(POLYS[p], lx, ly)) { own[j * SW + i] = p; break; }
+  }
+  const A = buildMark(own, SW, SH);
+  prN = 0;
+  for (let j = 0; j < SH; j++) for (let i = 0; i < SW; i++) {
+    const k = (bb.y0 + j) * GW + bb.x0 + i;
+    prOwner[k] = own[j * SW + i];
+    if (A[j * SW + i]) { pr[k] = 1; prN++; }
+  }
+  // where the outline may be covered: the mask grown by a cell (the outline sits 2 px inside the edge)
+  for (let y = bb.y0; y < bb.y1; y++) for (let x = bb.x0; x < bb.x1; x++) {
+    let any = false;
+    for (let dy = -1; dy <= 1 && !any; dy++) for (let dx = -1; dx <= 1; dx++) if (prOwner[(y + dy) * GW + x + dx] >= 0) { any = true; break; }
+    occT[y * GW + x] = any ? 1 : 0;
+  }
+  cellCv.width = visW; cellCv.height = visH;
+  img = cellCtx.createImageData(visW, visH); px32 = new Uint32Array(img.data.buffer);
+  restore(true);
+}
+
+// put the still life back exactly (no Life rules involved)
+function restore(snap) {
+  for (let i = 0; i < GW * GH; i++) setPristine(i);
+  if (snap) { for (let i = 0; i < GW * GH; i++) { vis[i] = cur[i]; occ[i] = occT[i]; } }
+  gen0 = gen; phase = 'rest'; restT = 0; liveGen = 0; settledRun = 0; hashes = [0, 0, 0]; rb = null; ashT = 0;
+  stats = { births: 0, deaths: 0, pop: prN, intact: prN };
+  updateDamage();
+}
+function setPristine(i) {
+  cur[i] = pr[i]; orig[i] = pr[i]; age[i] = 0;
+  if (pr[i]) col[i] = 64 + prOwner[i];
+}
+
+// ---- state ----
+let gen = 0, gen0 = 0, phase = 'rest', restT = 0, liveGen = 0, settledRun = 0, hashes = [0, 0, 0], ashT = 0;
+let paused = false, acc = 0, rb = null;
+let stats = { births: 0, deaths: 0, pop: 0, intact: 0 };
+let aims = [];
+let perf = { sim: 0, draw: 0 };
+
+// ---- one generation, B3/S23 ----
+function lifeGen() {
+  const W = GW, H = GH, t0 = performance.now();
+  let births = 0, deaths = 0, pop = 0, intact = 0, h1 = 0, h2 = 0;
+  for (let y = 1; y < H - 1; y++) {
+    const live = y >= M && y < H - M;
+    for (let x = 1, i = y * W + 1; x < W - 1; x++, i++) {
+      const n = cur[i - W - 1] + cur[i - W] + cur[i - W + 1] + cur[i - 1] + cur[i + 1] + cur[i + W - 1] + cur[i + W] + cur[i + W + 1];
+      const a = cur[i];
+      const b = live && x >= M && x < W - M && (n === 3 || (n === 2 && a)) ? 1 : 0;
+      nxt[i] = b;
+      if (b) {
+        pop++;
+        if (pr[i]) intact++;
+        h1 = (h1 + Math.imul(i + 1, 0x9E3779B1)) | 0; h2 ^= Math.imul(i ^ (i >>> 5), 0x85EBCA6B);
+        if (!a) { births++; age[i] = 0; orig[i] = 0; col[i] = 0; }
+        else if (!orig[i]) { if (age[i] < 60000) age[i]++; col[i] = age[i] >= AGE_SPAN ? 63 : (age[i] * 63 / AGE_SPAN) | 0; }
+      } else if (a) { deaths++; orig[i] = 0; }
+    }
+  }
+  const t = cur; cur = nxt; nxt = t;
+  gen++;
+  stats = { births, deaths, pop, intact };
+  // still or blinking (period 1 or 2) for a while counts as settled
+  const h = (h1 ^ Math.imul(h2, 31) ^ pop) | 0;
+  settledRun = (h === hashes[0] || h === hashes[1]) ? settledRun + 1 : 0;
+  hashes = [h, hashes[0]];
+  updateDamage();
+  perf.sim = perf.sim * 0.9 + (performance.now() - t0) * 0.1;
+  return births + deaths;
+}
+
+// Damage near the mark: cells that differ from the still life, grown by two cells. The outline shows there.
+function updateDamage() {
+  const W = GW;
+  for (let y = bb.y0; y < bb.y1; y++) for (let x = bb.x0, i = y * W + x; x < bb.x1; x++, i++) diff[i] = cur[i] !== pr[i] ? 1 : 0;
+  for (let pass = 0; pass < 2; pass++) {
+    // grow by one cell (3×3) per pass, in place via a row buffer
+    const src = diff.slice();
+    for (let y = bb.y0; y < bb.y1; y++) for (let x = bb.x0, i = y * W + x; x < bb.x1; x++, i++) {
+      if (src[i]) continue;
+      diff[i] = src[i - 1] | src[i + 1] | src[i - W] | src[i + W] | src[i - W - 1] | src[i - W + 1] | src[i + W - 1] | src[i + W + 1];
+    }
+  }
+}
+
+// ---- cycle ----
+function goLive() { if (rb) finishRebuild(); if (phase !== 'live') { phase = 'live'; liveGen = 0; } settledRun = 0; ashT = 0; restT = 0; }
+function advance() {
+  const changes = lifeGen();
+  if (phase === 'rest') { if (changes) { phase = 'live'; liveGen = 0; } return; }
+  liveGen++;
+  if (changes === 0 && stats.pop === prN && stats.intact === prN) { phase = 'rest'; restT = 0; return; }
+  if (phase === 'live' && P.rebuild && (settledRun >= 24 || liveGen >= P.chaos)) { phase = 'ash'; ashT = 0; }
+}
+function startRebuild(now) {
+  if (lab.calm || (now && phase === 'rest' && stats.pop === prN && stats.intact === prN)) { restore(false); if (lab.calm) for (let i = 0; i < GW * GH; i++) vis[i] = cur[i]; return; }
+  aims = [];
+  rb = { p: 0, dur: 1.7, done: -1 };
+  phase = 'rebuild';
+}
+function finishRebuild() { if (!rb) return; sweepTo(2); rb = null; restore(false); }
+// The rebuild is a honest rewrite, not Life: a diagonal line sweeps the stage and resets every cell behind it.
+function sweepTo(p) {
+  const span = visW + visH;
+  const lo = rb.done, hi = p * span;
+  for (let y = M; y < GH - M; y++) for (let x = M, i = y * GW + x; x < GW - M; x++, i++) {
+    const d = (x - M) + (y - M);
+    if (d > lo && d <= hi) setPristine(i);
+  }
+  rb.done = hi;
+  updateDamage();
+}
+
+// ---- spawning ----
+function inside(x, y) { return x >= M + 1 && y >= M + 1 && x < GW - M - 1 && y < GH - M - 1; }
+function stamp(cells, cx, cy, tf = (a, b) => [a, b]) {
+  for (const [a, b] of cells) {
+    const [dx, dy] = tf(a, b), x = cx + dx, y = cy + dy;
+    if (!inside(x, y)) continue;
+    const i = y * GW + x;
+    cur[i] = 1; orig[i] = 0; age[i] = 0; col[i] = 0; vis[i] = Math.max(vis[i], 0.5);
+  }
+}
+const towardMark = (cx, cy) => [Math.sign(logoC.x - cx) || 1, Math.sign(logoC.y - cy) || 1];
+function glider(cx, cy, sx, sy) { stamp(GLIDER, cx, cy, (a, b) => [(a - 1) * sx, (b - 1) * sy]); }
+function lwss(cx, cy) {
+  const dx = logoC.x - cx, dy = logoC.y - cy;
+  if (Math.abs(dx) >= Math.abs(dy)) { const s = Math.sign(dx) || 1; stamp(LWSS, cx, cy, (a, b) => [(a - 2) * s, b - 2]); }
+  else { const s = Math.sign(dy) || 1; stamp(LWSS, cx, cy, (a, b) => [b - 2, (a - 2) * s]); }
+}
+
+// a glider from out past the mark, on a diagonal through one of its surviving cells
+function fire() {
+  goLive(); restT = 0;
+  const pick = [];
+  for (let y = bb.y0; y < bb.y1; y++) for (let x = bb.x0, i = y * GW + x; x < bb.x1; x++, i++) if (cur[i] && pr[i]) pick.push(i);
+  if (!pick.length) for (let y = bb.y0; y < bb.y1; y++) for (let x = bb.x0, i = y * GW + x; x < bb.x1; x++, i++) if (cur[i]) pick.push(i);
+  const t = pick.length ? pick[(Math.random() * pick.length) | 0] : Math.round(logoC.y) * GW + Math.round(logoC.x);
+  const tx = t % GW, ty = (t / GW) | 0;
+  // come in from a random diagonal, starting where there is clear room around it
+  const dirs = [[1, 1], [1, -1], [-1, 1], [-1, -1]].sort(() => Math.random() - 0.5);
+  for (const [sx, sy] of dirs) {
+    let x = tx, y = ty, clear = 0, steps = 0;
+    while (clear < 9 && steps < 400) {
+      x -= sx; y -= sy; steps++;
+      if (!inside(x - 3, y - 3) || !inside(x + 3, y + 3)) break;
+      let busy = false;
+      for (let dy = -3; dy <= 3 && !busy; dy++) for (let dx = -3; dx <= 3; dx++) { const i = (y + dy) * GW + x + dx; if (cur[i] || prOwner[i] >= 0) { busy = true; break; } }
+      clear = busy ? 0 : clear + 1;
+    }
+    if (clear < 9) continue;
+    glider(x, y, sx, sy);
+    aims.push({ x, y, tx, ty, t: 0 });
+    return true;
+  }
+  return false;
+}
+function salvo() { fire(); if (Math.random() < 0.35) fire(); }
+
+function togglePause() { paused = !paused; if (pauseBtn) pauseBtn.textContent = paused ? 'Play' : 'Pause'; }
+function stepOnce() { if (!paused) togglePause(); if (rb) finishRebuild(); advance(); }
+
+// ---- pointer: draw ----
+let drag = null;
+function cellOf(e) {
+  const r = canvas.getBoundingClientRect();
+  return [Math.floor(((e.clientX - r.left) * dpr - x0) / cellDev), Math.floor(((e.clientY - r.top) * dpr - y0) / cellDev)];
+}
+function dropBrush(x, y) {
+  if (P.brush === 'glider') { const [sx, sy] = towardMark(x, y); glider(x, y, sx, sy); aims.push({ x, y, tx: x + sx * 60, ty: y + sy * 60, t: 0.4 }); }
+  else if (P.brush === 'lwss') lwss(x, y);
+  else if (P.brush === 'r') stamp(RPENT, x, y, (a, b) => [a - 1, b - 1]);
+  else if (P.brush === 'acorn') stamp(ACORN, x, y, (a, b) => [a - 3, b - 1]);
+  else stamp([[0, 0]], x, y);
+}
+canvas.addEventListener('pointerdown', e => {
+  if (e.button > 0) return;
+  goLive();
+  const [x, y] = cellOf(e);
+  drag = { id: e.pointerId, x, y, moved: 0 };
+  canvas.setPointerCapture(e.pointerId);
+  dropBrush(x, y);
+});
+canvas.addEventListener('pointermove', e => {
+  if (!drag || e.pointerId !== drag.id) return;
+  const [x, y] = cellOf(e);
+  // a drag paints a line of cells (whatever the brush); other brushes re-stamp every few cells
+  const n = Math.max(Math.abs(x - drag.x), Math.abs(y - drag.y));
+  for (let k = 1; k <= n; k++) {
+    const cx = Math.round(drag.x + (x - drag.x) * k / n), cy = Math.round(drag.y + (y - drag.y) * k / n);
+    if (P.brush === 'cell') stamp([[0, 0]], cx, cy);
+    else if (++drag.moved % 9 === 0) dropBrush(cx, cy);
+  }
+  if (n) goLive();
+  drag.x = x; drag.y = y;
+});
+const up = e => { if (drag && e.pointerId === drag.id) drag = null; };
+canvas.addEventListener('pointerup', up);
+canvas.addEventListener('pointercancel', up);
+
+// ---- colour ----
+let lut = new Uint8Array(68 * 3), bgRGB = [0, 0, 0];
+const vivid = () => lab.palette.key !== 'bench';
+function buildLut() {
+  const pal = lab.palette;
+  bgRGB = hex(pal.bg);
+  for (let k = 0; k < 64; k++) {
+    // newborn cells are hot (the far end of the ramp, lifted toward white), old ones cool and dim
+    const f = k / 63;
+    let c = P.ageColor ? hex(ramp(pal, vivid() ? 1 - f : 0.15 + 0.85 * f)) : hex(vivid() ? ramp(pal, 0.5) : pal.ink);
+    const lift = P.ageColor ? Math.max(0, 0.45 - f * 1.6) : 0, dim = P.ageColor ? 1 - 0.38 * f : 0.9;
+    c = c.map(v => (v + (255 - v) * lift) * dim);
+    lut.set(c.map(Math.round), k * 3);
+  }
+  for (let p = 0; p < 3; p++) lut.set(hex(vivid() ? ramp(pal, PIECE_T[p]) : pal.ink), (64 + p) * 3);
+}
+lab.on('palette', () => buildLut());
+lab.on('change', key => {
+  if (key === 'ageColor') buildLut();
+  if (key === 'res') setup();
+});
+
+// ---- outline: dashed, inset 2 px inside each piece, so an intact mark hides it (same as Knockout) ----
+const PIECE_PATHS = LOGO_PIECES.map(piece => {
+  const p = new Path2D();
+  for (const { cmd, pts } of piece) {
+    if (cmd === 'M') p.moveTo(...pts[0]);
+    else if (cmd === 'L') p.lineTo(...pts[0]);
+    else if (cmd === 'C') p.bezierCurveTo(...pts[0], ...pts[1], ...pts[2]);
+    else p.closePath();
+  }
+  return p;
+});
+function rgba(h, a) { const n = parseInt(h.slice(1), 16); return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${a})`; }
+const OUTLINE_INSET = 2, OUTLINE_W = 1.2;
+let outline = null;
+function bodyOutline(pal, s) {
+  const key = [canvas.width, canvas.height, dpr, s, fit.cx, fit.cy, pal.ink].join('|');
+  if (outline?.key === key) return outline.c;
+  const c = outline?.c || document.createElement('canvas');
+  c.width = canvas.width; c.height = canvas.height;
+  const o = c.getContext('2d');
+  o.setTransform(dpr, 0, 0, dpr, 0, 0); o.translate(fit.cx, fit.cy); o.scale(s, s);
+  o.lineJoin = 'round'; o.strokeStyle = rgba(pal.ink, 0.42);
+  for (const path of PIECE_PATHS) {
+    o.save(); o.clip(path);
+    o.setLineDash([5 / s, 4 / s]); o.lineWidth = 2 * (OUTLINE_INSET + OUTLINE_W) / s; o.stroke(path);
+    o.globalCompositeOperation = 'destination-out'; o.setLineDash([]); o.lineWidth = 2 * OUTLINE_INSET / s; o.stroke(path);
+    o.restore();
+  }
+  outline = { key, c };
+  return c;
+}
+
+// ---- frame ----
+function update(dt) {
+  for (const a of aims) a.t += dt;
+  aims = aims.filter(a => a.t < 2.2);
+  if (phase === 'rebuild' && rb) {
+    if (!paused) { rb.p += dt / rb.dur; sweepTo(Math.min(1, rb.p)); if (rb.p >= 1) { rb = null; restore(false); } }
+    return;
+  }
+  if (lab.calm || paused) return;
+  if (phase === 'ash') { ashT += dt; if (ashT > 1.1) { startRebuild(); return; } }
+  if (phase === 'rest' && P.auto && !drag) { restT += dt; if (restT >= P.hold) { restT = 0; salvo(); } }
+  acc += dt * P.speed;
+  let n = 0;
+  while (acc >= 1 && n < 4) { advance(); acc -= 1; n++; if (phase === 'rebuild') break; }
+  if (n === 4) acc = 0;
+}
+
+function render(dt = 1 / 60) {
+  const t0 = performance.now();
+  const pal = lab.palette, W = GW;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(bodyOutline(pal, fit.scale), 0, 0);
+
+  // eased cells: the sim is discrete, the picture is not
+  const sp = Math.max(4, P.speed);
+  const kUp = 1 - Math.exp(-dt * sp * 3.2), kDn = 1 - Math.exp(-dt * sp * (P.trails ? 0.75 : 3.2)), kOcc = 1 - Math.exp(-dt * 7);
+  const [bR, bG, bB] = bgRGB;
+  for (let y = 0; y < visH; y++) {
+    let i = (y + M) * W + M, p = y * visW;
+    for (let x = 0; x < visW; x++, i++, p++) {
+      let v = vis[i];
+      v += ((cur[i] ? 1 : 0) - v) * (cur[i] ? kUp : kDn);
+      if (v < 0.003) v = 0;
+      vis[i] = v;
+      let o = occ[i];
+      if (o || occT[i]) { o += ((occT[i] && !diff[i] ? 1 : 0) - o) * kOcc; if (o < 0.003) o = 0; occ[i] = o; }
+      if (!v && !o) { px32[p] = 0; continue; }
+      const c = col[i] * 3, a = v + o * (1 - v), ob = o * (1 - v);
+      const r = (lut[c] * v + bR * ob) / a, g = (lut[c + 1] * v + bG * ob) / a, b = (lut[c + 2] * v + bB * ob) / a;
+      px32[p] = ((a * 255) << 24 | b << 16 | g << 8 | r) >>> 0;
+    }
+  }
+  cellCtx.putImageData(img, 0, 0);
+  const ox = x0 + M * cellDev, oy = y0 + M * cellDev, dw = visW * cellDev, dh = visH * cellDev;
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(cellCv, ox, oy, dw, dh);
+  if (P.glow && vivid()) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = 0.5;
+    ctx.imageSmoothingEnabled = true; ctx.filter = `blur(${Math.round(cellDev * 1.6)}px)`;
+    ctx.drawImage(cellCv, ox, oy, dw, dh);
+    ctx.restore();
+  }
+
+  // rebuild sweep: a bright diagonal with a soft wake
+  if (rb) {
+    const d = Math.min(1, rb.p) * (visW + visH) * cellDev;
+    ctx.save();
+    const g = ctx.createLinearGradient(ox + d / 2 - 40 * dpr, oy + d / 2 - 40 * dpr, ox + d / 2, oy + d / 2);
+    g.addColorStop(0, rgba(pal.ink, 0)); g.addColorStop(1, rgba(pal.ink, 0.10));
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.moveTo(ox + d, oy); ctx.lineTo(ox, oy + d); ctx.lineTo(ox, oy + d - 80 * dpr); ctx.lineTo(ox + d - 80 * dpr, oy); ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = rgba(pal.ink, 0.85); ctx.lineWidth = Math.max(1, dpr);
+    ctx.beginPath(); ctx.moveTo(ox + d, oy); ctx.lineTo(ox, oy + d); ctx.stroke();
+    ctx.restore();
+  }
+
+  // where a glider was launched: a ring and a dotted aim line that fade
+  if (aims.length) {
+    ctx.save();
+    for (const a of aims) {
+      const k = Math.max(0, 1 - a.t / 2.2), cx = x0 + (a.x + 0.5) * cellDev, cy = y0 + (a.y + 0.5) * cellDev;
+      const tx = x0 + (a.tx + 0.5) * cellDev, ty = y0 + (a.ty + 0.5) * cellDev;
+      ctx.strokeStyle = rgba(pal.ink, 0.5 * k); ctx.lineWidth = dpr; ctx.setLineDash([2 * dpr, 4 * dpr]);
+      ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(tx, ty); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.strokeStyle = rgba(pal.ink, 0.8 * k);
+      ctx.beginPath(); ctx.arc(cx, cy, cellDev * (2.5 + 4 * (1 - k)), 0, Math.PI * 2); ctx.stroke();
+    }
+    ctx.restore();
+  }
+  perf.draw = perf.draw * 0.9 + (performance.now() - t0) * 0.1;
+}
+
+let hudTick = 0;
+function hud() {
+  const pct = prN ? Math.round(stats.intact / prN * 1000) / 10 : 0;
+  const label = paused ? 'paused' : phase === 'rest' ? 'still life' : phase === 'live' ? 'unravelling' : phase === 'ash' ? 'settling' : 'rebuilding';
+  lab.hud(`gen <b>${gen - gen0}</b> · pop <b>${stats.pop}</b> · births <b>${stats.births}</b> deaths <b>${stats.deaths}</b> per gen` +
+    ` · intact <b>${pct.toFixed(1)}%</b> · <b>${label}</b> · grid <b>${visW}×${visH}</b> · <b>${(perf.sim + perf.draw).toFixed(1)} ms</b>`);
+}
+
+setup();
+buildLut();
+lab.on('resize', () => { setup(); render(0); });
+render(0); hud();
+
+lab.loop(dt => {
+  update(dt);
+  render(dt);
+  if (++hudTick % 6 === 0) hud();
+});
+
+// test hooks: advance and draw without requestAnimationFrame
+window.__lab = {
+  step(n = 1) { for (let i = 0; i < n; i++) { if (rb) finishRebuild(); advance(); if (phase === 'ash') startRebuild(); } render(1 / 60); hud(); return this.state(); },
+  frames(n = 1, dt = 1 / 60) { for (let i = 0; i < n; i++) { update(dt); render(dt); } hud(); return this.state(); },
+  state: () => ({ phase, gen: gen - gen0, liveGen, pop: stats.pop, births: stats.births, deaths: stats.deaths, intact: stats.intact, pristine: prN,
+    intactPct: prN ? +(stats.intact / prN * 100).toFixed(2) : 0, settledRun, grid: [visW, visH], cellDev, perf: { sim: +perf.sim.toFixed(2), draw: +perf.draw.toFixed(2) } }),
+  reset() { rb = null; restore(true); render(0); hud(); },
+  fire, salvo,
+  // generations of the untouched still life that change anything (should be 0)
+  stable(n = 100) {
+    let a = pr.slice(), b = new Uint8Array(a.length), changes = 0;
+    for (let g = 0; g < n; g++) {
+      for (let y = 1; y < GH - 1; y++) for (let x = 1, i = y * GW + 1; x < GW - 1; x++, i++) {
+        const k = a[i - GW - 1] + a[i - GW] + a[i - GW + 1] + a[i - 1] + a[i + 1] + a[i + GW - 1] + a[i + GW] + a[i + GW + 1];
+        b[i] = k === 3 || (k === 2 && a[i]) ? 1 : 0;
+        if (b[i] !== a[i]) changes++;
+      }
+      [a, b] = [b, a];
+    }
+    return changes;
+  },
+  brush: (x, y) => { goLive(); dropBrush(x, y); },
+  pause: togglePause
+};
+</script>

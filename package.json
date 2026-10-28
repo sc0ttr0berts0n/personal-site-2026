@@ -1,0 +1,9 @@
+{
+  "name": "personal-site-2026",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "sync": "node scripts/sync-labs.mjs",
+    "serve": "node scripts/serve.mjs 8123"
+  }
+}

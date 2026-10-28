@@ -1,0 +1,600 @@
+<meta charset="utf-8">
+<title>Logo Light</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@200;300&family=Familjen+Grotesk:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="shared/lab.css">
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { createLab } from '../../../shared/lab.js';
+import { logoShapes, LOGO_FILL, LOGO_DEPTH } from '../../../shared/logo.js';
+
+let pinned = null;   // light position the user clicked, in z = 0 screen-plane units
+const MOTES = 9000;
+const lab = createLab({
+  number: '06',
+  title: 'Logo Light',
+  blurb: 'A lamp glows behind the mark in a hazy room. You only see the beams where haze is lit, so the chevrons carve shafts of shadow that stream toward you.',
+  teaches: 'crepuscular rays: light scattered by a medium shows the beam, and occluders cut it into shafts (volumetric scattering as a radial blur with decay)',
+  hint: 'move to steer the light · click to pin it',
+  palettes: ['ember', 'gold', 'aurora', 'synthwave', 'reef', 'ultraviolet', 'spectrum'],
+  defaultPalette: 'ember',
+  grid: false,
+  params: {
+    exposure:  { type: 'range', label: 'Scattering', min: 0, max: 4, step: 0.05, value: 1.6 },
+    density:   { type: 'range', label: 'Shaft length', min: 0.1, max: 1, step: 0.01, value: 0.9, format: v => Math.round(v * 100), unit: '%' },
+    decay:     { type: 'range', label: 'Decay per step', min: 0.9, max: 1, step: 0.001, value: 0.976 },
+    intensity: { type: 'range', label: 'Light intensity', min: 0, max: 4, step: 0.05, value: 1.6 },
+    size:      { type: 'range', label: 'Light size', min: 0.2, max: 2.5, step: 0.05, value: 0.7 },
+    tilt:      { type: 'range', label: 'Tilt toward pointer', min: 0, max: 35, step: 1, value: 12, unit: '°' },
+    chroma:    { type: 'toggle', label: 'Chromatic spread', value: false },
+    bloom:     { type: 'range', label: 'Bloom', min: 0, max: 2, step: 0.05, value: 0.6 },
+    samples:   { type: 'range', label: 'Samples (quality)', min: 16, max: 128, step: 8, value: 64 },
+    hDust:     { type: 'heading', label: 'Dust' },
+    dust:      { type: 'range', label: 'Amount', min: 0, max: 1, step: 0.01, value: 0.39, format: v => Math.round(v * MOTES).toLocaleString(), unit: ' motes' },
+    dustBright:{ type: 'range', label: 'Brightness', min: 0, max: 3, step: 0.05, value: 1.05 },
+    dustSize:  { type: 'range', label: 'Mote size', min: 0.3, max: 3, step: 0.05, value: 2.15, unit: '×' },
+    drift:     { type: 'range', label: 'Settling speed', min: 0, max: 4, step: 0.05, value: 1.75, unit: '×' },
+    swirl:     { type: 'range', label: 'Air currents', min: 0, max: 4, step: 0.05, value: 0.75, unit: '×' },
+    twinkle:   { type: 'range', label: 'Glint', min: 0, max: 1, step: 0.01, value: 0.78 },
+    bokeh:     { type: 'range', label: 'Near-lens blur (bokeh)', min: 0, max: 1, step: 0.01, value: 0 },
+    hBurst:    { type: 'heading', label: 'Sun bursts' },
+    burst:     { type: 'toggle', label: 'Rainbow bursts', value: false },
+    burstEvery:{ type: 'range', label: 'Average interval', min: 3, max: 30, step: 0.5, value: 9, unit: ' s' },
+    burstPower:{ type: 'range', label: 'Burst strength', min: 0, max: 2.5, step: 0.05, value: 1 },
+    burstSettle:{ type: 'range', label: 'Return to sunlight', min: 0.5, max: 8, step: 0.1, value: 3.5, unit: ' s' },
+    sunK:      { type: 'range', label: 'Sun temperature', min: 4000, max: 7000, step: 50, value: 5700, unit: ' K' }
+  },
+  actions: [
+    { label: 'Center light', primary: true, action: () => { pinned = { x: 0, y: 0 }; } },
+    { label: 'Resume orbit', action: () => { pinned = null; } }
+  ]
+});
+
+// ---- world: key square is 10 units, the mark is 6 wide, its front face sits on z = 0 ----
+const SQ = 10, LOGO_W = SQ * LOGO_FILL, LOGO_D = LOGO_DEPTH * LOGO_W;
+const DIST = 26;          // camera distance in front of the mark
+const LZ = -4.5;          // the lamp's plane, behind the mark
+const REF = 64;           // decay is quoted per step at 64 samples; other counts are rescaled to match
+
+const { canvas } = lab.canvas({ context: 'none' });
+let renderer;
+try { renderer = new THREE.WebGLRenderer({ canvas, antialias: true }); }
+catch (e) { lab.hud('WebGL is not available in this browser.'); throw e; }
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 100);
+camera.position.set(0, 0, DIST);
+camera.lookAt(0, 0, 0);
+
+// palette as a small ramp shared by every shader
+const RAMP_N = 8;
+const U = {
+  uRamp: { value: Array.from({ length: RAMP_N }, () => new THREE.Color()) },
+  uTintRamp: { value: Array.from({ length: RAMP_N }, () => new THREE.Color()) },
+  uRampN: { value: 2 },
+  uTime: { value: 0 }
+};
+// sun-burst mode: the palette gives way to sunlight (uSunMix), and a burst (uBurst) swings it toward a spectrum
+const B = { uSun: { value: new THREE.Color(1, 1, 1) }, uSunMix: { value: 0 }, uBurst: { value: 0 }, uHue: { value: 0 } };
+const RAMP_GLSL = /* glsl */`
+  uniform vec3 uRamp[${RAMP_N}];
+  uniform int uRampN;
+  uniform vec3 uSun; uniform float uSunMix, uBurst, uHue;
+  vec3 rampCol(float t) {
+    float x = clamp(t, 0.0, 0.9999) * float(uRampN - 1);
+    int i = int(floor(x));
+    return mix(uRamp[i], uRamp[min(i + 1, uRampN - 1)], fract(x));
+  }
+  // OKLab from linear sRGB and back (matrices written row by row, so they multiply as v * M)
+  vec3 toLab(vec3 c) {
+    vec3 lms = c * mat3(0.4122214708, 0.5363325363, 0.0514459929, 0.2119034982, 0.6806995451, 0.1073969566, 0.0883024619, 0.2817188376, 0.6299787005);
+    lms = pow(max(lms, 0.0), vec3(1.0 / 3.0));
+    return lms * mat3(0.2104542553, 0.7936177850, -0.0040720468, 1.9779984951, -2.4285922050, 0.4505937099, 0.0259040371, 0.7827717662, -0.8086757660);
+  }
+  vec3 fromLab(vec3 L) {
+    vec3 lms = L * mat3(1.0, 0.3963377774, 0.2158037573, 1.0, -0.1055613458, -0.0638541728, 1.0, -0.0894841775, -1.2914855480);
+    lms = lms * lms * lms;
+    return max(lms * mat3(4.0767416621, -3.3077115913, 0.2309699292, -1.2684380046, 2.6097574011, -0.3413193965, -0.0041960863, -0.7034186147, 1.7076147010), 0.0);
+  }
+  // the palette color at t, eased toward sunlight, then toward a vivid hue h (in turns) by the burst; k scales the burst locally.
+  // Both blends run in OKLab, so warm white to violet passes through lilac rather than grey mud.
+  vec3 lightCol(float t, float h, float k) {
+    vec3 c = rampCol(t);
+    float b = uBurst * k;
+    if (uSunMix > 0.0 || b > 0.0) {                       // mode off skips this, leaving exactly the palette
+      vec3 lab = mix(toLab(c), toLab(uSun), uSunMix);
+      float a = 6.2831853 * h;
+      c = fromLab(mix(lab, vec3(0.8, 0.19 * cos(a), 0.19 * sin(a)), b));
+    }
+    return c;
+  }`;
+
+// ---- beauty scene ----
+const scene = new THREE.Scene();
+
+// bench grid in screen space: 16 css px, lines through the square's center (same rule as the CSS grid)
+const gridMat = new THREE.ShaderMaterial({
+  uniforms: { uBg: { value: new THREE.Color() }, uGrid: { value: new THREE.Color() }, uCss: { value: new THREE.Vector2(1, 1) }, uDpr: { value: 1 } },
+  vertexShader: `void main() { gl_Position = vec4(position.xy, 0.0, 1.0); }`,
+  fragmentShader: /* glsl */`
+    uniform vec3 uBg, uGrid; uniform vec2 uCss; uniform float uDpr;
+    void main() {
+      vec2 p = gl_FragCoord.xy / uDpr; p.y = uCss.y - p.y;
+      vec2 g = mod(p - uCss * 0.5, 16.0);
+      float line = (g.x < 1.0 || g.y < 1.0) ? 1.0 : 0.0;
+      gl_FragColor = vec4(mix(uBg, uGrid, line), 1.0);
+    }`,
+  depthTest: false, depthWrite: false
+});
+const gridQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), gridMat);
+gridQuad.frustumCulled = false; gridQuad.renderOrder = -10;
+scene.add(gridQuad);
+
+// the lamp: a bright disc with a two-stage halo, colored along the palette ramp
+const lampU = { uR: { value: 1 }, uI: { value: 1 }, uHalf: { value: 7 } };
+function lampMaterial(gain, haze, haloGain) {
+  return new THREE.ShaderMaterial({
+    uniforms: { ...U, ...B, ...lampU, uGain: { value: gain }, uHaze: { value: haze }, uHaloGain: { value: haloGain } },
+    vertexShader: /* glsl */`
+      uniform float uHalf; varying vec2 vP;
+      void main() { vP = position.xy * uHalf; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+    fragmentShader: /* glsl */`
+      ${RAMP_GLSL}
+      uniform float uR, uI, uHalf, uGain, uTime, uHaze, uHaloGain; varying vec2 vP;
+      float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+      float vnoise(vec2 p) {
+        vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+        return mix(mix(hash(i), hash(i + vec2(1, 0)), f.x), mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), f.x), f.y);
+      }
+      void main() {
+        float r = length(vP);
+        float disc = 1.0 - smoothstep(uR * 0.86, uR, r);
+        float h = max(r - uR * 0.86, 0.0);
+        float halo = 0.55 * exp(-h / (uR * 0.3)) + 0.06 * exp(-h / (uR * 1.4));
+        halo *= 1.0 - smoothstep(uHalf * 0.6, uHalf, r);
+        vec3 core = mix(vec3(1.0), lightCol(0.0, uHue, 0.35), smoothstep(0.0, uR, r) * 0.7);
+        // in a burst the halo fans out by angle, two spectra per turn (an integer count, so no seam), matching the rays
+        float ang = atan(vP.y, vP.x) / 6.2831853;
+        vec3 hc = lightCol(clamp(h / (uR * 2.6), 0.0, 1.0), 2.0 * ang + uHue, smoothstep(uR * 0.3, uR, r));
+        // the haze is uneven: denser patches scatter more, which the radial march stretches into fine streaks
+        vec2 q = vP / uR * 2.2 + vec2(uTime * 0.07, -uTime * 0.05);
+        float haze = 0.5 * vnoise(q) + 0.3 * vnoise(q * 2.3 + 7.0) + 0.2 * vnoise(q * 5.1 - 3.0);
+        halo *= mix(1.0, 0.25 + 1.5 * haze, uHaze);
+        vec3 c = (disc * core * 1.6 + (1.0 - disc) * halo * hc * uHaloGain) * uI * uGain;
+        gl_FragColor = vec4(c, 0.0);   // alpha stays 0 so the occlusion buffer's alpha marks only the mark
+      }`,
+    // pure additive (ONE, ONE) for color, alpha left untouched
+    transparent: true, blending: THREE.CustomBlending, blendEquation: THREE.AddEquation,
+    blendSrc: THREE.OneFactor, blendDst: THREE.OneFactor, blendSrcAlpha: THREE.ZeroFactor, blendDstAlpha: THREE.OneFactor,
+    depthWrite: false
+  });
+}
+const lampGeo = new THREE.PlaneGeometry(2, 2);
+const lamp = new THREE.Mesh(lampGeo, lampMaterial(0.5, 0.4, 0.25));   // the scattered glow comes from the ray pass, so the mark can shadow it
+scene.add(lamp);
+
+// the mark: opaque, extruded, with a small bevel that catches light grazing past its edges
+const BEV_T = 0.05, BEV_S = 0.04;
+const markGeos = logoShapes(THREE).map(shape => {
+  const geo = new THREE.ExtrudeGeometry(shape, {
+    depth: (LOGO_D - 2 * BEV_T) / LOGO_W, curveSegments: 10,
+    bevelEnabled: true, bevelThickness: BEV_T / LOGO_W, bevelSize: BEV_S / LOGO_W,
+    bevelOffset: -BEV_S / LOGO_W, bevelSegments: 3       // negative offset keeps the silhouette exactly on the vector
+  });
+  geo.scale(LOGO_W, LOGO_W, LOGO_W);
+  geo.translate(0, 0, -(LOGO_D - 2 * BEV_T));            // full silhouette on z = 0 (the plane mapped onto the key square)
+  return geo;
+});
+const markU = {
+  uLightPos: { value: new THREE.Vector3() }, uLightCol: { value: new THREE.Color() },
+  uBase: { value: new THREE.Color() }, uInk: { value: new THREE.Color() }, uI: { value: 1 }, uSize: { value: 1 }
+};
+const markMat = new THREE.ShaderMaterial({
+  uniforms: markU,
+  vertexShader: /* glsl */`
+    varying vec3 vPos, vN, vON;
+    void main() {
+      vec4 wp = modelMatrix * vec4(position, 1.0);
+      vPos = wp.xyz; vN = normalize(mat3(modelMatrix) * normal); vON = normal;
+      gl_Position = projectionMatrix * viewMatrix * wp;
+    }`,
+  fragmentShader: /* glsl */`
+    uniform vec3 uLightPos, uLightCol, uBase, uInk; uniform float uI, uSize;
+    varying vec3 vPos, vN, vON;
+    void main() {
+      vec3 n = normalize(vN);
+      vec3 V = normalize(cameraPosition - vPos);
+      vec3 L = uLightPos - vPos; float d = length(L); L /= d;
+      float front = smoothstep(0.97, 0.995, vON.z);          // flat front cap
+      float edge = (1.0 - front) * smoothstep(0.0, 0.25, vON.z); // forward bevel ring
+      // walls that face the lamp are lit directly
+      float ndl = max(dot(n, L), 0.0) / (1.0 + 0.05 * d * d);
+      // bevels whose outward normal points at the lamp catch light grazing past the edge
+      vec2 lxy = uLightPos.xy - vPos.xy;
+      float toward = max(dot(normalize(vON.xy + 1e-5), normalize(lxy + 1e-5)), 0.0);
+      float near = exp(-length(lxy) / (uSize * 2.2 + 1.2));
+      float graze = edge * pow(toward, 2.5) * (0.25 + 1.2 * near);
+      float rim = pow(1.0 - max(dot(n, V), 0.0), 3.0) * (1.0 - front);
+      vec3 c = uBase;
+      c += uLightCol * uI * (0.9 * ndl + 1.1 * graze + 0.12 * rim);
+      c += uInk * edge * 0.035;                                // a hairline so the rim reads even in shadow
+      c += uLightCol * uI * front * 0.003;                     // haze in front lights the face a little
+      gl_FragColor = vec4(c, 1.0);
+    }`
+});
+const markGroup = new THREE.Group();
+for (const g of markGeos) markGroup.add(new THREE.Mesh(g, markMat));
+scene.add(markGroup);
+
+// dust motes: they only shine where a shaft crosses them, so each mote reads the ray buffer at its own position
+
+const moteGeo = new THREE.BufferGeometry();
+{
+  const pos = new Float32Array(MOTES * 3), seed = new Float32Array(MOTES);
+  let s = 1234567;
+  const rnd = () => (s = (s * 16807) % 2147483647) / 2147483647;
+  for (let i = 0; i < MOTES; i++) {
+    pos[i * 3] = rnd() * 2 - 1; pos[i * 3 + 1] = rnd() * 2 - 1;
+    pos[i * 3 + 2] = LZ + 0.5 + rnd() * (12 - LZ);      // from just in front of the lamp to well in front of the mark
+    seed[i] = rnd();
+  }
+  moteGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  moteGeo.setAttribute('aSeed', new THREE.BufferAttribute(seed, 1));
+}
+const moteU = { tRays: { value: null }, uExt: { value: new THREE.Vector2(5, 5) }, uDpr: { value: 1 }, uDust: { value: 1 },
+  uSize: { value: 1 }, uDriftT: { value: 0 }, uSwirl: { value: 1 }, uSwirlT: { value: 0 }, uTwinkle: { value: 0.6 }, uBokeh: { value: 0.4 } };
+const moteMat = new THREE.ShaderMaterial({
+  uniforms: { ...moteU, uTime: U.uTime },
+  vertexShader: /* glsl */`
+    attribute float aSeed;
+    uniform sampler2D tRays; uniform vec2 uExt; uniform float uDpr, uDust, uTime, uSize, uDriftT, uSwirl, uSwirlT, uTwinkle, uBokeh;
+    varying vec3 vCol; varying float vSoft;
+    void main() {
+      float s = aSeed, z = position.z;
+      vec2 xy = position.xy;
+      // drift and swirl run on their own clocks, so changing their speed never makes the dust jump
+      xy.y = mod(xy.y + 1.0 + uDriftT * 0.01 * (0.3 + s), 2.0) - 1.0;   // slow settling
+      float w = uSwirlT;
+      xy += 0.025 * uSwirl * vec2(sin(w * 0.23 * (0.5 + s) + s * 40.0), cos(w * 0.19 * (0.5 + fract(s * 7.0)) + s * 90.0));
+      // a large, slow eddy carries neighbouring motes together, like air moving through a sunbeam
+      xy += 0.05 * uSwirl * vec2(sin(xy.y * 2.1 + w * 0.11), cos(xy.x * 1.7 - w * 0.09));
+      float persp = (${DIST.toFixed(1)} - z) / ${DIST.toFixed(1)};
+      vec4 mv = viewMatrix * vec4(xy * uExt * persp * 1.06, z, 1.0);
+      gl_Position = projectionMatrix * mv;
+      vec2 suv = gl_Position.xy / gl_Position.w * 0.5 + 0.5;
+      vec3 r = texture2D(tRays, suv).rgb;
+      float lum = dot(r, vec3(0.3, 0.5, 0.2));
+      float tw = mix(1.0, 0.25 + 2.2 * pow(0.5 + 0.5 * sin(uTime * (1.2 + 3.0 * s) + s * 100.0), 8.0), uTwinkle);
+      // motes close to the lens fall out of focus: bigger, softer discs carrying the same light
+      float near = smoothstep(5.0, 12.0, z) * uBokeh;
+      float grow = 1.0 + 4.0 * near;
+      vSoft = near;
+      // forward scattering makes motes sparkle well out along a faint shaft, so brightness follows √(shaft light)
+      vec3 lit = r * inversesqrt(max(lum, 0.002)) * smoothstep(0.008, 0.25, lum);
+      vCol = lit * tw * uDust * 0.55 / (grow * grow) * (1.0 + 2.0 * near);
+      gl_PointSize = (0.9 + 2.3 * fract(s * 13.0)) * uSize * grow * uDpr * ${DIST.toFixed(1)} / max(1.0, -mv.z);
+    }`,
+  fragmentShader: /* glsl */`
+    varying vec3 vCol; varying float vSoft;
+    void main() {
+      float r = length(gl_PointCoord - 0.5) * 2.0;
+      float a = max(0.0, 1.0 - r); a *= a;
+      // out of focus: a flat disc with a slightly brighter rim, as a lens draws it
+      float disc = smoothstep(1.0, 0.85, r) * (0.7 + 0.3 * smoothstep(0.55, 0.95, r));
+      a = mix(a, disc, vSoft);
+      gl_FragColor = vec4(vCol * a, 1.0);
+    }`,
+  transparent: true, blending: THREE.AdditiveBlending, depthWrite: false
+});
+const motes = new THREE.Points(moteGeo, moteMat);
+motes.frustumCulled = false;
+scene.add(motes);
+
+// ---- occlusion scene: lamp bright, mark black (GPU Gems 3, ch. 13) ----
+const occScene = new THREE.Scene();
+const occLamp = new THREE.Mesh(lampGeo, lampMaterial(1, 1, 1));
+occScene.add(occLamp);
+const occBlack = new THREE.MeshBasicMaterial({ color: 0x000000 });
+const occGroup = new THREE.Group();
+for (const g of markGeos) occGroup.add(new THREE.Mesh(g, occBlack));
+occScene.add(occGroup);
+
+// ---- radial blur toward the lamp: each pixel marches back toward the light, summing lit haze with decay ----
+const rayU = {
+  tOcc: { value: null }, uLight: { value: new THREE.Vector2(0.5, 0.5) }, uAspect: { value: new THREE.Vector2(1, 1) },
+  uDensity: { value: 0.8 }, uDecay: { value: 0.97 }, uWeight: { value: 1 / 64 }, uExposure: { value: 1 },
+  uChroma: { value: 0 }, uSamples: { value: 64 }
+};
+const rayMat = new THREE.ShaderMaterial({
+  uniforms: { ...rayU, ...B, uRamp: U.uTintRamp, uRampN: U.uRampN },
+  vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`,
+  fragmentShader: /* glsl */`
+    ${RAMP_GLSL}
+    uniform sampler2D tOcc; uniform vec2 uLight, uAspect;
+    uniform float uDensity, uDecay, uWeight, uExposure, uChroma; uniform int uSamples;
+    varying vec2 vUv;
+    float ign(vec2 p) { return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715)))); }
+    void main() {
+      vec2 toL = vUv - uLight;
+      vec2 delta = toL * uDensity / float(uSamples);
+      vec2 uv = vUv - delta * ign(gl_FragCoord.xy);   // dither the start to hide sample banding
+      float illum = 1.0; vec3 sum = vec3(0.0);
+      for (int i = 0; i < 128; i++) {
+        if (i >= uSamples) break;
+        vec3 s;
+        if (uChroma > 0.0) {
+          vec2 o = uv - uLight;
+          s = vec3(texture2D(tOcc, uLight + o * (1.0 + uChroma)).r, texture2D(tOcc, uv).g, texture2D(tOcc, uLight + o * (1.0 - uChroma)).b);
+        } else s = texture2D(tOcc, uv).rgb;
+        sum += s * illum * uWeight;
+        illum *= uDecay;
+        uv -= delta;
+      }
+      // palette tint by distance from the lamp: near is the ramp's first color, far drifts along it
+      float d = length(toL * uAspect);
+      // in a burst each shaft takes its own hue by direction, sliding outward along it like light through a prism;
+      // the spectrum fades in away from the lamp so the hues never pinch to a point at its center
+      vec2 ta = toL * uAspect;
+      float h = 2.0 * atan(ta.y, ta.x) / 6.2831853 + d * 0.8 + uHue;
+      vec3 tc = lightCol(d * 1.3, h, smoothstep(0.0, 0.08, d));
+      tc /= mix(1.0, max(max(tc.r, tc.g), max(tc.b, 1e-3)), uBurst);   // spectral hues at full brightness, like the tint ramp
+      // sunlight is a pale color, so it takes a firmer hand than the palette to read as warm rather than grey
+      vec3 tint = mix(vec3(1.0), tc, 0.55 + 0.35 * max(uSunMix, uBurst));
+      gl_FragColor = vec4(sum * uExposure * tint, 1.0);
+    }`,
+  depthTest: false, depthWrite: false
+});
+const fsScene = new THREE.Scene();
+const fsCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+const fsQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), rayMat);
+fsQuad.frustumCulled = false;
+fsScene.add(fsQuad);
+
+const occRT = new THREE.WebGLRenderTarget(2, 2, { type: THREE.HalfFloatType, samples: 4 });
+const raysRT = new THREE.WebGLRenderTarget(2, 2, { type: THREE.HalfFloatType });
+rayU.tOcc.value = occRT.texture;
+moteU.tRays.value = raysRT.texture;
+
+// ---- composite: beauty + scattered light, then bloom ----
+// post-processing renders off screen, so antialiasing lives on the composer's render target (MSAA)
+const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 }));
+composer.addPass(new RenderPass(scene, camera));
+const addRays = new ShaderPass({
+  uniforms: { tDiffuse: { value: null }, tRays: { value: null }, tOcc: { value: null } },
+  vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: /* glsl */`
+    uniform sampler2D tDiffuse, tRays, tOcc; varying vec2 vUv;
+    void main() {
+      vec3 r = texture2D(tRays, vUv).rgb;
+      // haze between the viewer and the mark sits in the mark's own shadow, so the face stays dark
+      r *= 1.0 - texture2D(tOcc, vUv).a;
+      r = r / (1.0 + 0.25 * max(max(r.r, r.g), r.b));      // gentle shoulder so the core does not clip flat
+      gl_FragColor = vec4(texture2D(tDiffuse, vUv).rgb + r, 1.0);
+    }`
+});
+addRays.uniforms.tRays.value = raysRT.texture; addRays.uniforms.tOcc.value = occRT.texture;   // ShaderPass clones uniforms, which drops render-target textures
+composer.addPass(addRays);
+const bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.35, 0.12, 0.85);
+composer.addPass(bloom);
+composer.addPass(new OutputPass());
+
+// ---- layout ----
+let sq = lab.square(), k = SQ / sq.size;
+function resize(s) {
+  sq = s; k = SQ / s.size;
+  const hh = s.h * k / 2, hw = s.w * k / 2;
+  camera.aspect = s.w / s.h;
+  camera.fov = 2 * Math.atan(hh / DIST) * 180 / Math.PI;     // the z = 0 plane maps 1:1 onto the stage
+  camera.updateProjectionMatrix();
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  renderer.setPixelRatio(dpr); renderer.setSize(s.w, s.h, false);
+  composer.setPixelRatio(dpr); composer.setSize(s.w, s.h);
+  const rs = 0.6 * Math.min(dpr, 1.5);
+  const rw = Math.max(2, Math.round(s.w * rs)), rh = Math.max(2, Math.round(s.h * rs));
+  occRT.setSize(rw, rh); raysRT.setSize(rw, rh);
+  gridMat.uniforms.uCss.value.set(s.w, s.h); gridMat.uniforms.uDpr.value = dpr;
+  moteU.uExt.value.set(hw, hh); moteU.uDpr.value = dpr;
+  rayU.uAspect.value.set(s.w / Math.max(s.w, s.h), s.h / Math.max(s.w, s.h));
+}
+lab.on('resize', resize);
+resize(sq);
+
+// ---- palette ----
+const palLight = new THREE.Color();   // the palette's lamp color, before any sun or burst blend
+function applyPalette(p) {
+  const bench = p.key === 'bench';
+  const cols = bench ? ['#ffffff'] : p.colors;
+  const n = Math.min(RAMP_N, Math.max(2, cols.length));
+  for (let i = 0; i < RAMP_N; i++) {
+    const c = new THREE.Color(cols[Math.min(i, cols.length - 1)]);
+    U.uRamp.value[i].copy(c);
+    const m = Math.max(c.r, c.g, c.b) || 1;                    // tint ramp keeps each hue at full brightness
+    U.uTintRamp.value[i].setRGB(c.r / m, c.g / m, c.b / m);
+  }
+  U.uRampN.value = n;
+  gridMat.uniforms.uBg.value.set(p.bg); gridMat.uniforms.uGrid.value.set(p.grid);
+  palLight.set(cols[0]);
+  markU.uLightCol.value.copy(palLight);
+  markU.uInk.value.set(p.ink);
+  markU.uBase.value.set(p.bg).lerp(new THREE.Color('#0b0b10'), 0.6);
+  renderer.setClearColor(p.bg, 1);
+}
+lab.on('palette', applyPalette);
+applyPalette(lab.palette);
+
+// ---- pointer: the lamp follows the pointer, a click pins it, leaving the stage returns to the orbit ----
+const toPlane = e => {
+  const r = canvas.getBoundingClientRect();
+  return { x: (e.clientX - r.left - sq.w / 2) * k, y: -(e.clientY - r.top - sq.h / 2) * k };
+};
+let hover = null;
+canvas.addEventListener('pointermove', e => { hover = toPlane(e); });
+canvas.addEventListener('pointerdown', e => { pinned = hover = toPlane(e); });
+canvas.addEventListener('pointerleave', () => { hover = null; });
+canvas.addEventListener('pointercancel', () => { hover = null; });
+
+const orbit = t => {
+  const a = 2.3 + t * 0.21;
+  const r = 1.05 + 0.3 * Math.sin(t * 0.13);
+  return { x: r * Math.cos(a), y: r * 0.82 * Math.sin(a) };
+};
+let light = orbit(0);                // screen-plane position (z = 0 units)
+let tilt = { x: 0, y: 0 };
+const lightW = new THREE.Vector3(), proj = new THREE.Vector3();
+const toLampPlane = (DIST - LZ) / DIST;
+
+// ---- sun bursts: every so often the lamp flares into a spectrum, then eases back to plain sunlight ----
+// sunlight as a black body: Planckian locus in CIE xy (Kim et al. cubic fit), to linear sRGB, brightest channel = 1
+function kelvinToLinear(T, out) {
+  const t1 = 1e3 / T, t2 = t1 * t1, t3 = t2 * t1;
+  const x = T < 4000 ? -0.2661239 * t3 - 0.2343589 * t2 + 0.8776956 * t1 + 0.179910
+                     : -3.0258469 * t3 + 2.1070379 * t2 + 0.2226347 * t1 + 0.240390;
+  const y = T < 4000 ? -1.1063814 * x ** 3 - 1.34811020 * x * x + 2.18555832 * x - 0.20219683
+                     : 3.0817580 * x ** 3 - 5.87338670 * x * x + 3.75112997 * x - 0.37001483;
+  const X = x / y, Z = (1 - x - y) / y;
+  const r = 3.2404542 * X - 1.5371385 - 0.4985314 * Z, g = -0.9692660 * X + 1.8760108 + 0.0415560 * Z, b = 0.0556434 * X - 0.2040259 + 1.0572252 * Z;
+  const m = Math.max(r, g, b);
+  return out.setRGB(Math.max(0, r / m), Math.max(0, g / m), Math.max(0, b / m));
+}
+// the same OKLab blend the shaders use, for the one light color the mark is lit by
+const toLab = c => {
+  const l = Math.cbrt(0.4122214708 * c.r + 0.5363325363 * c.g + 0.0514459929 * c.b);
+  const m = Math.cbrt(0.2119034982 * c.r + 0.6806995451 * c.g + 0.1073969566 * c.b);
+  const s = Math.cbrt(0.0883024619 * c.r + 0.2817188376 * c.g + 0.6299787005 * c.b);
+  return [0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s, 1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s, 0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s];
+};
+const fromLab = ([L, A, Bb], out) => {
+  const l = (L + 0.3963377774 * A + 0.2158037573 * Bb) ** 3, m = (L - 0.1055613458 * A - 0.0638541728 * Bb) ** 3, s = (L - 0.0894841775 * A - 1.2914855480 * Bb) ** 3;
+  return out.setRGB(Math.max(0, 4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s),
+    Math.max(0, -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s), Math.max(0, -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s));
+};
+const mixLab = (a, b, f) => a.map((v, i) => v + (b[i] - v) * f);
+
+// envelope: a fast ease-out attack, a short hold, then a smootherstep release (no kinks, so no visible steps)
+const ATTACK = 0.22, HOLD = 0.15;
+function burstEnv(age, settle) {
+  if (age < ATTACK) { const x = age / ATTACK; return 1 - (1 - x) ** 3; }
+  const x = (age - ATTACK - HOLD) / settle;
+  if (x <= 0) return 1;
+  if (x >= 1) return 0;
+  return 1 - x * x * x * (x * (x * 6 - 15) + 10);
+}
+// bursts run on their own clock, which stands still under reduced motion (so none ever fire)
+const sb = { clock: 0, next: Infinity, start: -1e9, from: 0, env: 0, hue: Math.random(), hold: false, on: false };
+function triggerBurst() {
+  if (sb.env < 0.01) sb.hue += Math.random();        // a fresh spectrum orientation, only while none is showing
+  sb.from = sb.env; sb.start = sb.clock;              // a burst landing mid-release rises from where the last one is
+}
+function stepBursts(dt, P) {
+  if (P.burst && !sb.on) sb.next = sb.clock + 2;     // the first one comes soon after switching on
+  sb.on = P.burst;
+  if (!lab.calm && !sb.hold) { sb.clock += dt; sb.hue += dt * 0.12; }   // the spectrum slowly turns while it shows
+  if (sb.on && !lab.calm && sb.clock >= sb.next) {
+    triggerBurst();
+    sb.next = sb.clock + P.burstEvery * (0.67 + 0.66 * Math.random());   // default 9 s: anywhere from 6 to 12
+  }
+  const age = sb.clock - sb.start;
+  const e = lab.calm ? 0 : burstEnv(age, P.burstSettle);
+  sb.env = age < ATTACK ? sb.from + (1 - sb.from) * e : e;
+  // the sun stands in for the palette while the mode is on; switching it either way crossfades rather than snaps
+  B.uSunMix.value += ((P.burst ? 1 : 0) - B.uSunMix.value) * (1 - Math.exp(-dt * 4));
+  if (Math.abs(B.uSunMix.value - (P.burst ? 1 : 0)) < 1e-4) B.uSunMix.value = P.burst ? 1 : 0;
+  kelvinToLinear(P.sunK, B.uSun.value);
+  B.uBurst.value = sb.env * Math.min(1, P.burstPower);   // color swing saturates at strength 1; past that, only brightness grows
+  B.uHue.value = sb.hue % 1;
+  // the mark is lit by one color: the same blend at the spectrum's current hue
+  if (B.uSunMix.value === 0 && B.uBurst.value === 0) { markU.uLightCol.value.copy(palLight); return 1; }
+  let lab3 = mixLab(toLab(palLight), toLab(B.uSun.value), B.uSunMix.value);
+  const a = 2 * Math.PI * B.uHue.value;
+  lab3 = mixLab(lab3, [0.8, 0.19 * Math.cos(a), 0.19 * Math.sin(a)], B.uBurst.value * 0.6);
+  fromLab(lab3, markU.uLightCol.value);
+  // brightness rides the envelope squared, so the flash drops away quicker than the color drains back to sunlight
+  return 1 + P.burstPower * sb.env * sb.env;
+}
+
+let hudTick = 0, lastT = 0;
+function frame(dt, t) {
+  lastT = t;
+  const P = lab.params;
+  U.uTime.value = t;
+
+  // steer the lamp
+  const target = hover || pinned || orbit(t);
+  const ease = 1 - Math.exp(-dt * 9);
+  light.x += (target.x - light.x) * ease; light.y += (target.y - light.y) * ease;
+  const hw = sq.w * k / 2, hh = sq.h * k / 2;
+  light.x = Math.max(-hw, Math.min(hw, light.x)); light.y = Math.max(-hh, Math.min(hh, light.y));
+  lightW.set(light.x * toLampPlane, light.y * toLampPlane, LZ);
+
+  // the mark turns its face toward the pointer, only while the pointer is on the stage
+  const a = P.tilt * Math.PI / 180;
+  const tx = hover ? a * Math.max(-1, Math.min(1, hover.x / (SQ / 2))) : 0;
+  const ty = hover ? -a * Math.max(-1, Math.min(1, hover.y / (SQ / 2))) : 0;
+  tilt.x += (tx - tilt.x) * ease; tilt.y += (ty - tilt.y) * ease;
+  if (Math.abs(tilt.x) < 1e-5 && !hover) tilt.x = 0;
+  if (Math.abs(tilt.y) < 1e-5 && !hover) tilt.y = 0;
+  markGroup.rotation.set(tilt.y, tilt.x, 0);
+  occGroup.rotation.copy(markGroup.rotation);
+
+  // lamp (a burst lifts its intensity, and the scattering below, by `flare`)
+  const flare = stepBursts(dt, P);
+  const R = P.size;
+  lampU.uR.value = R; lampU.uI.value = P.intensity * (1 + 0.6 * (flare - 1)); lampU.uHalf.value = R * 7;
+  lamp.position.copy(lightW); lamp.scale.setScalar(R * 7);
+  occLamp.position.copy(lightW); occLamp.scale.setScalar(R * 7);
+  markU.uLightPos.value.copy(lightW); markU.uI.value = lampU.uI.value; markU.uSize.value = R;
+
+  // scattering pass
+  proj.copy(lightW).project(camera);
+  rayU.uLight.value.set(proj.x * 0.5 + 0.5, proj.y * 0.5 + 0.5);
+  const N = P.samples;
+  rayU.uSamples.value = N;
+  rayU.uDensity.value = Math.min(1, P.density * (1 + 0.08 * (flare - 1)));   // shafts reach a little further in a flare
+  rayU.uDecay.value = Math.pow(P.decay, REF / N);    // same falloff along the shaft at any sample count
+  rayU.uWeight.value = 1.4 / N;
+  rayU.uExposure.value = P.exposure * flare;
+  rayU.uChroma.value = P.chroma ? 0.035 : 0;
+  bloom.strength = P.bloom * (1 + 0.5 * (flare - 1));
+
+  // dust
+  moteU.uDust.value = P.dust > 0 ? P.dustBright : 0;
+  moteU.uSize.value = P.dustSize;
+  moteU.uSwirl.value = P.swirl;
+  moteU.uTwinkle.value = P.twinkle;
+  moteU.uBokeh.value = P.bokeh;
+  if (!lab.calm) { moteU.uDriftT.value += dt * P.drift; moteU.uSwirlT.value += dt * P.swirl; }
+  moteGeo.setDrawRange(0, Math.round(MOTES * P.dust));
+
+  renderer.setRenderTarget(occRT); renderer.setClearColor(0x000000, 0); renderer.clear();
+  renderer.render(occScene, camera);
+  renderer.setRenderTarget(raysRT); renderer.clear();
+  renderer.render(fsScene, fsCam);
+  renderer.setRenderTarget(null);
+  renderer.setClearColor(lab.palette.bg, 1);
+  composer.render();
+
+  if (++hudTick % 8 === 0) {
+    const end = Math.pow(P.decay, REF) * 100;
+    const sun = P.burst ? (lab.calm ? ' · sunlight, bursts paused (reduced motion)' : sb.env > 0.01 ? ` · burst <b>${Math.round(sb.env * 100)}%</b>` : ` · next burst in <b>${Math.max(0, sb.next - sb.clock).toFixed(1)} s</b>`) : '';
+    lab.hud(`lamp <b>${light.x.toFixed(2)}, ${light.y.toFixed(2)}</b> ${pinned && !hover ? '(pinned)' : hover ? '' : '(orbit)'} · march <b>${N}</b> samples over <b>${Math.round(P.density * 100)}%</b> of the way to the lamp · haze left at the far end <b>${end < 1 ? end.toFixed(1) : Math.round(end)}%</b>${sun}`);
+  }
+}
+
+window.__lab = { renderOnce(t = lastT) { frame(1 / 60, t); }, renderer, camera, scene, occRT, raysRT,
+  // debug: burst(age, hold) shows a burst `age` seconds in; hold freezes the burst clock there for inspection
+  burst(age = 0, hold = false) { sb.from = 0; sb.start = sb.clock - age; sb.hold = hold; } };
+lab.loop(frame);
+</script>

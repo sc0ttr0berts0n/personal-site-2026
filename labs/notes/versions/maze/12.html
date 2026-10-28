@@ -1,0 +1,1826 @@
+<meta charset="utf-8">
+<title>Maze</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@200;300&family=Familjen+Grotesk:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="shared/lab.css">
+<script type="module">
+import { createLab } from '../../../shared/lab.js';
+import { LOGO_PIECES, fitLogo, logoPath2D, logoPolygons } from '../../../shared/logo.js';
+import { ramp, mix, hex } from '../../../shared/palettes.js';
+
+const ALGS = {
+  backtracker: 'Recursive backtracker',
+  prim: 'Prim’s',
+  kruskal: 'Kruskal’s',
+  wilson: 'Wilson’s'
+};
+// search speed: expansions per second per search (slider 0 = 60/s, each step doubles)
+const RATE = v => 60 * 2 ** v;
+const HEURISTICS = { manhattan: 'Manhattan', euclidean: 'Euclidean', none: 'None (Dijkstra)' };
+
+const lab = createLab({
+  number: '07',
+  title: 'Maze',
+  blurb: 'Each chevron of the mark holds its own maze, cut along the band’s own grain, and A* solves all three at once. Change the heuristic and the weight to see how much of each maze it explores.',
+  teaches: 'A* search: f = g + h, admissible heuristics, and why weighting trades optimality for speed',
+  hint: 'tap a maze to move its start',
+  palettes: ['spectrum', 'synthwave', 'reef', 'aurora', 'ember', 'ultraviolet', 'gold'],
+  defaultPalette: 'spectrum',
+  params: {
+    band:       { type: 'range', label: 'Cells across a band', min: 4, max: 24, step: 1, value: 8 },
+    algorithm:  { type: 'select', label: 'Generator', value: 'backtracker', options: Object.entries(ALGS) },
+    braid:      { type: 'range', label: 'Braid (dead ends opened)', min: 0, max: 100, step: 5, value: 70, unit: '%' },
+    heuristic:  { type: 'select', label: 'Heuristic h', value: 'manhattan', options: Object.entries(HEURISTICS) },
+    weight:     { type: 'range', label: 'Weight w in f = g + w·h', min: 1, max: 5, step: 0.1, value: 1.8, unit: '×' },
+    speed:      { type: 'range', label: 'Search speed', min: 0, max: 9, step: 1, value: 0, format: v => String(RATE(v)), unit: ' expansions/s' },
+    placing:    { type: 'select', label: 'Tap places', value: 'start', options: [['start', 'Start'], ['goal', 'Goal']] },
+    explored:   { type: 'toggle', label: 'Show open and closed sets', value: true },
+    dead:       { type: 'select', label: 'Dead branches', value: 'pulse', options: [['off', 'Keep their color'], ['ash', 'Wilt to ash'], ['pulse', 'Retract pulse, then ash']] },
+    animateGen: { type: 'toggle', label: 'Animate generation', value: true },
+    tilt:       { type: 'range', label: 'Tilt while carving', min: 0, max: 60, step: 1, value: 46, unit: '°' },
+    flatten:    { type: 'range', label: 'Tilt back to flat over', min: 0.5, max: 4, step: 0.1, value: 2, unit: ' s' },
+    zoom:       { type: 'range', label: 'Zoom while carving', min: 1, max: 2.5, step: 0.05, value: 1.5, unit: '×' },
+    technical:  { type: 'toggle', label: 'Technical drawing while tilted', value: true },
+    depth:      { type: 'range', label: 'Slab depth', min: 0.1, max: 1, step: 0.05, value: 0.5, unit: ' bands' },
+    explode:    { type: 'range', label: 'Exploded gap', min: 0, max: 4, step: 0.1, value: 2.2, unit: ' bands' },
+    finale:     { type: 'toggle', label: 'Invert when solved', value: true },
+    loop:       { type: 'toggle', label: 'Loop: dive into the centre mark', value: true },
+    look:       { type: 'heading', label: 'Look' },
+    border:     { type: 'range', label: 'Outer border width', min: 0.5, max: 8, step: 0.1, value: 4, unit: ' px' },
+    wall:       { type: 'range', label: 'Wall width', min: 0.5, max: 4, step: 0.25, value: 2, unit: ' device px' },
+    gap:        { type: 'range', label: 'Explored cell gap', min: 0, max: 40, step: 1, value: 0, unit: '%' },
+    shade:      { type: 'range', label: 'Explored cell opacity', min: 10, max: 100, step: 1, value: 40, unit: '%' },
+    bead:       { type: 'range', label: 'Frontier bead size', min: 15, max: 90, step: 1, value: 56, unit: '%' },
+    trail:      { type: 'range', label: 'Path width', min: 0.3, max: 2.5, step: 0.05, value: 0.75, unit: '×' },
+    glow:       { type: 'range', label: 'Path glow', min: 0, max: 30, step: 1, value: 15, unit: ' px' },
+    marker:     { type: 'range', label: 'Dot and flag size', min: 0.5, max: 2, step: 0.05, value: 1, unit: '×' },
+    xsize:      { type: 'range', label: 'Dead-end X size', min: 0, max: 100, step: 1, value: 93, unit: '%' }
+  },
+  actions: [
+    { label: 'Solve', primary: true, action: () => startSearches('solo', !lab.calm) },
+    { label: 'Race Dijkstra vs A*', action: () => startSearches('race', !lab.calm) },
+    { label: 'New maze', action: () => { seed++; rebuild(true); } }
+  ]
+});
+const P = lab.params;
+let clock = 0;                         // seconds; every animation reads this, never the frame count
+// The look sliders are eased: drawing reads LV, which follows P smoothly, so dragging a slider never pops.
+const LOOK = ['border', 'wall', 'gap', 'shade', 'bead', 'trail', 'glow', 'marker', 'xsize', 'depth', 'explode'];
+const LV = Object.fromEntries(LOOK.map(k => [k, P[k]]));
+
+// ---------------------------------------------------------------- canvas layers
+// floor (tinted mark + open cells) → search fills → walls → live overlay
+const { canvas, ctx: screen } = lab.canvas();
+const layer = () => { const c = document.createElement('canvas'); return { c, x: c.getContext('2d') }; };
+const floorL = layer(), wallsL = layer(), searchL = [layer(), layer()], sceneL = layer();
+const pieceL = LOGO_PIECES.map(layer);   // one chevron of the scene each, for the exploded view
+const ctx = sceneL.x;                  // the flat scene; present() puts it on screen, tilted while carving
+
+// ---------------------------------------------------------------- the mark's own lattice
+// Every straight edge of the mark runs along one of two directions (about ±42.8°, 85.6° apart).
+// We read both from the path data and use them as the maze's axes, so cells are near-square rhombi
+// and the straight walls of the mark are lattice lines. Coordinates: p = s·A + t·B, in logo units.
+const LOGO = logoPath2D();
+const PIECE_PATHS = LOGO_PIECES.map(piece => {
+  const p = new Path2D();
+  for (const { cmd, pts } of piece) {
+    if (cmd === 'M') p.moveTo(...pts[0]);
+    else if (cmd === 'L') p.lineTo(...pts[0]);
+    else if (cmd === 'C') p.bezierCurveTo(...pts[0], ...pts[1], ...pts[2]);
+    else p.closePath();
+  }
+  return p;
+});
+const probe = document.createElement('canvas').getContext('2d');
+const PK = 1000, PO = 1000;            // isPointInPath transforms the path, not the point: scale logo units up
+probe.setTransform(PK, 0, 0, PK, PO, PO);
+const inPiece = (k, x, y) => probe.isPointInPath(PIECE_PATHS[k], x * PK + PO, y * PK + PO);
+
+const MARK = (() => {
+  const edges = [], curves = [];
+  LOGO_PIECES.forEach((piece, k) => {
+    let cur = null, start = null;
+    for (const { cmd, pts } of piece) {
+      if (cmd === 'M') cur = start = pts[0];
+      else if (cmd === 'L') { edges.push({ k, p: cur, q: pts[0] }); cur = pts[0]; }
+      else if (cmd === 'C') { curves.push({ k, p: cur, q: pts[2] }); cur = pts[2]; }
+      else if (cmd === 'Z') { if (Math.hypot(cur[0] - start[0], cur[1] - start[1]) > 1e-9) edges.push({ k, p: cur, q: start }); cur = start; }
+    }
+  });
+  // two direction families, each axis the length-weighted mean of its edges
+  const ang = e => { let a = Math.atan2(e.q[1] - e.p[1], e.q[0] - e.p[0]); return a < 0 ? a + Math.PI : a; };
+  const ref = ang(edges[0]);
+  const near = a => Math.min(Math.abs(a - ref), Math.PI - Math.abs(a - ref)) < 0.35;
+  const sum = [[0, 0], [0, 0]];
+  for (const e of edges) {
+    e.fam = near(ang(e)) ? 0 : 1;
+    let dx = e.q[0] - e.p[0], dy = e.q[1] - e.p[1];
+    if (dx < 0) { dx = -dx; dy = -dy; }
+    sum[e.fam][0] += dx; sum[e.fam][1] += dy;
+  }
+  let [A, B] = sum.map(([x, y]) => { const l = Math.hypot(x, y); return [x / l, y / l]; });
+  if (A[1] > B[1]) { [A, B] = [B, A]; for (const e of edges) e.fam ^= 1; }   // A runs up-right, B down-right
+  const det = A[0] * B[1] - A[1] * B[0];
+  const toST = (x, y) => [(x * B[1] - y * B[0]) / det, (A[0] * y - A[1] * x) / det];
+  const toXY = (s, t) => [s * A[0] + t * B[0], s * A[1] + t * B[1]];
+
+  // an edge along A has constant t; an edge along B has constant s
+  const pieces = LOGO_PIECES.map((_, k) => ({ k, s: [], t: [], segs: [], tips: [] }));
+  for (const e of edges) {
+    const a = toST(...e.p), b = toST(...e.q), pc = pieces[e.k];
+    if (e.fam === 0) { pc.t.push((a[1] + b[1]) / 2); pc.segs.push({ fam: 0, v: (a[1] + b[1]) / 2, lo: Math.min(a[0], b[0]), hi: Math.max(a[0], b[0]) }); }
+    else { pc.s.push((a[0] + b[0]) / 2); pc.segs.push({ fam: 1, v: (a[0] + b[0]) / 2, lo: Math.min(a[1], b[1]), hi: Math.max(a[1], b[1]) }); }
+  }
+  for (const c of curves) pieces[c.k].tips.push(toST(...c.p), toST(...c.q));
+  const dedupe = v => v.sort((a, b) => a - b).filter((x, i, a) => i === 0 || x - a[i - 1] > 1e-5);
+  let W = Infinity;
+  for (const pc of pieces) {
+    pc.s = dedupe(pc.s); pc.t = dedupe(pc.t);
+    for (const v of [pc.s, pc.t]) for (let i = 1; i < v.length; i++) W = Math.min(W, v[i] - v[i - 1]);
+  }
+  // caps: short straight edges (collinear pieces merged) at the far ends of each band
+  for (const pc of pieces) {
+    const groups = new Map();
+    for (const g of pc.segs) {
+      const key = g.fam + ':' + Math.round(g.v * 1e4);
+      const m = groups.get(key);
+      if (m) { m.lo = Math.min(m.lo, g.lo); m.hi = Math.max(m.hi, g.hi); } else groups.set(key, { ...g });
+    }
+    pc.caps = [...groups.values()].filter(g => g.hi - g.lo < 1.5 * W).map(g => {
+      const mid = (g.lo + g.hi) / 2;
+      return g.fam === 0 ? toXY(mid, g.v) : toXY(g.v, mid);
+    }).sort((a, b) => a[1] - b[1]);              // upper cap first
+  }
+  // names by horizontal position
+  const cxOf = pc => { const xs = LOGO_PIECES[pc.k].flatMap(s => s.pts.map(p => p[0])); return (Math.min(...xs) + Math.max(...xs)) / 2; };
+  [...pieces].sort((a, b) => cxOf(a) - cxOf(b)).forEach((pc, i) => { pc.name = ['left', 'middle', 'right'][i]; });
+  return { A, B, toST, toXY, W, pieces, apexDeg: Math.acos(A[0] * B[0] + A[1] * B[1]) * 180 / Math.PI };
+})();
+
+const DI = [1, 0, -1, 0], DJ = [0, 1, 0, -1];   // +s, +t, −s, −t → bits 1, 2, 4, 8
+
+// A small copy of the mark sits at the centre of the middle maze, on an island of cells the maze runs around (the
+// loop dives into it, so each maze grows out of the last one's centre). It is as large as fits with two clear cells
+// all round, placed as near the mark's centre as that allows. Returns the island's cells and the copy's centre and scale.
+function placeMini(g, cellPiece, pitch, K) {
+  const own = (i, j) => i >= 0 && j >= 0 && i < g.nS && j < g.nT && cellPiece[g.off + j * g.nS + i] === g.k;
+  let s0 = Infinity, s1 = -Infinity, t0 = Infinity, t1 = -Infinity;
+  for (const { pts } of POLYS) for (const [x, y] of pts) {
+    const [s, t] = MARK.toST(x, y);
+    s0 = Math.min(s0, s); s1 = Math.max(s1, s); t0 = Math.min(t0, t); t1 = Math.max(t1, t);
+  }
+  const span = Math.max(s1 - s0, t1 - t0), inMini = (x, y, cx, cy, m) => [0, 1, 2].some(k => inPiece(k, (x - cx) / m, (y - cy) / m));
+  const centres = [];
+  for (let j = 0; j < g.nT; j++) for (let i = 0; i < g.nS; i++) if (own(i, j)) centres.push([i, j]);
+  const [ms, mt] = MARK.toST(0, 0);
+  const near = ([i, j]) => ((g.S[i] + g.S[i + 1]) / 2 - ms) ** 2 + ((g.T[j] + g.T[j + 1]) / 2 - mt) ** 2;
+  centres.sort((a, b) => near(a) - near(b));
+  for (let m = (K - 2) * pitch / span; m * span > 2.5 * pitch; m *= 0.9) {
+    const R = Math.ceil(m * span / pitch * 0.75) + 1;
+    for (const [ic, jc] of centres.slice(0, 16)) {
+      const [cx, cy] = MARK.toXY((g.S[ic] + g.S[ic + 1]) / 2, (g.T[jc] + g.T[jc + 1]) / 2);
+      // a cell joins the island if the copy comes within a quarter cell of it
+      const island = [];
+      let ok = true;
+      for (let j = jc - R; ok && j <= jc + R; j++) for (let i = ic - R; ok && i <= ic + R; i++) {
+        if (i < 0 || j < 0 || i >= g.nS || j >= g.nT) continue;
+        let hit = false;
+        for (const fs of [-0.25, 0.5, 1.25]) for (const ft of [-0.25, 0.5, 1.25]) {
+          if (hit) break;
+          const [x, y] = MARK.toXY(g.S[i] + (g.S[i + 1] - g.S[i]) * fs, g.T[j] + (g.T[j + 1] - g.T[j]) * ft);
+          hit = inMini(x, y, cx, cy, m);
+        }
+        if (!hit) continue;
+        for (let dj = -2; ok && dj <= 2; dj++) for (let di = -2; ok && di <= 2; di++) if (!own(i + di, j + dj)) ok = false;
+        island.push(g.off + j * g.nS + i);
+      }
+      if (ok && island.length) return { island, x: cx, y: cy, m };
+    }
+  }
+  return null;
+}
+const gridCache = new Map();
+
+// K cells across every band. Between consecutive edge lines the span is split into a whole number of
+// cells of about W/K each, so every straight edge of the mark lands exactly on a lattice line.
+function buildGrid(K) {
+  if (gridCache.has(K)) return gridCache.get(K);
+  const pitch = MARK.W / K;
+  const split = vals => {
+    const out = [vals[0]];
+    for (let i = 1; i < vals.length; i++) {
+      const a = vals[i - 1], b = vals[i], n = Math.max(1, Math.round((b - a) / pitch));
+      for (let k = 1; k <= n; k++) out.push(a + (b - a) * k / n);
+    }
+    return out;
+  };
+  const pieces = [];
+  let T = 0;
+  for (const pc of MARK.pieces) {
+    const S = split(pc.s), Tl = split(pc.t);
+    pieces.push({ k: pc.k, name: pc.name, S, T: Tl, nS: S.length - 1, nT: Tl.length - 1, off: T });
+    T += (S.length - 1) * (Tl.length - 1);
+  }
+  const cellPiece = new Int8Array(T).fill(-1), ci = new Int32Array(T), cj = new Int32Array(T);
+  const ccx = new Float64Array(T), ccy = new Float64Array(T);     // centers, logo units
+  for (const g of pieces) {
+    const tips = MARK.pieces[g.k].tips;
+    for (let j = 0; j < g.nT; j++) for (let i = 0; i < g.nS; i++) {
+      const c = g.off + j * g.nS + i;
+      ci[c] = i; cj[c] = j;
+      const s0 = g.S[i], s1 = g.S[i + 1], t0 = g.T[j], t1 = g.T[j + 1];
+      const sm = (s0 + s1) / 2, tm = (t0 + t1) / 2;
+      [ccx[c], ccy[c]] = MARK.toXY(sm, tm);
+      if (!inPiece(g.k, ccx[c], ccy[c])) continue;
+      // near a rounded tip the whole cell must be inside: test corners, edge midpoints, center
+      let ok = true;
+      if (tips.some(([ts, tt]) => Math.hypot(ts - sm, tt - tm) < 2.5 * pitch)) {
+        for (const fs of [0.02, 0.5, 0.98]) for (const ft of [0.02, 0.5, 0.98]) {
+          if (!ok) break;
+          const [x, y] = MARK.toXY(s0 + (s1 - s0) * fs, t0 + (t1 - t0) * ft);
+          if (!inPiece(g.k, x, y)) ok = false;
+        }
+      }
+      if (ok) cellPiece[c] = g.k;
+    }
+  }
+  const mini = placeMini(pieces.find(g => g.name === 'middle'), cellPiece, pitch, K);
+  if (mini) for (const c of mini.island) cellPiece[c] = -1;
+  const nbr = new Int32Array(T * 4).fill(-1);
+  const cellsOf = g => { const out = []; for (let c = g.off; c < g.off + g.nS * g.nT; c++) if (cellPiece[c] >= 0) out.push(c); return out; };
+  for (const g of pieces) for (const c of cellsOf(g)) for (let d = 0; d < 4; d++) {
+    const i = ci[c] + DI[d], j = cj[c] + DJ[d];
+    if (i < 0 || j < 0 || i >= g.nS || j >= g.nT) continue;
+    const n = g.off + j * g.nS + i;
+    if (cellPiece[n] >= 0) nbr[c * 4 + d] = n;
+  }
+  // keep the largest connected part of each chevron (a clipped tip could strand a cell)
+  for (const g of pieces) {
+    const seen = new Uint8Array(T);
+    let best = [];
+    for (const c0 of cellsOf(g)) {
+      if (seen[c0]) continue;
+      const list = [c0]; seen[c0] = 1;
+      for (let q = 0; q < list.length; q++) for (let d = 0; d < 4; d++) {
+        const n = nbr[list[q] * 4 + d];
+        if (n >= 0 && !seen[n]) { seen[n] = 1; list.push(n); }
+      }
+      if (list.length > best.length) best = list;
+    }
+    const keep = new Set(best);
+    for (const c of cellsOf(g)) if (!keep.has(c)) { cellPiece[c] = -1; for (let d = 0; d < 4; d++) nbr[c * 4 + d] = -1; }
+    for (const c of best) for (let d = 0; d < 4; d++) { const n = nbr[c * 4 + d]; if (n >= 0 && cellPiece[n] < 0) nbr[c * 4 + d] = -1; }
+    g.cells = Int32Array.from(best).sort();
+  }
+  const regions = pieces.map(g => g.cells);
+  const cells = Int32Array.from(regions.flatMap(r => [...r])).sort();
+  const grid = { K, pitch, T, mini, pieces, byK: Object.fromEntries(pieces.map(g => [g.k, g])), cellPiece, ci, cj, ccx, ccy, nbr, regions, cells };
+  gridCache.set(K, grid);
+  return grid;
+}
+
+// ---------------------------------------------------------------- seeded randomness
+let seed = 1;
+function mulberry(a) {
+  return () => {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+function shuffle(arr, rng) {
+  for (let i = arr.length - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); [arr[i], arr[j]] = [arr[j], arr[i]]; }
+  return arr;
+}
+
+// ---------------------------------------------------------------- maze generation
+let G = null, pass = null, treePass = null, gen = null, built = {};
+let born = new Float64Array(0), carveOrder = [];   // when each cell was first carved, for the carve-in fade
+
+function carve(a, b) {
+  if (born[a] < 0) { born[a] = clock; carveOrder.push(a); }
+  if (born[b] < 0) { born[b] = clock; carveOrder.push(b); }
+  for (let d = 0; d < 4; d++) if (G.nbr[a * 4 + d] === b) { pass[a] |= 1 << d; pass[b] |= 1 << ((d + 2) & 3); return; }
+}
+
+// Each generator yields 1 per carved passage and 0 per bookkeeping step, so animation can pace by carves.
+// Each chevron is its own region, so each gets its own spanning tree: three separate mazes.
+function* backtracker(rng, st) {
+  const vis = new Uint8Array(G.T);
+  for (const region of G.regions) {
+    const s = region[Math.floor(rng() * region.length)];
+    vis[s] = 1;
+    const stack = [s];
+    st.line = stack;
+    while (stack.length) {
+      const c = stack[stack.length - 1], opts = [];
+      for (let d = 0; d < 4; d++) { const n = G.nbr[c * 4 + d]; if (n >= 0 && !vis[n]) opts.push(n); }
+      if (!opts.length) { stack.pop(); yield 0; continue; }
+      const n = opts[Math.floor(rng() * opts.length)];
+      carve(c, n); vis[n] = 1; stack.push(n);
+      yield 1;
+    }
+  }
+  st.line = null;
+}
+function* prim(rng, st) {
+  const vis = new Uint8Array(G.T), inF = new Uint8Array(G.T);
+  for (const region of G.regions) {
+    const frontier = [];
+    st.dots = frontier;
+    const add = c => {
+      vis[c] = 1;
+      for (let d = 0; d < 4; d++) { const n = G.nbr[c * 4 + d]; if (n >= 0 && !vis[n] && !inF[n]) { inF[n] = 1; frontier.push(n); } }
+    };
+    add(region[Math.floor(rng() * region.length)]);
+    while (frontier.length) {
+      const k = Math.floor(rng() * frontier.length), c = frontier[k];
+      frontier[k] = frontier[frontier.length - 1]; frontier.pop();
+      const opts = [];
+      for (let d = 0; d < 4; d++) { const n = G.nbr[c * 4 + d]; if (n >= 0 && vis[n]) opts.push(n); }
+      carve(c, opts[Math.floor(rng() * opts.length)]);
+      add(c);
+      yield 1;
+    }
+  }
+  st.dots = null;
+}
+function* kruskal(rng, st) {
+  const parent = new Int32Array(G.T).map((_, i) => i);
+  const find = x => { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
+  const edges = [];
+  for (const c of G.cells) for (let d = 0; d < 2; d++) { const n = G.nbr[c * 4 + d]; if (n >= 0) edges.push(c, n); }
+  const order = shuffle(Array.from({ length: edges.length / 2 }, (_, i) => i), rng);
+  const recent = [];
+  st.dots = recent;
+  for (const e of order) {
+    const a = edges[e * 2], b = edges[e * 2 + 1], ra = find(a), rb = find(b);
+    if (ra === rb) { yield 0; continue; }
+    parent[ra] = rb;
+    carve(a, b);
+    recent.push(a, b);
+    if (recent.length > 160) recent.splice(0, 2);
+    yield 1;
+  }
+  st.dots = null;
+}
+// Wilson's: loop-erased random walks until each hits the tree. Samples a uniform spanning tree.
+function* wilson(rng, st) {
+  const inTree = new Uint8Array(G.T), next = new Int32Array(G.T).fill(-1);
+  for (const region of G.regions) {
+    inTree[region[Math.floor(rng() * region.length)]] = 1;
+    for (const s of shuffle([...region], rng)) {
+      if (inTree[s]) continue;
+      let cur = s;
+      st.walk = { s, next, get cur() { return cur; } };
+      while (!inTree[cur]) {
+        let n;
+        do n = G.nbr[cur * 4 + Math.floor(rng() * 4)]; while (n < 0);
+        next[cur] = n; cur = n;
+        yield 0;
+      }
+      for (let c = s; !inTree[c]; c = next[c]) { carve(c, next[c]); inTree[c] = 1; yield 1; }
+    }
+  }
+  st.walk = null;
+}
+const GENERATORS = { backtracker, prim, kruskal, wilson };
+
+// ---------------------------------------------------------------- timing
+// Every visual change is a function of `clock` (seconds), so it looks the same at any frame rate.
+const T_CARVE = 0.4;     // a freshly carved cell glows and its walls fade in
+const T_GEN = 2.6;       // a whole maze carves in about this long
+const T_GHOST = 0.45;    // old frame fades out over the new one (regenerate, palette)
+const T_SGHOST = 0.32;   // old search fades out when a maze re-solves
+const T_WALL = 0.32;     // braid opens or closes walls
+const T_DROP = 0.38;     // flag and dot drop on
+const T_GLIDE = 0.36;    // a marker glides to a new cell
+const T_FADE = 0.25;     // calm mode: everything just fades
+const STAGGER = 0.1;     // three mazes, slightly out of step
+const clamp01 = t => t < 0 ? 0 : t > 1 ? 1 : t;
+const easeOut = t => 1 - (1 - clamp01(t)) ** 3;
+const easeInOut = t => 0.5 - 0.5 * Math.cos(Math.PI * clamp01(t));
+const easeOutBack = t => { t = clamp01(t); const c1 = 1.3, c3 = c1 + 1; return 1 + c3 * (t - 1) ** 3 + c1 * (t - 1) ** 2; };
+
+function effectiveK() {
+  const bandPx = MARK.W * fitLogo(lab.square()).scale;
+  return Math.max(4, Math.min(P.band, Math.floor(bandPx / 2.6)));   // keep cells at least ~2.6 css px
+}
+
+// ---------------------------------------------------------------- the tilted view
+// While a maze carves, the whole view leans back about the horizontal axis through the mark's center
+// (top edge receding, with perspective) and the camera is pushed in. When carving ends it pans up to
+// overhead and pulls out; only then do the flag and dot drop on and the search begin.
+let view = { from: 0, to: 0, t0: 0, dur: 0 };
+const tiltDeg = () => view.dur > 0 ? view.from + (view.to - view.from) * easeInOut((clock - view.t0) / view.dur) : clock >= view.t0 ? view.to : view.from;
+function tiltTo(deg, dur, at = clock) { view = { from: tiltDeg(), to: deg, t0: at, dur }; }
+const flatAt = () => view.to === 0 && clock < view.t0 + view.dur ? view.t0 + view.dur : 0;
+const PERSPECTIVE = 1.9;   // camera distance, in key-square sides
+// the camera is pushed in while tilted and pulls back out as it flattens, so zoom rides on the tilt's progress
+const zoomNow = th => P.tilt > 0 ? 1 + (P.zoom - 1) * Math.min(1, th / (P.tilt * Math.PI / 180)) : 1;
+function present() {
+  const th = lab.calm ? 0 : tiltDeg() * Math.PI / 180, tech = techAmt();
+  screen.setTransform(1, 0, 0, 1, 0, 0);
+  screen.clearRect(0, 0, canvas.width, canvas.height);
+  if (th < 1e-4 && dive && clock >= dive.t0) presentDive();
+  else if (th < 1e-4) screen.drawImage(sceneL.c, 0, 0);
+  else if (tech > 1e-3) presentTechnical(camera(th), tech);
+  else { const c = camera(th); warp(c, sceneL.c, 0, c.sq.y * c.dpr - c.cy, (c.sq.y + c.sq.size) * c.dpr - c.cy, 0, canvas.width); }
+  applyInvert();
+}
+// the tilted camera, in device px: center, distance, the tilt's sine and cosine, zoom, px per logo unit
+function camera(th) {
+  const sq = lab.square(), dpr = geo.dpr;
+  return { sq, dpr, k: dpr * geo.f.scale, cx: dpr * geo.f.cx, cy: dpr * geo.f.cy, D: PERSPECTIVE * sq.size * dpr, sn: Math.sin(th), cs: Math.cos(th), z: zoomNow(th) };
+}
+// a point in logo units at height h (logo units, out of the page toward the viewer) to device px on screen
+function proj3(c, x, y, h) {
+  const yd = y * c.k, hd = h * c.k, s = c.D / (c.D - yd * c.sn - hd * c.cs) * c.z;
+  return [c.cx + x * c.k * s, c.cy + (yd * c.cs - hd * c.sn) * s];
+}
+// Draws the flat layer `src` as the plane at height hd (device px) seen through camera c: rows ya..yb (relative to
+// the center) and columns xa..xb of the source. Y = (y cos θ − h sin θ) · D / (D − h cos θ − y sin θ), then zoom z
+// about the center; each output strip samples its source rows.
+function warp(c, src, hd, ya, yb, xa, xb) {
+  const { D, sn, cs, z, cx, cy } = c, E = D - hd * cs, STRIP = 3;
+  const proj = y => (y * cs - hd * sn) * D / (E - y * sn), inv = Y => (Y * E + hd * sn * D) / (cs * D + Y * sn);
+  screen.imageSmoothingEnabled = true;
+  for (let Y = Math.floor(proj(ya)); Y < proj(yb); Y += STRIP) {
+    const y0 = inv(Y), y1 = inv(Y + STRIP), k = D / (E - (y0 + y1) / 2 * sn);
+    if (y1 - y0 <= 0) continue;
+    // strips overlap by a quarter so no seams show; the source grows by the same share so a near-flat
+    // view is an exact copy and the hand-off to the plain copy at 0° is invisible
+    screen.drawImage(src, xa, cy + y0, xb - xa, (y1 - y0) * 1.25, cx + (xa - cx) * k * z, cy + Y * z, (xb - xa) * k * z, STRIP * 1.25 * z);
+  }
+}
+// screen (css px, relative to the canvas) back to the flat scene, for taps while tilted; h is the plane's height in logo units
+function unproject(px, py, h = 0) {
+  const th = lab.calm ? 0 : tiltDeg() * Math.PI / 180;
+  if (th < 1e-4) return [px, py];
+  const sq = lab.square(), f = fitLogo(sq), D = PERSPECTIVE * sq.size, sn = Math.sin(th), cs = Math.cos(th), z = zoomNow(th);
+  const hd = h * f.scale, E = D - hd * cs, X = (px - f.cx) / z, Y = (py - f.cy) / z;
+  const y = (Y * E + hd * sn * D) / (cs * D + Y * sn), k = D / (E - y * sn);
+  return [f.cx + X / k, f.cy + y];
+}
+
+// ---------------------------------------------------------------- the technical drawing
+// While the view is tilted the mark is drawn as an exploded assembly: each chevron an extruded slab (half a band
+// deep by default), the three lifted apart along their own normal, left lowest. Outlines are crisp vectors, the
+// slab sides are hatched, hidden edges are dashed, centre lines run down the explode axis from where each piece sits
+// when assembled, and the depth carries a dimension. Everything scales with the tilt, so as the camera pans up to
+// overhead the slabs settle into the plane and the drawing hands off to the flat maze without a pop.
+const POLYS = logoPolygons({ curveSegments: 16 }).map(pts => {
+  const n = pts.length;
+  let area = 0;
+  for (let i = 0; i < n; i++) { const a = pts[i], b = pts[(i + 1) % n]; area += a[0] * b[1] - b[0] * a[1]; }
+  const sg = Math.sign(area);
+  // outward normal of edge i (pts[i] → pts[i + 1]); corner[i]: the outline turns sharply at vertex i (curve joints turn a little)
+  const normals = pts.map((a, i) => { const b = pts[(i + 1) % n], ex = b[0] - a[0], ey = b[1] - a[1], l = Math.hypot(ex, ey) || 1; return [sg * ey / l, -sg * ex / l]; });
+  const corner = normals.map((nv, i) => { const m = normals[(i + n - 1) % n]; return nv[0] * m[0] + nv[1] * m[1] < Math.cos(0.5); });
+  return { pts, normals, corner };
+});
+const techAmt = () => lab.calm || !P.technical || P.tilt <= 0 ? 0 : clamp01(tiltDeg() / P.tilt);
+let techNow = 0;
+// slab depth, the spacing between slab tops, and each piece's top height (logo units) at this much tilt
+function slabs(tech) {
+  const t = LV.depth * MARK.W * tech, lift = (LV.depth + LV.explode) * MARK.W * tech;
+  return { t, lift, levels: MARK.pieces.map(pc => (order(pc.k) - 1) * lift) };
+}
+// one chevron of the flat scene, its border included, so it can be warped onto its own slab
+function pieceLayer(k) {
+  const { c, x } = pieceL[k], b = geo.box[k];
+  x.setTransform(1, 0, 0, 1, 0, 0);
+  x.clearRect(0, 0, c.width, c.height);
+  logoTransform(x);
+  x.fillStyle = '#000'; x.fill(PIECE_PATHS[k]);
+  // grown by the (fading) border plus a pixel and a half, which stays clear of the neighbouring chevrons
+  x.lineWidth = (LV.border * (1 - techNow) + 3) / geo.f.scale; x.lineJoin = 'round'; x.strokeStyle = '#000'; x.stroke(PIECE_PATHS[k]);
+  x.setTransform(1, 0, 0, 1, 0, 0);
+  x.globalCompositeOperation = 'source-in';
+  x.drawImage(sceneL.c, 0, 0);
+  x.globalCompositeOperation = 'source-over';
+  return c;
+}
+function presentTechnical(c, tech) {
+  const { t, lift, levels } = slabs(tech), a = easeInOut(tech);
+  // painter's order is exact here: slabs never share a height range, and a ray meets higher ones first
+  for (const pc of [...MARK.pieces].sort((p, q) => order(p.k) - order(q.k))) {
+    // each piece's construction lines go in at their own height: between the slabs they run between
+    if (order(pc.k) === 2) drawConstruction(c, levels, lift, a, 2);
+    drawSlab(c, pc.k, levels[pc.k], t, a);
+    if (order(pc.k) === 0) drawConstruction(c, levels, lift, a, 0);
+  }
+  drawDimension(c, levels, t, a);
+  drawTitle(c, a);
+}
+function drawSlab(c, k, h, t, a) {
+  const x = screen, dpr = c.dpr, { pts, normals, corner } = POLYS[k], n = pts.length;
+  const top = pts.map(p => proj3(c, p[0], p[1], h)), bot = pts.map(p => proj3(c, p[0], p[1], h - t));
+  // a side face is seen when the camera's foot (x = 0, y = D sin θ, in logo units) lies on its outer side
+  const camY = c.D * c.sn / c.k;
+  const front = normals.map((nv, i) => { const p = pts[i], q = pts[(i + 1) % n]; return nv[0] * -(p[0] + q[0]) / 2 + nv[1] * (camY - (p[1] + q[1]) / 2) > 0; });
+  const deep = t * c.k * c.sn > 0.25;
+  x.lineJoin = 'round'; x.lineCap = 'round';
+  if (deep) {
+    // the seen sides as one path, so neighbouring faces fill without seams
+    const sides = new Path2D();
+    for (let i = 0; i < n; i++) if (front[i]) { const j = (i + 1) % n; sides.moveTo(...top[i]); sides.lineTo(...top[j]); sides.lineTo(...bot[j]); sides.lineTo(...bot[i]); sides.closePath(); }
+    x.fillStyle = C.side; x.fill(sides);
+    // 45° hatching, pinned to the slab so it travels with it
+    x.save(); x.clip(sides);
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    for (const [px, py] of top.concat(bot)) { x0 = Math.min(x0, px); x1 = Math.max(x1, px); y0 = Math.min(y0, py); y1 = Math.max(y1, py); }
+    const gap = 4.5 * dpr, hgt = y1 - y0, o = top[0][0] + top[0][1];
+    x.beginPath();
+    for (let s = o + Math.floor((x0 + y0 - o) / gap) * gap; s < x1 + y1 + gap; s += gap) { x.moveTo(s - y0, y0); x.lineTo(s - y0 - hgt, y1); }
+    x.globalAlpha = 0.3 * a; x.lineWidth = dpr; x.strokeStyle = C.ink; x.stroke();
+    x.restore();
+    // seen edges: bottom edges of seen sides, and the uprights at corners and at the silhouette
+    const vis = new Path2D();
+    for (let i = 0; i < n; i++) if (front[i]) { const j = (i + 1) % n; vis.moveTo(...bot[i]); vis.lineTo(...bot[j]); }
+    for (let i = 0; i < n; i++) {
+      const fa = front[i], fb = front[(i + n - 1) % n];
+      if ((fa || fb) && (corner[i] || fa !== fb)) { vis.moveTo(...top[i]); vis.lineTo(...bot[i]); }
+    }
+    x.globalAlpha = a; x.lineWidth = 1.25 * dpr; x.strokeStyle = C.ink; x.stroke(vis);
+  }
+  // the top face is the maze itself, warped onto the slab's plane
+  const b = geo.box[k];
+  x.globalAlpha = 1;
+  warp(c, pieceLayer(k), h * c.k, b.ya, b.yb, b.xa, b.xb);
+  const outline = new Path2D();
+  top.forEach((p, i) => i ? outline.lineTo(...p) : outline.moveTo(...p));
+  outline.closePath();
+  // the warped walls along the edge are softened by resampling: a knockout in the floor colour clears them, then the line
+  x.globalAlpha = a; x.lineWidth = 4.5 * dpr; x.strokeStyle = C.bg; x.stroke(outline);
+  x.lineWidth = 1.5 * dpr; x.strokeStyle = C.ink; x.stroke(outline);
+  // hidden edges, dashed: the bottom edges and uprights behind the slab
+  if (deep) {
+    const hid = new Path2D();
+    for (let i = 0; i < n; i++) if (!front[i]) { const j = (i + 1) % n; hid.moveTo(...bot[i]); hid.lineTo(...bot[j]); }
+    for (let i = 0; i < n; i++) if (corner[i] && !front[i] && !front[(i + n - 1) % n]) { hid.moveTo(...top[i]); hid.lineTo(...bot[i]); }
+    x.setLineDash([4 * dpr, 3 * dpr]);
+    x.globalAlpha = 0.4 * a; x.lineWidth = dpr; x.stroke(hid);
+    x.setLineDash([]);
+  }
+  x.globalAlpha = 1;
+}
+// where the lifted pieces sit when assembled (dashed), and chain-dotted centre lines through their caps
+function drawConstruction(c, levels, lift, a, which) {
+  const x = screen, dpr = c.dpr, pad = 0.3 * lift;
+  const foot = new Path2D(), axis = new Path2D();
+  for (const pc of MARK.pieces) {
+    const h = levels[pc.k];
+    if (order(pc.k) !== which || Math.abs(h) < 1e-9) continue;
+    POLYS[pc.k].pts.forEach((p, i) => { const q = proj3(c, p[0], p[1], 0); i ? foot.lineTo(...q) : foot.moveTo(...q); });
+    foot.closePath();
+    for (const [qx, qy] of pc.caps) {
+      axis.moveTo(...proj3(c, qx, qy, Math.min(0, h) - pad));
+      axis.lineTo(...proj3(c, qx, qy, Math.max(0, h) + pad));
+    }
+  }
+  x.lineWidth = dpr; x.lineCap = 'butt';
+  x.setLineDash([5 * dpr, 4 * dpr]); x.globalAlpha = 0.35 * a; x.strokeStyle = C.ink; x.stroke(foot);
+  x.setLineDash([14 * dpr, 3 * dpr, 2.5 * dpr, 3 * dpr]); x.globalAlpha = 0.8 * a; x.strokeStyle = C.accent; x.stroke(axis);
+  x.setLineDash([]); x.globalAlpha = 1;
+}
+// the depth, dimensioned at the right-most corner of the highest slab
+function drawDimension(c, levels, t, a) {
+  const x = screen, dpr = c.dpr, k = MARK.pieces.reduce((m, pc) => order(pc.k) > order(m.k) ? pc : m).k, { pts, corner } = POLYS[k];
+  let i = -1;
+  pts.forEach((p, j) => { if (corner[j] && (i < 0 || p[0] > pts[i][0])) i = j; });
+  const p0 = proj3(c, pts[i][0], pts[i][1], levels[k]), p1 = proj3(c, pts[i][0], pts[i][1], levels[k] - t);
+  const span = p1[1] - p0[1];
+  if (span < 3 * dpr) return;
+  const X = Math.max(p0[0], p1[0]) + 14 * dpr, tk = 3 * dpr;
+  x.beginPath();
+  x.moveTo(p0[0] + 3 * dpr, p0[1]); x.lineTo(X + 5 * dpr, p0[1]);
+  x.moveTo(p1[0] + 3 * dpr, p1[1]); x.lineTo(X + 5 * dpr, p1[1]);
+  x.moveTo(X, p0[1]); x.lineTo(X, p1[1]);
+  for (const Y of [p0[1], p1[1]]) { x.moveTo(X - tk, Y + tk); x.lineTo(X + tk, Y - tk); }   // architectural ticks
+  x.globalAlpha = 0.85 * a * clamp01(span / (8 * dpr)); x.lineWidth = dpr; x.lineCap = 'butt'; x.strokeStyle = C.ink; x.stroke();
+  x.font = `400 ${10 * dpr}px "JetBrains Mono", ui-monospace, monospace`; x.textBaseline = 'middle'; x.fillStyle = C.ink;
+  x.fillText(`${LV.depth.toFixed(2)} w`, X + 8 * dpr, (p0[1] + p1[1]) / 2);
+  x.globalAlpha = 1;
+}
+// a drawing caption, top left of the stage
+function drawTitle(c, a) {
+  const x = screen, dpr = c.dpr, X = 12 * dpr, Y = 18 * dpr;
+  x.globalAlpha = 0.75 * a; x.fillStyle = C.ink; x.textBaseline = 'middle';
+  x.font = `500 ${10 * dpr}px "JetBrains Mono", ui-monospace, monospace`;
+  x.fillText('FIG. 07 · EXPLODED VIEW · 3 PARTS', X, Y);
+  x.globalAlpha = 0.5 * a; x.font = `400 ${10 * dpr}px "JetBrains Mono", ui-monospace, monospace`;
+  x.fillText(`DEPTH ${LV.depth.toFixed(2)} w · GAP ${LV.explode.toFixed(1)} w · w = BAND`, X, Y + 15 * dpr);
+  x.globalAlpha = 1;
+}
+
+function rebuild(animate) {
+  dive = null;
+  if (geo) ghostFrame(lab.calm ? T_FADE : T_GHOST);   // the old maze fades out over the new one
+  if (animate && !lab.calm && P.tilt > 0) tiltTo(P.tilt, 0.7); else if (lab.calm || !animate) view = { from: 0, to: 0, t0: 0, dur: 0 };
+  const K = effectiveK();
+  G = buildGrid(K);
+  pass = new Uint8Array(G.T);
+  born = new Float64Array(G.T).fill(-1); carveOrder = []; carvePtr = 0;
+  built = { K, alg: P.algorithm, seed, capped: K < P.band };
+  runs = []; optimum = []; wallFade = null; searchGhost = null; group = null;
+  snap(0);
+  for (const m of marks) { m.flag.shown = m.dot.shown = false; }
+  placeEnds();
+  const st = { carved: 0, total: G.cells.length - G.regions.length, acc: 0 };
+  st.it = GENERATORS[P.algorithm](mulberry(seed * 7919 + 17), st);
+  gen = st;
+  if (geo) { layoutGeo(); dirty.floor = true; clearSearchLayers(); }
+  dirty.walls = true;
+  if (animate && !lab.calm) return;
+  finishGen(false);
+}
+
+function completeGen(instant) {
+  for (const v of gen.it) gen.carved += v;
+  if (instant) for (const c of G.cells) if (born[c] === clock) born[c] = clock - T_CARVE;   // no carve-in fade
+  gen = null;
+  treePass = pass.slice();
+  wallsLiveUntil = clock + T_CARVE;
+  applyBraid();
+}
+function finishGen(animate) {
+  completeGen(!animate);
+  startSearches(runKind, animate && !lab.calm);
+}
+
+// Braid: open a share of dead ends into a neighbour (preferring another dead end), adding loops.
+// The walls that change fade instead of popping.
+function applyBraid() {
+  const before = pass.slice();
+  pass = treePass.slice();
+  built.braid = P.braid;
+  const rng = mulberry(seed * 104729 + 3);
+  const degree = c => { let k = 0; for (let d = 0; d < 4; d++) if (pass[c] & (1 << d)) k++; return k; };
+  const dead = shuffle(G.cells.filter(c => degree(c) === 1), rng);
+  for (const c of dead) {
+    const roll = rng() * 100;
+    if (degree(c) !== 1 || roll >= P.braid) continue;
+    const opts = [], deadOpts = [];
+    for (let d = 0; d < 4; d++) {
+      const n = G.nbr[c * 4 + d];
+      if (n < 0 || pass[c] & (1 << d)) continue;
+      opts.push(n); if (degree(n) === 1) deadOpts.push(n);
+    }
+    const pool = deadOpts.length ? deadOpts : opts;
+    if (pool.length) {
+      const n = pool[Math.floor(rng() * pool.length)];
+      for (let d = 0; d < 4; d++) if (G.nbr[c * 4 + d] === n) { pass[c] |= 1 << d; pass[n] |= 1 << ((d + 2) & 3); }
+    }
+  }
+  wallFade = { old: before, t0: clock, dur: lab.calm ? T_FADE : T_WALL };
+  dirty.walls = true;
+}
+
+// ---------------------------------------------------------------- start / goal per maze
+// Kept as points in logo units so they survive density changes; snapped to the nearest cell of that maze.
+const ends = MARK.pieces.map(pc => ({ start: { x: pc.caps[0][0], y: pc.caps[0][1] }, goal: { x: pc.caps[1][0], y: pc.caps[1][1] } }));
+const endCells = MARK.pieces.map(() => ({ start: -1, goal: -1 }));
+function nearestIn(k, p) {
+  let best = -1, bd = Infinity;
+  for (const c of G.byK[k].cells) {
+    const d = (G.ccx[c] - p.x) ** 2 + (G.ccy[c] - p.y) ** 2;
+    if (d < bd) { bd = d; best = c; }
+  }
+  return best;
+}
+function placeEnds() {
+  for (const pc of MARK.pieces) {
+    endCells[pc.k].start = nearestIn(pc.k, ends[pc.k].start);
+    endCells[pc.k].goal = nearestIn(pc.k, ends[pc.k].goal);
+  }
+}
+// exact hit test: which lattice cell of which chevron is under a logo-space point
+function cellAt(x, y) {
+  const [s, t] = MARK.toST(x, y);
+  for (const g of G.pieces) {
+    if (s < g.S[0] || s >= g.S[g.nS] || t < g.T[0] || t >= g.T[g.nT]) continue;
+    const i = upper(g.S, s) - 1, j = upper(g.T, t) - 1, c = g.off + j * g.nS + i;
+    if (G.cellPiece[c] >= 0) return c;
+  }
+  return -1;
+}
+function upper(a, v) { let lo = 0, hi = a.length; while (lo < hi) { const m = (lo + hi) >> 1; if (a[m] <= v) lo = m + 1; else hi = m; } return lo; }
+
+// ---------------------------------------------------------------- A*
+// Binary min-heap on (f, −g, insertion order): equal f prefers the deeper node, then FIFO. Fully deterministic.
+class Heap {
+  constructor() { this.f = []; this.g = []; this.s = []; this.n = []; }
+  get size() { return this.n.length; }
+  less(i, j) {
+    const { f, g, s } = this;
+    return f[i] !== f[j] ? f[i] < f[j] : g[i] !== g[j] ? g[i] > g[j] : s[i] < s[j];
+  }
+  swap(i, j) {
+    const { f, g, s, n } = this;
+    let t = f[i]; f[i] = f[j]; f[j] = t;
+    t = g[i]; g[i] = g[j]; g[j] = t;
+    t = s[i]; s[i] = s[j]; s[j] = t;
+    t = n[i]; n[i] = n[j]; n[j] = t;
+  }
+  push(f, g, s, n) {
+    this.f.push(f); this.g.push(g); this.s.push(s); this.n.push(n);
+    let i = this.n.length - 1;
+    while (i > 0) { const p = (i - 1) >> 1; if (!this.less(i, p)) break; this.swap(i, p); i = p; }
+  }
+  pop() {
+    const out = { n: this.n[0], g: this.g[0] }, last = this.n.length - 1;
+    this.swap(0, last);
+    this.f.pop(); this.g.pop(); this.s.pop(); this.n.pop();
+    let i = 0;
+    for (;;) {
+      const l = 2 * i + 1, r = l + 1;
+      let m = i;
+      if (l < last && this.less(l, m)) m = l;
+      if (r < last && this.less(r, m)) m = r;
+      if (m === i) break;
+      this.swap(i, m); i = m;
+    }
+    return out;
+  }
+}
+
+// Every step costs 1 and moves one lattice index, so distances in index space are the honest yardstick:
+// Manhattan equals the obstacle-free step count, Euclidean is never more. Both are consistent.
+const H = {
+  manhattan: (a, b) => Math.abs(G.ci[a] - G.ci[b]) + Math.abs(G.cj[a] - G.cj[b]),
+  euclidean: (a, b) => Math.hypot(G.ci[a] - G.ci[b], G.cj[a] - G.cj[b]),
+  none: () => 0
+};
+
+
+// Weighted A* without reopening closed nodes. With w = 1 and a consistent h this is optimal.
+// The solver is exact and discrete; how it looks is eased separately (see searchVisuals).
+function makeSearch(start, goal, heuristic, w, slot, bloom = 0) {
+  const g = new Float64Array(G.T).fill(Infinity), par = new Int32Array(G.T).fill(-1);
+  const state = new Uint8Array(G.T);          // 0 new, 1 open, 2 closed
+  const heap = new Heap(), h = H[heuristic];
+  const s = { piece: G.cellPiece[start], start, goal, heuristic, w, slot, g, par, state, expanded: 0, open: 1, seq: 0, done: false, path: null, cost: Infinity,
+    visual: slot >= 0, bloom, openedAt: null, closedAt: null, baked: null, young: [], youngPtr: 0, beads: [], acc: 0 };
+  if (s.visual) {
+    s.openedAt = new Float64Array(G.T); s.closedAt = new Float64Array(G.T); s.baked = new Uint8Array(G.T);
+    s.kids = new Int32Array(G.T); s.diedAt = new Float64Array(G.T).fill(Infinity); s.dying = [];
+  }
+  // A closed cell with no live children in the search tree is a proven dead end for this search: nothing
+  // beyond it is still open. Its death walks back up the parent chain, one cell per WILT seconds, until
+  // it reaches a fork that still has a live branch.
+  const kill = (c, t) => {
+    while (c >= 0 && c !== start && state[c] === 2 && s.kids[c] === 0 && s.diedAt[c] === Infinity) {
+      s.diedAt[c] = t; s.dying.push(c);
+      const p = par[c];
+      if (p >= 0) s.kids[p]--;
+      c = p; t += WILT;
+    }
+  };
+  const opened = c => { if (s.visual) { s.openedAt[c] = clock; s.beads.push(c); } };
+  g[start] = 0; state[start] = 1; opened(start);
+  heap.push(w * h(start, goal), 0, s.seq++, start);
+  s.step = () => {
+    while (heap.size) {
+      const { n, g: gn } = heap.pop();
+      if (state[n] === 2 || gn > g[n]) continue;          // stale entry
+      state[n] = 2; s.open--; s.expanded++;
+      if (s.visual) { s.closedAt[n] = clock; s.young.push(n); }
+      if (n === goal) { finish(s); return; }
+      for (let d = 0; d < 4; d++) {
+        if (!(pass[n] & (1 << d))) continue;
+        const m = G.nbr[n * 4 + d];
+        if (state[m] === 2) continue;
+        const ng = g[n] + 1;
+        if (ng >= g[m]) continue;
+        if (state[m] === 0) { state[m] = 1; s.open++; opened(m); }
+        else if (s.visual && par[m] >= 0) { const o = par[m]; s.kids[o]--; if (s.kids[o] === 0) kill(o, clock); }   // re-parented: the old branch may now be empty
+        g[m] = ng; par[m] = n;
+        if (s.visual) s.kids[n]++;
+        heap.push(ng + w * h(m, goal), ng, s.seq++, m);
+      }
+      if (s.visual && s.kids[n] === 0) kill(n, clock);
+      return;
+    }
+    s.done = true;                                         // frontier exhausted: no path
+  };
+  return s;
+}
+function finish(s) {
+  s.done = true; s.cost = s.g[s.goal];
+  const path = [];
+  for (let c = s.goal; c >= 0; c = s.par[c]) path.push(c);
+  s.path = path.reverse();
+}
+const runToEnd = s => { while (!s.done) s.step(); return s; };
+
+// ---------------------------------------------------------------- markers: a flag (goal) and a dot (start) per maze
+// Positions are in logo units. A marker glides from (fx, fy) to (x, y); it can drop on (dropAt) or fade on (fadeAt).
+const mkMarker = () => ({ x: 0, y: 0, fx: 0, fy: 0, t0: -1, dur: 0, shown: false, dropAt: null, fadeAt: null });
+const marks = MARK.pieces.map(() => ({ flag: mkMarker(), dot: mkMarker() }));
+const order = k => ['left', 'middle', 'right'].indexOf(MARK.pieces[k].name);   // stagger order
+function glidePos(m) {
+  const e = m.dur > 0 ? easeOut((clock - m.t0) / m.dur) : 1;
+  return [m.fx + (m.x - m.fx) * e, m.fy + (m.y - m.fy) * e];
+}
+function glideTo(m, x, y, dur) {
+  const [px, py] = m.shown ? glidePos(m) : [x, y];
+  Object.assign(m, { fx: px, fy: py, x, y, t0: clock, dur: Math.hypot(x - px, y - py) > 1e-6 ? dur : 0 });
+}
+const cellXYl = c => [G.ccx[c], G.ccy[c]];
+
+// ---------------------------------------------------------------- runs: one per maze
+// A run owns its searches (one solo, or Dijkstra + A* in a race), when they may start, and the travellers
+// that carry a dot along each found path.
+let runs = [], mode = 'idle', runKind = 'solo', optimum = [];
+const aLabel = h => `A* ${HEURISTICS[h]}${P.weight > 1 ? ` w ${P.weight.toFixed(1)}` : ''}`;
+
+function dotPos(k) {
+  const r = runs[k], tr = r && r.kind === 'solo' && r.trav[0];
+  if (tr && clock >= tr.t0) return travPos(tr);
+  return glidePos(marks[k].dot);
+}
+
+function startSearches(kind, animate, only = null) {
+  if (gen) completeGen(false);                          // Solve or Race during generation: finish the maze first
+  const all = MARK.pieces.map(p => p.k);
+  let ks = only ?? all;
+  if (kind !== runKind) ks = all;
+  if (runs.some(Boolean)) ghostSearch();                // old fills and trails fade out under the new ones
+  runKind = kind;
+  const old = runs;
+  runs = [];
+  for (const k of all) if (!ks.includes(k) && old[k]) runs[k] = old[k];
+  clearSearchLayers();
+  for (const r of runs) if (r) for (const s of r.searches) repaintBaked(s);
+  const bloom = !animate ? 0 : Math.min(0.28, 260 / RATE(P.speed)) < 0.03 ? 0 : Math.min(0.28, 260 / RATE(P.speed));
+  // carving is done: the camera pans up to overhead and zooms out first; markers drop and the search runs on the flat view
+  const lift = animate && !lab.calm && view.to !== 0 ? P.flatten : 0;
+  if (lift) tiltTo(0, lift);
+  // an animated solve is one group: it finishes together and may set off the finale; an instant one leaves the view as it is
+  const grp = animate ? { ks, sync: kind === 'solo', rate: RATE(P.speed), end: 0, fired: false } : null;
+  if (grp) snap(0);
+  for (const k of ks) {
+    const { start, goal } = endCells[k], m = marks[k], st = order(k) * STAGGER;
+    const from = dotPos(k);                              // where the dot is right now (maybe at the old flag)
+    optimum[k] = runToEnd(makeSearch(start, goal, 'none', 1, -1));
+    const run = { k, kind, searches: [], trav: [], searchAt: clock, arrivals: [] };
+    if (kind === 'solo') {
+      const s = makeSearch(start, goal, P.heuristic, P.weight, 0, bloom);
+      s.label = P.heuristic === 'none' ? 'Dijkstra' : aLabel(P.heuristic);
+      run.searches.push(s);
+    } else {
+      const h = P.heuristic === 'none' ? 'manhattan' : P.heuristic;
+      const d = makeSearch(start, goal, 'none', 1, 0, bloom), a = makeSearch(start, goal, h, P.weight, 1, bloom);
+      d.label = 'Dijkstra'; a.label = aLabel(h);
+      run.searches.push(d, a);
+    }
+    const [gx, gy] = cellXYl(goal), [sx, sy] = cellXYl(start);
+    const intro = !m.flag.shown;
+    if (intro) {
+      // intro: the flag drops on, then the dot, then the search begins
+      Object.assign(m.flag, { x: gx, y: gy, fx: gx, fy: gy, dur: 0, shown: true });
+      Object.assign(m.dot, { x: sx, y: sy, fx: sx, fy: sy, dur: 0, shown: true });
+      if (lab.calm || !animate) { m.flag.dropAt = m.dot.dropAt = null; m.flag.fadeAt = m.dot.fadeAt = clock; }
+      else {
+        m.flag.fadeAt = m.dot.fadeAt = null;
+        m.flag.dropAt = clock + lift + 0.1 + st; m.dot.dropAt = m.flag.dropAt + 0.15;
+        run.searchAt = m.dot.dropAt + T_DROP + 0.05;
+      }
+    } else {
+      // re-solve: the dot glides home first (from wherever it is, perhaps the old flag), then the search begins
+      m.dot.fx = from[0]; m.dot.fy = from[1];
+      const dist = Math.hypot(sx - from[0], sy - from[1]);
+      Object.assign(m.dot, { x: sx, y: sy, t0: clock, dur: dist > 1e-6 && animate ? T_GLIDE : 0 });
+      if (m.flag.x !== gx || m.flag.y !== gy) glideTo(m.flag, gx, gy, animate ? T_GLIDE : 0.1);
+      run.searchAt = clock + (animate ? Math.max(m.dot.dur, m.flag.dur) + st * 0.6 : 0);
+    }
+    runs[k] = run;
+    run.group = grp;
+    if (grp && grp.sync) {
+      // a dry run of the same search says how many expansions it will take and how long its path is
+      const s = run.searches[0], dry = runToEnd(makeSearch(start, goal, s.heuristic, s.w, -1));
+      s.planned = dry.expanded; s.natural = dry.path ? natural(dry.path.length) : 0;
+    }
+    for (const s of run.searches) if (s.visual) s.openedAt[start] = run.searchAt;   // the first bead appears when the search does
+    if (!animate) {
+      for (const s of run.searches) { runToEnd(s); bakeAll(s); }
+      for (const s of run.searches) addTraveller(run, s, false);
+    }
+  }
+  if (grp && grp.sync) grp.end = planEnd(grp);
+  group = grp;
+  mode = 'search';
+}
+
+// ---------------------------------------------------------------- one finish line
+// The three mazes search at the same rate but need different numbers of expansions, so their searches end at
+// different times. Each path still starts drawing the moment its search ends, but every one is timed to land at
+// the group's shared end: the latest that any path, drawn at its natural pace from its predicted start, would land.
+// Searches are deterministic and the rate is fixed, so a dry run predicts each finish; the slack covers the frame
+// it actually lands on. A path found early draws more slowly (at most 2.5× its natural time; before that it waits).
+const SYNC_SLACK = 0.06, natural = n => Math.min(5, 0.7 + n / 38);
+let group = null;
+function planEnd(g) {
+  let end = 0;
+  for (const k of g.ks) {
+    const r = runs[k], s = r.searches[0], tr = r.trav.find(t => t.s === s);
+    const found = s.done ? clock : Math.max(clock, r.searchAt) + Math.max(0, s.planned - s.expanded) / g.rate + SYNC_SLACK;
+    end = Math.max(end, (tr ? tr.t0 : Math.max(found + 0.12, flatAt() + 0.1)) + s.natural);
+  }
+  return end;
+}
+// the speed slider moved mid-solve: re-plan, and paths already drawing carry on from where they are
+function resync(g) {
+  g.rate = RATE(P.speed);
+  const end = planEnd(g);
+  for (const k of g.ks) for (const tr of runs[k].trav) {
+    if (!tr.moving) continue;
+    if (clock > tr.t0) { tr.p0 = travProgress(tr); tr.t0 = clock; }
+    tr.dur = Math.max(0.3, end - tr.t0);
+  }
+  g.end = end;
+}
+
+// A traveller carries a dot along a found path, arc-length parameterised so its speed is even.
+function addTraveller(run, s, moving) {
+  if (!s.path || run.trav.some(t => t.s === s)) return;
+  const pts = s.path.map(cellXYl), cum = [0];
+  for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+  const tr = { s, pts, cum, total: cum[cum.length - 1], slot: s.slot, moving: moving && !lab.calm };
+  // the dot only sets off once the view is flat, so the path is read in the true top-down view
+  tr.t0 = tr.moving ? Math.max(clock + 0.12, flatAt() + 0.1) : clock;
+  tr.dur = tr.moving ? natural(s.path.length) : 0;
+  tr.p0 = 0;
+  const g = run.group;
+  if (tr.moving && g && g.sync && g === group) {
+    tr.t0 = Math.max(tr.t0, g.end - Math.max(3, 2.5 * tr.dur));
+    tr.dur = Math.max(0.3, g.end - tr.t0);
+  }
+  tr.fadeAt = clock;
+  run.trav.push(tr);
+}
+function travProgress(tr) { return tr.dur ? tr.p0 + (1 - tr.p0) * easeInOut((clock - tr.t0) / tr.dur) : 1; }
+function travPos(tr) { return pointAt(tr, travProgress(tr) * tr.total); }
+function pointAt(tr, d) {
+  const { pts, cum } = tr;
+  if (d <= 0) return pts[0];
+  if (d >= tr.total) return pts[pts.length - 1];
+  let lo = 0, hi = cum.length - 1;
+  while (hi - lo > 1) { const m = (lo + hi) >> 1; if (cum[m] <= d) lo = m; else hi = m; }
+  const f = (d - cum[lo]) / (cum[hi] - cum[lo] || 1);
+  return [pts[lo][0] + (pts[hi][0] - pts[lo][0]) * f, pts[lo][1] + (pts[hi][1] - pts[lo][1]) * f];
+}
+const arrivedAt = tr => tr.t0 + tr.dur;
+
+// ---------------------------------------------------------------- colors
+const rgba = (h, a) => { const [r, g, b] = hex(h); return `rgba(${r},${g},${b},${a})`; };
+const C = {}, PAT = {};
+// a 4×4 device-px tile: diagonal lines 2 px wide, '/' (dir 1) or '\' (dir −1)
+function hatch(bg, ink, dir) {
+  const c = document.createElement('canvas'); c.width = c.height = 4;
+  const x = c.getContext('2d');
+  x.fillStyle = bg; x.fillRect(0, 0, 4, 4); x.fillStyle = ink;
+  for (let y = 0; y < 4; y++) for (let i = 0; i < 4; i++) if ((dir > 0 ? i + y : i - y + 4) % 4 < 2) x.fillRect(i, y, 1, 1);
+  return x.createPattern(c, 'repeat');
+}
+function makeColors(p) {
+  C.bg = p.bg; C.ink = p.ink;
+  C.tint = mix(p.bg, p.ink, 0.075);
+  C.wall = p.ink;                       // full ink: 1 device px diagonals already lose some coverage to antialiasing
+  // search fills are opaque (pre-mixed with the floor) so neighbouring cells meet without seams
+  const sh = LV.shade / 100;
+  // explored cells are hatched like the slab sides of the technical drawing: crisp 2-device-px slashes on the
+  // floor colour, opaque so neighbouring cells meet without seams. In a race the two searches slash opposite ways.
+  const line = Math.min(1, sh * 1.5);
+  PAT['P:closed'] = hatch(p.bg, mix(p.bg, p.ink, line), 1);
+  C.open = mix(p.bg, p.ink, 0.9);
+  C.glow = ramp(p, 0.1);
+  C.accent = p.key === 'bench' ? p.ink : ramp(p, 0.05);
+  C.race = [ramp(p, 0.8), ramp(p, 0.05)];
+  C.raceClosed = C.race.map(c => mix(p.bg, c, sh * 0.84));
+  C.raceOpen = C.race.map(c => mix(p.bg, c, 0.95));
+  C.race.forEach((c, k) => { PAT['P:race' + k] = hatch(p.bg, mix(p.bg, c, line), k ? -1 : 1); });
+  C.carve = ramp(p, 0.35);
+  C.ash = mix(p.bg, p.ink, 0.2 * Math.max(0.6, sh / 0.5));   // proven dead ends: cooled to a dim grey
+  C.pulse = p.ink;
+  C.side = mix(p.bg, p.ink, 0.07);      // slab sides in the technical drawing
+}
+makeColors(lab.palette);
+
+// ---------------------------------------------------------------- geometry (device px)
+let geo = null;
+function layoutGeo() {
+  const sq = lab.square(), f = fitLogo(sq), dpr = canvas.width / Math.max(1, sq.w);
+  const k = dpr * f.scale, ox = dpr * f.cx, oy = dpr * f.cy;
+  const nodes = {};
+  for (const g of G.pieces) {
+    const n = (g.nS + 1) * (g.nT + 1), X = new Float64Array(n), Y = new Float64Array(n);
+    for (let j = 0; j <= g.nT; j++) for (let i = 0; i <= g.nS; i++) {
+      const [x, y] = MARK.toXY(g.S[i], g.T[j]);
+      X[j * (g.nS + 1) + i] = ox + x * k; Y[j * (g.nS + 1) + i] = oy + y * k;
+    }
+    nodes[g.k] = { X, Y };
+  }
+  // each chevron's box in the flat scene (device px; rows relative to the center), roomy enough for its border
+  const m = 12 * dpr, box = POLYS.map(({ pts }) => {
+    const xs = pts.map(p => ox + p[0] * k), ys = pts.map(p => p[1] * k);
+    return { xa: Math.min(...xs) - m, xb: Math.max(...xs) + m, ya: Math.min(...ys) - m, yb: Math.max(...ys) + m };
+  });
+  const sizeChanged = !geo || floorL.c.width !== canvas.width || floorL.c.height !== canvas.height;
+  geo = { dpr, f, nodes, cell: G.pitch * k, box };
+  if (sizeChanged) {
+    for (const L of [floorL, wallsL, sceneL, ...searchL, ...pieceL]) { L.c.width = canvas.width; L.c.height = canvas.height; }
+    ghost = null; searchGhost = null;                    // snapshots no longer line up
+  }
+}
+const dx = x => geo.dpr * (geo.f.cx + x * geo.f.scale);
+const dy = y => geo.dpr * (geo.f.cy + y * geo.f.scale);
+function quad(c) {
+  const g = G.byK[G.cellPiece[c]], { X, Y } = geo.nodes[g.k], w = g.nS + 1, i = G.ci[c], j = G.cj[c];
+  const a = j * w + i, b = a + 1, d = a + w, e = d + 1;
+  return [X[a], Y[a], X[b], Y[b], X[e], Y[e], X[d], Y[d]];
+}
+// shrink a quad toward its center by `inset` (fraction) or grow it by `grow` device px
+function quadPath(x, c, inset = 0, grow = 0) {
+  const q = quad(c), mx = (q[0] + q[2] + q[4] + q[6]) / 4, my = (q[1] + q[3] + q[5] + q[7]) / 4;
+  for (let k = 0; k < 4; k++) {
+    const ddx = q[k * 2] - mx, ddy = q[k * 2 + 1] - my;
+    const l = Math.hypot(ddx, ddy) || 1, f = (1 - inset) + grow / l;
+    const px = mx + ddx * f, py = my + ddy * f;
+    if (k === 0) x.moveTo(px, py); else x.lineTo(px, py);
+  }
+  x.closePath();
+}
+function logoTransform(x) {
+  const { f, dpr } = geo;
+  x.setTransform(dpr * f.scale, 0, 0, dpr * f.scale, dpr * f.cx, dpr * f.cy);
+}
+// fill many quads grouped by (style, alpha bucket), a few small paths per group
+const CHUNK = 8;     // small batches: one huge many-subpath fill rasterizes slower than a few dozen small ones
+function fillGroups(x, groups, inset, grow) {
+  for (const [key, cells] of groups) {
+    const [style, a] = key.split('|');
+    x.globalAlpha = +a; x.fillStyle = PAT[style] || style;
+    for (let k = 0; k < cells.length; k += CHUNK) {
+      x.beginPath();
+      for (let m = k; m < Math.min(cells.length, k + CHUNK); m++) quadPath(x, cells[m], inset, grow);
+      x.fill();
+    }
+  }
+  x.globalAlpha = 1;
+}
+const bucket = a => Math.max(1, Math.min(8, Math.round(a * 8))) / 8;
+function addTo(groups, key, c) { let l = groups.get(key); if (!l) groups.set(key, l = []); l.push(c); }
+
+function drawFloor() {
+  const x = floorL.x;
+  x.setTransform(1, 0, 0, 1, 0, 0);
+  x.clearRect(0, 0, floorL.c.width, floorL.c.height);
+  logoTransform(x);
+  x.fillStyle = C.tint; x.fill(LOGO);
+  x.setTransform(1, 0, 0, 1, 0, 0);
+  x.fillStyle = C.bg;
+  x.beginPath();
+  for (const c of G.cells) quadPath(x, c, 0, 0.5);
+  x.fill();
+  if (G.mini) { miniTransform(x, 1); x.fillStyle = C.ink; x.fill(LOGO); x.setTransform(1, 0, 0, 1, 0, 0); }
+}
+// the small centre mark, magnified z times about its own place, its centre moved `w` of the way to the mark's centre
+function miniTransform(x, z, w = 0) {
+  const m = G.mini, s = geo.dpr * geo.f.scale * m.m * z, X = dx(m.x), Y = dy(m.y);
+  x.setTransform(s, 0, 0, s, X + (dx(0) - X) * w, Y + (dy(0) - Y) * w);
+}
+
+// Walls follow the lattice. While a maze is carving, each wall fades in with the younger of its two cells,
+// so walls only ever appear, never blink. `open` is the passage mask to draw against.
+const cellAlpha = c => born[c] < 0 ? 0 : easeOut((clock - born[c]) / T_CARVE);
+function drawWalls() {
+  const x = wallsL.x, live = gen || clock < wallsLiveUntil;
+  const open = wallFade ? orMask(pass, wallFade.old) : pass;     // during a braid fade, changing walls are drawn live
+  x.setTransform(1, 0, 0, 1, 0, 0);
+  x.clearRect(0, 0, wallsL.c.width, wallsL.c.height);
+  const paths = new Map();
+  const get = a => { const key = live ? bucket(a) : 1; let p = paths.get(key); if (!p) paths.set(key, p = new Path2D()); return p; };
+  for (const g of G.pieces) {
+    const { X, Y } = geo.nodes[g.k], w = g.nS + 1;
+    for (const c of g.cells) {
+      const ac = live ? cellAlpha(c) : 1;
+      if (ac <= 0) continue;
+      const i = G.ci[c], j = G.cj[c], a = j * w + i, p = open[c];
+      const seg = (u, v, al) => { if (al <= 0) return; const P2 = get(al); P2.moveTo(X[u], Y[u]); P2.lineTo(X[v], Y[v]); };
+      const n0 = G.nbr[c * 4], n1 = G.nbr[c * 4 + 1];
+      if (!(p & 1)) seg(a + 1, a + 1 + w, n0 < 0 ? ac : live ? Math.min(ac, cellAlpha(n0)) : 1);
+      if (!(p & 2)) seg(a + w, a + w + 1, n1 < 0 ? ac : live ? Math.min(ac, cellAlpha(n1)) : 1);
+      if (G.nbr[c * 4 + 2] < 0) seg(a, a + w, ac);
+      if (G.nbr[c * 4 + 3] < 0) seg(a, a + 1, ac);
+    }
+  }
+  x.lineWidth = LV.wall; x.lineCap = 'butt'; x.lineJoin = 'miter'; x.strokeStyle = C.wall;
+  for (const [a, p] of paths) { x.globalAlpha = a; x.stroke(p); }
+  x.globalAlpha = 1;
+}
+// The mark's own outline is the outer wall; straight parts coincide with lattice walls, tips are clipped. Drawn per
+// frame over the walls layer, so the finale can quieten the walls and keep the outline, and the technical drawing
+// can hand the outline over to its own vector line.
+function drawBorder(x) {
+  const bw = LV.border * (1 - techNow);
+  if (bw < 0.01) return;
+  logoTransform(x);
+  x.lineWidth = bw / geo.f.scale; x.strokeStyle = C.ink; x.lineJoin = 'round';
+  x.stroke(LOGO);
+  x.setTransform(1, 0, 0, 1, 0, 0);
+}
+function orMask(a, b) { const o = new Uint8Array(a.length); for (let i = 0; i < a.length; i++) o[i] = a[i] | b[i]; return o; }
+// walls that braid is opening (fade out) or closing (fade in)
+function drawWallFade(x) {
+  if (!wallFade) return;
+  const e = easeOut((clock - wallFade.t0) / wallFade.dur), old = wallFade.old;
+  const outP = new Path2D(), inP = new Path2D();
+  for (const g of G.pieces) {
+    const { X, Y } = geo.nodes[g.k], w = g.nS + 1;
+    for (const c of g.cells) for (let d = 0; d < 2; d++) {
+      if (G.nbr[c * 4 + d] < 0) continue;
+      const bit = 1 << d, was = !(old[c] & bit), is = !(pass[c] & bit);
+      if (was === is) continue;
+      const a = G.cj[c] * w + G.ci[c], u = d === 0 ? a + 1 : a + w, v = d === 0 ? a + 1 + w : a + w + 1;
+      const P2 = was ? outP : inP;
+      P2.moveTo(X[u], Y[u]); P2.lineTo(X[v], Y[v]);
+    }
+  }
+  x.lineWidth = LV.wall; x.strokeStyle = C.wall;
+  x.globalAlpha = 1 - e; x.stroke(outP);
+  x.globalAlpha = e; x.stroke(inP);
+  x.globalAlpha = 1;
+}
+
+// ---------------------------------------------------------------- search visuals
+// The search layers hold settled cells. A newly closed cell blooms in over `bloom` seconds on top,
+// then is baked into its layer at full strength, so the hand-off is invisible. Frontier cells are beads
+// that ease in, and stay under the blooming fill until it covers them.
+function clearSearchLayers() {
+  for (const L of searchL) { L.x.setTransform(1, 0, 0, 1, 0, 0); L.x.clearRect(0, 0, L.c.width, L.c.height); }
+}
+// dead-branch timing: the ash fade per cell, the retract pulse, and the step back up the chain
+const WILT = 0.03, T_ASH = 0.45, T_PULSE = 0.3;
+const ashOn = () => P.dead !== 'off';
+function closedStyle(s, c) {
+  if (ashOn() && s.diedAt && clock >= s.diedAt[c] + T_ASH) return C.ash;
+  return runKind === 'race' ? 'P:race' + s.slot : 'P:closed';
+}
+const insetFor = s => (s.slot === 1 ? 0.2 : 0) + LV.gap / 100 * (s.slot === 1 ? 0.8 : 1);   // in a race the A* layer is inset so both closed sets stay readable
+function bake(s, cells) {
+  const groups = new Map();
+  for (const c of cells) { s.baked[c] = 1; addTo(groups, closedStyle(s, c) + '|1', c); }
+  const ins = insetFor(s);
+  fillGroups(searchL[s.slot].x, groups, ins, ins ? 0 : 0.6);
+}
+function bakeAll(s) {
+  if (!s.visual) return;
+  const cells = [];
+  for (const c of s.young) if (!s.baked[c]) cells.push(c);
+  s.youngPtr = s.young.length;
+  for (const c of G.byK[s.piece].cells) if (s.baked[c]) cells.push(c);
+  bake(s, cells);
+}
+// redraw only what was already settled (palette, resize, or another maze re-solving): no jump in progress
+function repaintBaked(s) {
+  if (!s.visual) return;
+  const cells = [];
+  for (const c of G.byK[s.piece].cells) if (s.baked[c]) cells.push(c);
+  bake(s, cells);
+}
+function settleSearches() {
+  for (const r of runs) if (r) for (const s of r.searches) {
+    const ready = [];
+    while (s.youngPtr < s.young.length) {
+      const c = s.young[s.youngPtr];
+      if (s.bloom > 0 && clock - s.closedAt[c] < s.bloom) break;
+      ready.push(c); s.youngPtr++;
+    }
+    if (ready.length) bake(s, ready);
+    if (s.beads.length > 256) s.beads = s.beads.filter(c => !s.baked[c]);
+    // cells that have finished wilting are baked as ash; the rest stay in the list for the live overlay
+    if (s.dying && s.dying.length) {
+      const done = [];
+      s.dying = s.dying.filter(c => {
+        const over = clock >= s.diedAt[c] + Math.max(T_ASH, T_PULSE);
+        if (over && s.baked[c]) { done.push(c); return false; }
+        return true;
+      });
+      if (done.length && ashOn()) bake(s, done);
+    }
+  }
+}
+function drawSearchLive(x) {
+  const beads = new Map(), fills = new Map();
+  for (const r of runs) if (r) for (const s of r.searches) {
+    const race = runKind === 'race';
+    for (const c of s.beads) {
+      if (s.baked[c]) continue;
+      const a = easeOut((clock - s.openedAt[c]) / 0.18);
+      if (a < 0.02) continue;
+      addTo(beads, (race ? C.raceOpen[s.slot] : C.open) + '|' + bucket(a), c);
+    }
+    for (let i = s.youngPtr; i < s.young.length; i++) {
+      const c = s.young[i];
+      addTo(fills, s.slot + '|' + closedStyle(s, c) + '|' + bucket(easeOut((clock - s.closedAt[c]) / s.bloom)), c);
+    }
+    // dying cells: ash eases over the colour; in pulse mode a bright flash runs back up the branch first
+    if (ashOn() && s.dying) for (const c of s.dying) {
+      const u = clock - s.diedAt[c];
+      if (u < 0) continue;
+      if (u < T_ASH) addTo(fills, s.slot + '|' + C.ash + '|' + bucket(easeInOut(u / T_ASH)), c);
+      if (P.dead === 'pulse' && u < T_PULSE) addTo(fills, s.slot + '|' + C.pulse + '|' + bucket(0.75 * (1 - easeOut(u / T_PULSE))), c);
+    }
+  }
+  fillGroups(x, beads, 1 - LV.bead / 100, 0);
+  for (const slot of [0, 1]) {
+    const g = new Map();
+    for (const [k, v] of fills) if (k[0] === String(slot)) g.set(k.slice(2), v);
+    const ins = insetFor({ slot });
+    if (g.size) fillGroups(x, g, ins, ins ? 0 : 0.6);
+  }
+}
+
+// ---------------------------------------------------------------- ghosts (cross-fades)
+// A ghost is a snapshot of what was on screen, faded out over the new state, so a change never pops.
+const ghostCanvas = () => { const c = document.createElement('canvas'); c.width = canvas.width; c.height = canvas.height; return c; };
+let ghost = null, searchGhost = null, wallFade = null, wallsLiveUntil = 0;
+function ghostFrame(dur) {
+  const c = ghostCanvas(); c.getContext('2d').drawImage(sceneL.c, 0, 0);
+  ghost = { c, t0: clock, dur };
+}
+function ghostSearch() {
+  if (!geo) return;
+  const c = ghostCanvas(), x = c.getContext('2d');
+  x.globalAlpha = exploredA;
+  if (searchGhost) { x.globalAlpha = exploredA * (1 - easeOut((clock - searchGhost.t0) / searchGhost.dur)); x.drawImage(searchGhost.c, 0, 0); x.globalAlpha = exploredA; }
+  x.drawImage(searchL[0].c, 0, 0);
+  if (runKind === 'race') x.drawImage(searchL[1].c, 0, 0);
+  drawSearchLive(x);
+  x.globalAlpha = 1;
+  drawTrails(x);
+  searchGhost = { c, t0: clock, dur: lab.calm ? T_FADE : T_SGHOST };
+}
+
+// ---------------------------------------------------------------- trails and markers
+function trailPath(x, tr, upTo) {
+  const pts = tr.pts;
+  x.beginPath();
+  x.moveTo(dx(pts[0][0]), dy(pts[0][1]));
+  for (let i = 1; i < pts.length && tr.cum[i] <= upTo; i++) x.lineTo(dx(pts[i][0]), dy(pts[i][1]));
+  const [ex, ey] = pointAt(tr, upTo);
+  x.lineTo(dx(ex), dy(ey));
+}
+function drawTrails(x) {
+  const thick = Math.max(2 * geo.dpr, geo.cell * 0.34) * LV.trail * (1 + 0.7 * finAmt()), race = runKind === 'race';
+  x.lineJoin = 'round'; x.lineCap = 'round';
+  for (const r of runs) if (r) for (const tr of [...r.trav].sort((a, b) => a.slot - b.slot)) {
+    if (clock < tr.t0) continue;
+    const d = travProgress(tr) * tr.total;
+    if (d <= 0) continue;
+    x.globalAlpha = tr.moving ? 1 : easeOut((clock - tr.fadeAt) / T_FADE);
+    trailPath(x, tr, d);
+    x.lineWidth = race && tr.slot === 0 ? thick * 1.9 : thick;
+    x.strokeStyle = race ? C.race[tr.slot] : C.ink;
+    if (!race && LV.glow > 0.05) { x.shadowColor = C.glow; x.shadowBlur = LV.glow * geo.dpr; }
+    x.stroke();
+    x.shadowBlur = 0;
+  }
+  x.globalAlpha = 1;
+}
+const glyph = () => Math.max(4.5 * geo.dpr, geo.cell * 0.7) * LV.marker;   // base unit for marker sizes
+// Markers are diamonds cut along the lattice's own axes, so they sit square in the rhombic cells.
+// r plays the part a circle's radius did: the long half-diagonal is a touch longer, the area about the same.
+const DQ = 1.15 / Math.max(Math.hypot(MARK.A[0] + MARK.B[0], MARK.A[1] + MARK.B[1]), Math.hypot(MARK.A[0] - MARK.B[0], MARK.A[1] - MARK.B[1]));
+function diamond(x, X, Y, r) {
+  const [a0, a1] = MARK.A, [b0, b1] = MARK.B, q = r * DQ;
+  x.beginPath();
+  x.moveTo(X + q * (a0 + b0), Y + q * (a1 + b1));
+  x.lineTo(X + q * (a0 - b0), Y + q * (a1 - b1));
+  x.lineTo(X - q * (a0 + b0), Y - q * (a1 + b1));
+  x.lineTo(X + q * (b0 - a0), Y + q * (b1 - a1));
+  x.closePath();
+}
+// Every dead end gets a red X, its arms along the two lattice axes. Each arm is sized from its own cell:
+// the arm tip, plus half the X's stroke and half the wall's stroke and a margin, stays inside the wall.
+const X_RED = '#ff2a2a';
+const SIN_AB = Math.sqrt(1 - (MARK.A[0] * MARK.B[0] + MARK.A[1] * MARK.B[1]) ** 2);   // sin of the 85.6° apex
+let deadA = 0, deadClock = 0;
+function drawDeadEnds(x) {
+  const dt = Math.max(0, clock - deadClock); deadClock = clock;
+  deadA += ((gen ? 0 : 1 - clean) - deadA) * (lab.calm ? 1 : 1 - Math.exp(-dt / 0.12));
+  if (deadA < 0.01 || LV.xsize < 1) return;
+  const [a0, a1] = MARK.A, [b0, b1] = MARK.B, k = geo.dpr * geo.f.scale, cosAB = Math.sqrt(1 - SIN_AB * SIN_AB);
+  const lw = Math.min(3 * geo.dpr, Math.max(geo.dpr, geo.cell * 0.11));
+  const skip = new Set(); for (const e of endCells) if (e) { skip.add(e.start); skip.add(e.goal); }
+  x.beginPath();
+  for (const c of G.cells) {
+    if (skip.has(c)) continue;
+    let n = 0; for (let d = 0; d < 4; d++) if (pass[c] & (1 << d)) n++;
+    if (n !== 1) continue;
+    const g = G.byK[G.cellPiece[c]], i = G.ci[c], j = G.cj[c];
+    // half the cell along each axis, in device px, then measured across to the wall (× sin of the apex)
+    const hs = (g.S[i + 1] - g.S[i]) / 2 * k, ht = (g.T[j + 1] - g.T[j]) / 2 * k;
+    const room = h => (h * SIN_AB - lw / 2 * cosAB - LV.wall / 2 - Math.max(geo.dpr, h * 0.1)) / SIN_AB;
+    const r = Math.min(room(hs), room(ht)) * LV.xsize / 100;
+    if (r < 0.75) continue;
+    const X = dx(G.ccx[c]), Y = dy(G.ccy[c]);
+    x.moveTo(X - r * a0, Y - r * a1); x.lineTo(X + r * a0, Y + r * a1);
+    x.moveTo(X - r * b0, Y - r * b1); x.lineTo(X + r * b0, Y + r * b1);
+  }
+  x.globalAlpha = deadA; x.lineCap = 'butt';
+  x.lineWidth = lw; x.strokeStyle = X_RED; x.stroke();
+  x.globalAlpha = 1;
+}
+// drop-on offset (device px, upward) and alpha for a marker at this moment
+function appear(m) {
+  if (!m.shown) return null;
+  if (m.fadeAt != null) return { off: 0, a: easeOut((clock - m.fadeAt) / T_FADE) };
+  if (m.dropAt == null) return { off: 0, a: 1 };
+  const u = (clock - m.dropAt) / T_DROP;
+  if (u < 0) return null;
+  return { off: (1 - easeOutBack(u)) * (glyph() * 5 + 10 * geo.dpr), a: clamp01(u * 3) };
+}
+function drawFlag(x, k) {
+  const m = marks[k].flag, ap = appear(m);
+  if (!ap) return;
+  const [lx, ly] = glidePos(m), X = dx(lx), Y = dy(ly) - ap.off, u = glyph();
+  const r = runs[k], arrived = r ? Math.max(-1, ...r.trav.filter(t => t.moving && clock >= arrivedAt(t)).map(arrivedAt)) : -1;
+  // arrival: the pennant waves for a moment, a ring opens from the base
+  const since = arrived >= 0 ? clock - arrived : 99, wave = since < 1 ? Math.sin(since * 18) * (1 - since) * 0.35 : 0;
+  if (clean > 0.999) return;
+  x.globalAlpha = ap.a * (1 - clean);
+  const h = u * 3.6, pw = u * 2.6, ph = u * 1.95;
+  // one object: a solid diamond plinth on the target cell, a pole, the cloth. All three are white with the
+  // same black keyline, drawn keyline-first so the white parts join without seams.
+  const key = Math.max(1.6 * geo.dpr, u * 0.2), poleW = Math.max(1.6 * geo.dpr, u * 0.26), baseR = u * 0.62;
+  x.lineCap = 'round'; x.lineJoin = 'round';
+  diamond(x, X, Y, baseR); x.lineWidth = key * 2; x.strokeStyle = '#000'; x.stroke();
+  x.beginPath(); x.moveTo(X, Y); x.lineTo(X, Y - h); x.lineWidth = poleW + key * 2; x.stroke();
+  diamond(x, X, Y, baseR); x.fillStyle = '#fff'; x.fill();
+  x.beginPath(); x.moveTo(X, Y); x.lineTo(X, Y - h); x.lineWidth = poleW; x.strokeStyle = '#fff'; x.stroke();
+  diamond(x, X, Y, baseR * 0.38); x.fillStyle = '#000'; x.fill();     // a pip marks the exact cell
+  // chequered flag, 4 × 3, black and white; the cloth sags a touch toward the fly and ripples on arrival
+  const COLS = 4, ROWS = 3, top = Y - h;
+  const sag = i => ph * (0.06 * (i / COLS) ** 2 + wave * Math.sin(i / COLS * Math.PI * 1.5) * 0.9);
+  // double stroke, drawn first so the squares cover its inner half: a white line ringed by a black keyline,
+  // which keeps the flag readable over white walls and colored cells alike
+  x.beginPath();
+  for (let i = 0; i <= COLS; i++) x.lineTo(X + pw * i / COLS, top + sag(i));
+  for (let i = COLS; i >= 0; i--) x.lineTo(X + pw * i / COLS, top + ph + sag(i));
+  x.closePath();
+  x.lineJoin = 'miter';
+  x.lineWidth = key * 2 + Math.max(1.2 * geo.dpr, u * 0.16); x.strokeStyle = '#000'; x.stroke();
+  x.lineWidth = Math.max(1.2 * geo.dpr, u * 0.16); x.strokeStyle = '#fff'; x.stroke();
+  for (let i = 0; i < COLS; i++) for (let j = 0; j < ROWS; j++) {
+    const x0 = X + pw * i / COLS, x1 = X + pw * (i + 1) / COLS, y0 = top + ph * j / ROWS, y1 = top + ph * (j + 1) / ROWS;
+    x.beginPath();
+    x.moveTo(x0, y0 + sag(i)); x.lineTo(x1, y0 + sag(i + 1)); x.lineTo(x1, y1 + sag(i + 1)); x.lineTo(x0, y1 + sag(i));
+    x.closePath();
+    x.fillStyle = (i + j) % 2 ? '#000' : '#fff'; x.fill();
+    x.lineWidth = 0.5 * geo.dpr; x.strokeStyle = x.fillStyle; x.stroke();   // seal hairline seams between squares
+  }
+  if (r) for (const t of r.trav) {
+    if (!t.moving) continue;
+    const s2 = clock - arrivedAt(t);
+    if (s2 < 0 || s2 > 0.7) continue;
+    const e = easeOut(s2 / 0.7);
+    x.globalAlpha = (1 - e) * 0.7;
+    diamond(x, X, Y, u * (0.8 + 2.6 * e));
+    x.lineWidth = 1.5 * geo.dpr; x.strokeStyle = runKind === 'race' ? C.race[t.slot] : C.accent; x.stroke();
+  }
+  x.globalAlpha = 1;
+}
+function dotAt(x, X, Y, rad, fill, a) {
+  x.globalAlpha = a;
+  diamond(x, X, Y, rad + 1.5 * geo.dpr); x.fillStyle = C.bg; x.fill();
+  diamond(x, X, Y, rad); x.fillStyle = fill; x.fill();
+  x.globalAlpha = 1;
+}
+function drawDot(x, k) {
+  const m = marks[k].dot, ap = appear(m);
+  if (!ap) return;
+  const r = runs[k], u = glyph();
+  const [lx, ly] = dotPos(k), X = dx(lx), Y = dy(ly) - ap.off;
+  // while its maze is being searched the dot breathes: a soft ring, not a blink
+  if (r && clock >= r.searchAt && r.searches.some(s => !s.done)) {
+    const b = 0.5 + 0.5 * Math.sin((clock - r.searchAt) * 4.2 - Math.PI / 2);
+    x.globalAlpha = 0.18 + 0.22 * b;
+    diamond(x, X, Y, u * (1.25 + 0.35 * b));
+    x.lineWidth = 1.2 * geo.dpr; x.strokeStyle = C.ink; x.stroke();
+  }
+  if (clean < 0.999) dotAt(x, X, Y, u * 0.75, C.ink, ap.a * (1 - clean));
+  if (r && runKind === 'race') for (const t of r.trav) {           // racing dots leave from the start dot
+    if (!t.moving || clock < t.t0) continue;
+    const [tx, ty] = travPos(t);
+    dotAt(x, dx(tx), dy(ty), u * 0.6, C.race[t.slot], easeOut((clock - t.t0) / 0.15));
+  }
+}
+
+// ---------------------------------------------------------------- the finale
+// The moment the last path lands, the stage inverts: three diamonds, cut along the lattice like the markers, open
+// from the three goals and every pixel inside them flips (a 'difference' fill of white over the opaque frame), so
+// there is never a grey halfway frame, only a hard edge sweeping out. The snap takes T_SNAP with an ease-out; the
+// inverted view holds until the next solve or maze, then the diamonds close back into the goals. Under reduced
+// motion it never fires.
+const T_SNAP = 0.32, T_UNSNAP = 0.45;
+let fin = { from: 0, to: 0, t0: 0, dur: 0, at: [] };
+function finAmt() {
+  const u = fin.dur > 0 ? (clock - fin.t0) / fin.dur : 1;
+  return fin.from + (fin.to - fin.from) * (fin.to > fin.from ? easeOut(u) : easeInOut(u));
+}
+function snap(to, at = clock) {
+  if (fin.to === to) return;
+  const from = finAmt();
+  if (to) fin.at = MARK.pieces.map(pc => cellXYl(endCells[pc.k].goal));
+  fin = { ...fin, from, to, t0: at, dur: lab.calm ? 0 : to ? T_SNAP : T_UNSNAP };
+}
+let hudInv = false;
+function applyInvert() {
+  const amt = finAmt(), on = amt > 0.5;
+  if (on !== hudInv) {
+    // the HUD, hint and square corners swap their ink too (scoped to those elements; the shell is untouched)
+    hudInv = on;
+    for (const el of document.querySelectorAll('.lab-hud, .lab-hint, .lab-square')) for (const [v, c] of [['--bg', C.ink], ['--ink', C.bg], ['--dim', mix(C.ink, C.bg, 0.55)]]) {
+      if (on) el.style.setProperty(v, c); else el.style.removeProperty(v);
+    }
+  }
+  if (amt <= 0.001) return;
+  const x = screen, W = canvas.width, Hh = canvas.height;
+  const U = [MARK.A[0] + MARK.B[0], MARK.A[1] + MARK.B[1]], V = [MARK.A[0] - MARK.B[0], MARK.A[1] - MARK.B[1]], det = U[0] * V[1] - U[1] * V[0];
+  const at = fin.at.map(([lx, ly]) => [dx(lx), dy(ly)]);
+  // the diamond "radius" (in U, V steps) that reaches the farthest corner from any goal
+  let q = 0;
+  for (const [cx, cy] of at) for (const [px, py] of [[0, 0], [W, 0], [0, Hh], [W, Hh]]) {
+    const ex = px - cx, ey = py - cy;
+    q = Math.max(q, Math.abs((ex * V[1] - ey * V[0]) / det) + Math.abs((U[0] * ey - U[1] * ex) / det));
+  }
+  x.save();
+  if (amt < 0.999) {
+    const r = amt * q * 1.01;
+    x.beginPath();
+    for (const [cx, cy] of at) {
+      x.moveTo(cx + r * U[0], cy + r * U[1]); x.lineTo(cx + r * V[0], cy + r * V[1]);
+      x.lineTo(cx - r * U[0], cy - r * U[1]); x.lineTo(cx - r * V[0], cy - r * V[1]); x.closePath();
+    }
+    x.clip();
+  }
+  x.globalCompositeOperation = 'destination-over'; x.fillStyle = C.bg; x.fillRect(0, 0, W, Hh);   // opaque first, over the bench grid
+  x.globalCompositeOperation = 'difference'; x.fillStyle = '#fff'; x.fillRect(0, 0, W, Hh);
+  x.restore();
+}
+
+// ---------------------------------------------------------------- the loop
+// Once the finale has held a moment the view turns back, then the camera dives into the small mark at the centre
+// until it is exactly the size and place of the whole mark; the next maze is built on it, so the piece runs forever.
+// The zoom is exponential (even speed through scales); the magnified scene thins away and the small mark stays a
+// crisp vector, so it lands as a clean full-size mark, which the new maze's intro cross-fades from.
+const T_HOLD = 1.6, T_DIVE = 1.7;
+let dive = null;
+function presentDive() {
+  const x = screen, u = easeInOut((clock - dive.t0) / T_DIVE), Z = 1 / G.mini.m, z = Z ** u, w = (z - 1) / (Z - 1);
+  const X = dx(G.mini.x), Y = dy(G.mini.y);
+  x.globalAlpha = 1 - easeInOut((u - 0.2) / 0.55);
+  x.imageSmoothingEnabled = true;
+  x.setTransform(z, 0, 0, z, X * (1 - z) + (dx(0) - X) * w, Y * (1 - z) + (dy(0) - Y) * w);
+  x.drawImage(sceneL.c, 0, 0);
+  x.globalAlpha = 1;
+  miniTransform(x, z, w); x.fillStyle = C.ink; x.fill(LOGO);
+  x.setTransform(1, 0, 0, 1, 0, 0);
+}
+function stepLoop() {
+  if (dive) {
+    if (clock < dive.t0 + T_DIVE) return;
+    dive = null; seed++;
+    rebuild(P.animateGen);
+    // the landed mark, full size, fades out over the new maze
+    const c = ghostCanvas(), x = c.getContext('2d');
+    logoTransform(x); x.fillStyle = C.ink; x.fill(LOGO);
+    ghost = { c, t0: clock, dur: 0.6 };
+    return;
+  }
+  if (P.loop && !lab.calm && G.mini && group && group.fired && !group.dived && clock >= group.at + T_HOLD) {
+    group.dived = true;
+    snap(0);
+    dive = { t0: clock + (P.finale ? T_UNSNAP : 0) };
+  }
+}
+
+// ---------------------------------------------------------------- frame
+let exploredA = 1, clean = 0;   // clean: 0 while working, 1 once solved (only the path remains)
+function render() {
+  if (!geo) return;
+  if (dirty.floor) { drawFloor(); dirty.floor = false; }
+  if (dirty.walls || gen || clock < wallsLiveUntil + 0.05) { drawWalls(); dirty.walls = false; }
+  if (wallFade && clock - wallFade.t0 > wallFade.dur) { wallFade = null; drawWalls(); }
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalAlpha = 1;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(floorL.c, 0, 0);
+  // freshly carved cells glow briefly in the accent ramp
+  if (carvePtr < carveOrder.length) {
+    while (carvePtr < carveOrder.length && clock - born[carveOrder[carvePtr]] >= T_CARVE) carvePtr++;
+    const groups = new Map();
+    for (let i = carvePtr; i < carveOrder.length; i++) {
+      const c = carveOrder[i], a = (1 - easeOut((clock - born[c]) / T_CARVE)) * 0.55;
+      if (a > 0.02) addTo(groups, C.carve + '|' + bucket(a), c);
+    }
+    fillGroups(ctx, groups, 0, 0.5);
+  }
+  if (searchGhost) {
+    const e = (clock - searchGhost.t0) / searchGhost.dur;
+    if (e >= 1) searchGhost = null;
+    else { ctx.globalAlpha = 1 - easeOut(e); ctx.drawImage(searchGhost.c, 0, 0); ctx.globalAlpha = 1; }
+  }
+  if (exploredA > 0.001 && runs.some(Boolean)) {
+    ctx.globalAlpha = exploredA;
+    ctx.drawImage(searchL[0].c, 0, 0);
+    if (runKind === 'race') ctx.drawImage(searchL[1].c, 0, 0);
+    ctx.globalAlpha = 1;
+    // live cells drawn at their own eased alpha, scaled by the explored fade
+    if (exploredA < 0.999) { const t = ghostCanvas(); drawSearchLive(t.getContext('2d')); ctx.globalAlpha = exploredA; ctx.drawImage(t, 0, 0); ctx.globalAlpha = 1; }
+    else drawSearchLive(ctx);
+  }
+  // in the finale the walls step back so the three paths carry the inverted view
+  const fa = finAmt();
+  ctx.globalAlpha = 1 - 0.62 * fa; ctx.drawImage(wallsL.c, 0, 0); ctx.globalAlpha = 1;
+  drawBorder(ctx);
+  drawWallFade(ctx);
+  drawDeadEnds(ctx);
+  if (runs.some(Boolean)) drawTrails(ctx);
+  for (const pc of MARK.pieces) { drawFlag(ctx, pc.k); drawDot(ctx, pc.k); }
+  if (ghost) {
+    const e = (clock - ghost.t0) / ghost.dur;
+    if (e >= 1) ghost = null;
+    else { ctx.globalAlpha = 1 - easeOut(e); ctx.drawImage(ghost.c, 0, 0); ctx.globalAlpha = 1; }
+  }
+  present();
+}
+
+// ---------------------------------------------------------------- HUD
+const n0 = v => v.toLocaleString('en-US');
+const sw = c => `<i style="display:inline-block;width:8px;height:8px;margin-right:6px;background:${c}"></i>`;
+const nameOf = k => MARK.pieces[k].name;
+function verdict(list) {
+  if (list.some(s => !s.done)) return 'searching';
+  const off = list.filter(s => !(s.cost <= optimum[s.piece].cost + 1e-9));
+  const head = `<b>${list.length - off.length}/${list.length} optimal</b>`;
+  return off.length ? head + ' · ' + off.map(s => isFinite(s.cost) ? `${nameOf(s.piece)} <b>+${((s.cost - optimum[s.piece].cost) / optimum[s.piece].cost * 100).toFixed(1)}%</b>` : `${nameOf(s.piece)} no path`).join(' · ') : head;
+}
+const total = (list, key) => list.reduce((a, s) => a + s[key], 0);
+const paths = list => [...list].sort((a, b) => order(a.piece) - order(b.piece)).map(s => s.path ? n0(s.cost) : '…').join(' · ');
+const allSearches = () => runs.filter(Boolean).flatMap(r => r.searches);
+function hud() {
+  if (!G) return;
+  const maze = `${ALGS[built.alg]} · ${G.K} cells across a band${built.capped ? ' (capped by screen)' : ''} · 3 mazes, ${n0(G.cells.length)} cells · braid ${P.braid}%`;
+  if (gen) { lab.hud(`${maze}<br>generating · carved <b>${n0(gen.carved)}</b> of ${n0(gen.total)}`); return; }
+  const l = allSearches();
+  if (!l.length) return;
+  const dij = MARK.pieces.reduce((a, p) => a + (optimum[p.k] ? optimum[p.k].expanded : 0), 0);
+  if (runKind === 'solo') {
+    lab.hud(`${maze}<br>${l[0].label} · expanded <b>${n0(total(l, 'expanded'))}</b>${l[0].heuristic !== 'none' ? ` (Dijkstra ${n0(dij)})` : ''} · frontier <b>${n0(total(l, 'open'))}</b> · paths <b>${paths(l)}</b> · ${verdict(l)}`);
+  } else {
+    const d = l.filter(s => s.slot === 0), a = l.filter(s => s.slot === 1);
+    const de = total(d, 'expanded'), ae = total(a, 'expanded');
+    const saved = d.every(s => s.done) && a.every(s => s.done) ? ` · A* expanded <b>${Math.round((1 - ae / de) * 100)}%</b> fewer` : '';
+    lab.hud(`${maze}<br>${sw(C.race[0])}Dijkstra <b>${n0(de)}</b> expanded · paths <b>${paths(d)}</b><br>${sw(C.race[1])}${a[0].label} <b>${n0(ae)}</b> expanded · paths <b>${paths(a)}</b> · ${verdict(a)}${saved}`);
+  }
+}
+
+// ---------------------------------------------------------------- updates
+let carvePtr = 0;
+const dirty = { floor: true, walls: true, rebuild: false, braid: false, solve: false, geo: false };
+lab.on('change', key => {
+  if (key === 'band' || key === 'algorithm') dirty.rebuild = true;
+  else if (key === 'braid') dirty.braid = true;
+  else if (key === 'heuristic' || key === 'weight') dirty.solve = true;
+  else if (key === 'placing') setHint();
+  else if (key === 'finale' && !P.finale) snap(0);
+  else if (key === 'tilt' && gen && !lab.calm) tiltTo(P.tilt, 0.3);   // live while carving; otherwise next maze
+  else if (key === 'dead' && G && geo) { ghostFrame(0.3); clearSearchLayers(); for (const s of allSearches()) repaintBaked(s); }
+});
+// palette: the old frame cross-fades into the new colours (a per-pixel lerp)
+lab.on('palette', p => {
+  if (geo && G) ghostFrame(lab.calm ? T_FADE : 0.4);
+  makeColors(p); dirty.floor = dirty.walls = true; hudInv = null;
+  if (G && geo) { clearSearchLayers(); for (const s of allSearches()) repaintBaked(s); }
+});
+lab.on('resize', () => { dirty.geo = true; });
+
+function processDirty() {
+  if (dirty.geo) {
+    dirty.geo = false;
+    if (G && effectiveK() !== G.K) dirty.rebuild = true;
+    else if (G) { layoutGeo(); dirty.floor = dirty.walls = true; clearSearchLayers(); for (const s of allSearches()) repaintBaked(s); }
+  }
+  if (dirty.rebuild) {
+    dirty.rebuild = false; dirty.braid = dirty.solve = false;
+    if (!G || effectiveK() !== built.K || P.algorithm !== built.alg) rebuild(P.animateGen);
+  }
+  if (dirty.braid) {
+    dirty.braid = dirty.solve = false;
+    if (!gen && P.braid !== built.braid) { applyBraid(); startSearches(runKind, !lab.calm); }
+  }
+  if (dirty.solve) {
+    dirty.solve = false;
+    const l = allSearches(), s = l[l.length - 1];
+    const h = runKind === 'race' && P.heuristic === 'none' ? 'manhattan' : P.heuristic;
+    if (!gen && (!s || s.heuristic !== h || s.w !== P.weight)) startSearches(runKind, !lab.calm);
+  }
+}
+
+function update(dt) {
+  clock += dt;
+  processDirty();
+  // the technical drawing takes over the border as it comes in
+  const tn = techAmt();
+  techNow = Math.abs(tn) < 1e-4 ? 0 : tn;
+  if (gen) {
+    // carve at a steady rate per second; the carve-in fade smooths whatever lands in one frame
+    gen.acc += dt * gen.total / T_GEN;
+    const budget = Math.floor(gen.acc), t0 = performance.now();
+    gen.acc -= budget;
+    let carved = 0, k = 0;
+    while (carved < budget) {
+      const r = gen.it.next();
+      if (r.done) { gen.it = [][Symbol.iterator](); finishGen(true); break; }
+      carved += r.value; gen.carved += r.value;
+      if ((++k & 255) === 0 && performance.now() - t0 > 8) break;
+    }
+  } else {
+    const rate = RATE(P.speed);
+    if (group && group.sync && !group.fired && rate !== group.rate) resync(group);
+    for (const r of runs) if (r) {
+      if (clock < r.searchAt) continue;
+      for (const s of r.searches) {
+        if (s.done) { addTraveller(r, s, true); continue; }
+        s.acc = Math.min(s.acc + dt * rate, rate * 0.1 + 1);
+        let n = Math.floor(s.acc);
+        s.acc -= n;
+        while (n-- > 0 && !s.done) s.step();
+        if (s.done) addTraveller(r, s, true);
+      }
+    }
+    // the finish: every search in the group done and every path landed
+    if (group && !group.fired) {
+      const rs = group.ks.map(k => runs[k]);
+      if (rs.every(r => r.searches.every(s => s.done && (!s.path || r.trav.some(t => t.s === s))))) {
+        const end = Math.max(group.sync ? group.end : 0, ...rs.flatMap(r => r.trav.map(arrivedAt)));
+        if (clock >= end) { group.fired = true; group.at = end; if (P.finale && !lab.calm) snap(1, end); }
+      }
+    }
+    settleSearches();
+    stepLoop();
+    const busy = runs.some(r => r && (r.searches.some(s => !s.done) || r.trav.some(t => clock < arrivedAt(t) + 1)));
+    mode = busy ? 'search' : 'idle';
+  }
+  // once every maze is solved and the dots are home, the scaffolding clears away and only the path line stays
+  const solved = mode === 'idle' && !gen && runs.some(Boolean);
+  clean += ((solved ? 1 : 0) - clean) * (lab.calm ? 1 : 1 - Math.exp(-dt / (solved ? 0.35 : 0.1)));
+  if (Math.abs((solved ? 1 : 0) - clean) < 0.002) clean = solved ? 1 : 0;
+  const target = P.explored ? 1 - clean : 0;
+  exploredA += (target - exploredA) * (1 - Math.exp(-dt / (solved ? 0.35 : 0.08)));
+  if (Math.abs(target - exploredA) < 0.002) exploredA = target;
+  // look sliders ease toward their values; the cached layers they affect are redrawn while they move
+  let repaint = false;
+  for (const k of LOOK) {
+    const t = P[k], v = LV[k];
+    if (v === t) continue;
+    const nv = lab.calm ? t : v + (t - v) * (1 - Math.exp(-dt / 0.09));
+    LV[k] = Math.abs(t - nv) < Math.abs(t) * 1e-3 + 1e-3 ? t : nv;
+    if (k === 'wall' || k === 'border') dirty.walls = true;
+    if (k === 'gap' || k === 'shade') repaint = true;
+  }
+  if (repaint && G && geo) { makeColors(lab.palette); clearSearchLayers(); for (const s of allSearches()) repaintBaked(s); }
+}
+
+// ---------------------------------------------------------------- pointer
+function setHint() {
+  const el = document.querySelector('.lab-hint');
+  const other = P.placing === 'goal' ? 'start' : 'goal';
+  if (el) el.textContent = `tap a maze to move its ${P.placing === 'goal' ? 'flag' : 'dot'}` + (matchMedia('(hover: hover)').matches ? ` · shift-click moves the ${other === 'goal' ? 'flag' : 'dot'}` : '');
+}
+const toLogo = e => {
+  const r = canvas.getBoundingClientRect(), f = fitLogo(lab.square()), sx = e.clientX - r.left, sy = e.clientY - r.top;
+  const at = h => { const [px, py] = unproject(sx, sy, h); return { x: (px - f.cx) / f.scale, y: (py - f.cy) / f.scale }; };   // taps land on the right cell even mid-tilt
+  // exploded, each slab sits at its own height: the highest one under the pointer wins
+  const { levels } = slabs(techAmt());
+  for (const pc of [...MARK.pieces].sort((p, q) => order(q.k) - order(p.k))) {
+    const p = at(levels[pc.k]), c = G ? cellAt(p.x, p.y) : -1;
+    if (c >= 0 && G.cellPiece[c] === pc.k) return p;
+  }
+  return at(0);
+};
+let drag = null;
+// moves the start or goal of whichever maze was hit; taps outside the cells are ignored
+function place(e, which) {
+  if (!G || gen) return -1;
+  const p = toLogo(e), c = cellAt(p.x, p.y);
+  if (c < 0) return -1;
+  const k = G.cellPiece[c];
+  if (drag && drag.piece >= 0 && drag.piece !== k) return -1;     // a drag stays in its own maze
+  if (endCells[k][which] === c) return -1;
+  ends[k][which] = { x: G.ccx[c], y: G.ccy[c] };
+  endCells[k][which] = c;
+  return k;
+}
+canvas.addEventListener('pointerdown', e => {
+  if (dive) return;
+  drag = { which: (P.placing === 'goal') !== e.shiftKey ? 'goal' : 'start', id: e.pointerId, piece: -1 };
+  const k = place(e, drag.which);
+  if (k >= 0) { drag.piece = k; startSearches(runKind, !lab.calm, [k]); }
+});
+canvas.addEventListener('pointermove', e => {
+  if (!drag || drag.id !== e.pointerId || !(e.buttons & 1)) return;
+  const k = place(e, drag.which);
+  if (k >= 0) { drag.piece = k; startSearches(runKind, false, [k]); }   // dragging: solve instantly so the path follows
+});
+const endDrag = () => { drag = null; };
+canvas.addEventListener('pointerup', endDrag);
+canvas.addEventListener('pointercancel', endDrag);
+
+// ---------------------------------------------------------------- boot
+G = buildGrid(effectiveK());
+layoutGeo();
+rebuild(P.animateGen);
+setHint();
+
+let tick = 0;
+lab.loop(dt => {
+  update(dt);
+  render();
+  if (++tick % 6 === 0 || mode === 'idle' && tick % 30 === 0) hud();
+});
+
+// test hooks: the pane may be hidden (rAF paused), so let tooling drive time directly
+let prevSample = null;
+window.__lab = {
+  step(n = 1, dt = 1 / 60) { for (let k = 0; k < n; k++) update(dt); render(); hud(); return this.info(); },
+  // advance n frames, rendering each, and return a cheap fingerprint of every frame (for flicker checks)
+  // advance n frames, rendering each; per frame returns mean brightness and the share of sampled pixels
+  // that jumped by more than `jump` (sum of RGB) since the previous frame. A pop shows up as a spike.
+  frames(n = 1, dt = 1 / 60, sample = 6, jump = 120) {
+    const out = [], w = canvas.width, h = canvas.height;
+    for (let k = 0; k < n; k++) {
+      update(dt); render();
+      const d = screen.getImageData(0, 0, w, h).data, cur = [];
+      let sum = 0, big = 0;
+      for (let y = 0; y < h; y += sample) for (let x = 0; x < w; x += sample) { const i = (y * w + x) * 4, v = d[i] + d[i + 1] + d[i + 2]; cur.push(v); sum += v; }
+      if (prevSample && prevSample.length === cur.length) for (let i = 0; i < cur.length; i++) if (Math.abs(cur[i] - prevSample[i]) > jump) big++;
+      prevSample = cur;
+      out.push([+(sum / cur.length).toFixed(2), +(big / cur.length * 1000).toFixed(2)]);
+    }
+    hud();
+    return out;
+  },
+  renderOnce() { processDirty(); render(); hud(); return this.info(); },
+  info: () => ({
+    K: G.K, cells: G.cells.length, clock: +clock.toFixed(3),
+    mode, runKind, generating: !!gen, seed, tilt: +tiltDeg().toFixed(2), ends: endCells.map(e => ({ ...e })), apexDeg: +MARK.apexDeg.toFixed(3), W: MARK.W,
+    searches: allSearches().map(s => ({ maze: nameOf(s.piece), label: s.label, expanded: s.expanded, open: s.open, cost: s.cost, done: s.done })),
+    travellers: runs.filter(Boolean).flatMap(r => r.trav.map(t => ({ maze: nameOf(r.k), moving: t.moving, progress: +travProgress(t).toFixed(3), t0: +t.t0.toFixed(4), arrive: +arrivedAt(t).toFixed(4) }))),
+    sync: group && { end: +group.end.toFixed(4), fired: group.fired }, dive: dive && +(clock - dive.t0).toFixed(3), mini: G.mini && { n: G.mini.island.length, x: +G.mini.x.toFixed(4), y: +G.mini.y.toFixed(4), m: +G.mini.m.toFixed(4) }, invert: +finAmt().toFixed(3), tech: +techAmt().toFixed(3),
+    optimum: optimum.map(o => o && o.cost)
+  }),
+  // instant regenerate (no animation) for checks
+  regen({ seed: sd = seed, algorithm = P.algorithm, braid = P.braid } = {}) {
+    seed = sd; P.algorithm = algorithm; P.braid = braid; rebuild(false); render(); return this.info();
+  },
+  solve(start, goal, heuristic = 'manhattan', w = 1) {
+    const s = runToEnd(makeSearch(start, goal, heuristic, w, -1));
+    return { cost: s.cost, expanded: s.expanded, path: s.path };
+  },
+  cells: k => Array.from(k == null ? G.cells : G.byK[k].cells),
+  deadEnds: () => Array.from(G.cells).filter(c => [0, 1, 2, 3].filter(d => pass[c] & (1 << d)).length === 1),
+  pieces: () => G.pieces.map(g => g.k),
+  cellXY(c) { const r = canvas.getBoundingClientRect(), f = fitLogo(lab.square()); return { x: r.left + f.cx + G.ccx[c] * f.scale, y: r.top + f.cy + G.ccy[c] * f.scale }; },
+  setCalm(v) { lab.calm = v; },     // lets tooling exercise the animated path on a reduced-motion machine
+  // checks that consecutive path cells share an open wall, and returns the step count
+  pathCost(path) {
+    if (!path) return NaN;
+    for (let k = 1; k < path.length; k++) {
+      const a = path[k - 1], b = path[k];
+      let ok = false;
+      for (let d = 0; d < 4; d++) if (pass[a] & (1 << d) && G.nbr[a * 4 + d] === b) ok = true;
+      if (!ok) return NaN;
+    }
+    return path.length - 1;
+  },
+  // largest distance from a straight mark edge to the nearest lattice line (should be ~0)
+  edgeFit() {
+    let worst = 0;
+    for (const pc of MARK.pieces) {
+      const g = G.byK[pc.k];
+      for (const v of pc.s) worst = Math.max(worst, Math.min(...g.S.map(x => Math.abs(x - v))));
+      for (const v of pc.t) worst = Math.max(worst, Math.min(...g.T.map(x => Math.abs(x - v))));
+    }
+    return worst;
+  },
+  buildMs(K) { gridCache.delete(K); const t = performance.now(); buildGrid(K); return performance.now() - t; }
+};
+</script>

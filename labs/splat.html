@@ -1,0 +1,635 @@
+<meta charset="utf-8">
+<script src="../embed/lab-embed.js"></script>
+<title>Splat!</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@200;300&family=Familjen+Grotesk:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="shared/lab.css">
+<style>
+  .lab-stage > canvas { cursor: pointer; }
+</style>
+<script type="module">
+import { createLab } from './shared/lab.js';
+import { fitLogo, logoPolygons } from './shared/logo.js';
+import { hex, mix } from './shared/palettes.js';
+
+// =====================================================================================
+// Knobs that aren't sliders.
+// Units are logo units (the mark is 1 wide), y down. The camera rides C above the mark looking
+// straight down, so the mark never changes size on screen and the floor below scales as C / (C + h).
+// =====================================================================================
+const C = 1.5;              // camera height above the mark
+const T = 0.5;              // metaball threshold: the slime surface is where the field crosses this
+const EDGE = 0.06;          // how far the mark's field reaches past its outline (sets how fingers fillet into the puddle)
+const DOM = 1.1;            // the outline's distance texture covers ±DOM
+const SDF_N = 1024;         // distance texture resolution
+const LS = [0.5, 0.667];    // shadow offset per unit of height (light from the upper left)
+const SUB = 1 / 240;        // splat physics substep, s
+const NODES = 6;            // nodes per finger: base (pinned to the puddle edge) … tip
+const GRAV = 14;            // droplet gravity, logo units / s²
+const RING = 0.05;          // the reveal's slime rim sits this far outside the hole
+
+const lab = createLab({
+  number: '12',
+  title: 'Splat!',
+  blurb: 'A fine grid, slowly zooming. It’s really a camera locked onto the mark, the mark is made of slime, and it’s falling fast. It hits the floor, splats into fingers and droplets, then tears open on the next mark, in the next colour, already falling.',
+  teaches: 'perspective (screen size goes as 1 / distance, so a steady fall reads as an accelerating zoom) · metaballs: an additive field cut at one level, with one-pixel analytic antialiasing · springs and plastic rope chains for goo',
+  hint: 'tap to drop it now',
+  grid: false,
+  palettes: [
+    { key: 'slime', name: 'Slime', bg: '#000000', grid: '#16161c', ink: '#f4f4f6', colors: ['#8cff1a', '#ff7a00', '#ff2fa8', '#1ee3ff', '#ffe414', '#9d4dff'] },
+    'spectrum', 'cmy', 'synthwave', 'reef', 'ember'
+  ],
+  defaultPalette: 'slime',
+  params: {
+    fallH: { type: 'heading', label: 'Fall' },
+    fall: { type: 'range', label: 'Fall time', min: 2, max: 14, step: 0.5, value: 6, unit: ' s' },
+    height: { type: 'range', label: 'Drop height', min: 6, max: 60, step: 1, value: 30, format: v => `${v}×` },
+    grid: { type: 'range', label: 'Grid density', min: 6, max: 40, step: 1, value: 16 },
+    shake: { type: 'range', label: 'Impact shake', min: 0, max: 1, step: 0.05, value: 0.35 },
+    splatH: { type: 'heading', label: 'Splat' },
+    goo: { type: 'range', label: 'Goo (viscosity)', min: 0, max: 1, step: 0.05, value: 0.5 },
+    spread: { type: 'range', label: 'Spread', min: 0.04, max: 0.3, step: 0.01, value: 0.14 },
+    fingers: { type: 'range', label: 'Fingers', min: 0, max: 40, step: 1, value: 22 },
+    spray: { type: 'range', label: 'Spray', min: 0, max: 60, step: 1, value: 24 },
+    hold: { type: 'range', label: 'Settle before reveal', min: 0.2, max: 3, step: 0.1, value: 0.9, unit: ' s' },
+    lookH: { type: 'heading', label: 'Look' },
+    gloss: { type: 'range', label: 'Gloss', min: 0, max: 1, step: 0.05, value: 0.8 },
+    wobble: { type: 'range', label: 'Jiggle', min: 0, max: 1, step: 0.05, value: 0.4 },
+    shadow: { type: 'toggle', label: 'Shadows', value: true },
+    speed: { type: 'range', label: 'Speed', min: 0.25, max: 2, step: 0.05, value: 1, unit: '×' }
+  },
+  actions: [{ label: 'Splat now', primary: true, action: () => dropNow() }]
+});
+const P = lab.params;
+
+// ---- GL ----
+const { canvas } = lab.canvas({ context: 'none' });
+const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, depth: false, stencil: false, premultipliedAlpha: false, powerPreference: 'high-performance' });
+if (!gl) { lab.hud('This lab needs WebGL2.'); throw new Error('no webgl2'); }
+const halfOK = !!(gl.getExtension('EXT_color_buffer_float') || gl.getExtension('EXT_color_buffer_half_float'));
+const FIELD_K = halfOK ? 1 : 0.25;   // an 8-bit field can't hold values above 1, so it stores a quarter
+
+function program(vs, fs) {
+  const sh = (type, src) => {
+    const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s) + '\n' + src);
+    return s;
+  };
+  const p = gl.createProgram();
+  gl.attachShader(p, sh(gl.VERTEX_SHADER, vs)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, fs));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+  const u = {};
+  for (let i = 0, n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS); i < n; i++) {
+    const name = gl.getActiveUniform(p, i).name.replace(/\[0\]$/, '');
+    u[name] = gl.getUniformLocation(p, name);
+  }
+  return { p, u };
+}
+
+const FS_TRI = `#version 300 es
+layout(location=0) in vec2 aP;
+void main(){ gl_Position = vec4(aP, 0., 1.); }`;
+
+// ---- the outline as a signed distance texture (negative inside), built once ----
+const polys = logoPolygons({ curveSegments: 8 });
+const SEGS = [];
+for (const poly of polys) for (let i = 0; i < poly.length; i++) { const a = poly[i], b = poly[(i + 1) % poly.length]; SEGS.push(a[0], a[1], b[0], b[1]); }
+const NSEG = SEGS.length / 4;
+
+const sdfProg = program(FS_TRI, `#version 300 es
+precision highp float;
+uniform vec4 uSeg[${NSEG}];
+uniform vec2 uSize;
+out vec4 o;
+void main(){
+  vec2 q = (gl_FragCoord.xy / uSize * 2. - 1.) * ${DOM.toFixed(3)};
+  float d = 1e9; bool ins = false;
+  for (int i = 0; i < ${NSEG}; i++) {
+    vec2 a = uSeg[i].xy, b = uSeg[i].zw, pa = q - a, ba = b - a;
+    d = min(d, length(pa - ba * clamp(dot(pa, ba) / dot(ba, ba), 0., 1.)));
+    if ((a.y > q.y) != (b.y > q.y) && q.x < (b.x - a.x) * (q.y - a.y) / (b.y - a.y) + a.x) ins = !ins;
+  }
+  o = vec4(ins ? -d : d, 0., 0., 1.);
+}`);
+
+function cpuSdf(n) {
+  const out = new Float32Array(n * n);
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+    const qx = ((x + 0.5) / n * 2 - 1) * DOM, qy = ((y + 0.5) / n * 2 - 1) * DOM;
+    let d = 1e9, ins = false;
+    for (let i = 0; i < SEGS.length; i += 4) {
+      const ax = SEGS[i], ay = SEGS[i + 1], bx = SEGS[i + 2], by = SEGS[i + 3];
+      const px = qx - ax, py = qy - ay, ex = bx - ax, ey = by - ay;
+      const h = Math.min(1, Math.max(0, (px * ex + py * ey) / (ex * ex + ey * ey)));
+      d = Math.min(d, Math.hypot(px - ex * h, py - ey * h));
+      if ((ay > qy) !== (by > qy) && qx < ex * (qy - ay) / ey + ax) ins = !ins;
+    }
+    out[y * n + x] = ins ? -d : d;
+  }
+  return out;
+}
+
+const tri = gl.createVertexArray();
+gl.bindVertexArray(tri);
+gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+
+function texture(w, h, internal, format, type, data = null) {
+  const t = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.texImage2D(gl.TEXTURE_2D, 0, internal, w, h, 0, format, type, data);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  return t;
+}
+
+let sdfTex;
+if (halfOK) {
+  sdfTex = texture(SDF_N, SDF_N, gl.R16F, gl.RED, gl.HALF_FLOAT);
+  const fb = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, sdfTex, 0);
+  gl.viewport(0, 0, SDF_N, SDF_N);
+  gl.useProgram(sdfProg.p);
+  gl.uniform4fv(sdfProg.u.uSeg, new Float32Array(SEGS));
+  gl.uniform2f(sdfProg.u.uSize, SDF_N, SDF_N);
+  gl.bindVertexArray(tri); gl.drawArrays(gl.TRIANGLES, 0, 3);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.deleteFramebuffer(fb);
+} else {
+  sdfTex = texture(384, 384, gl.R16F, gl.RED, gl.FLOAT, cpuSdf(384));
+}
+
+// The outer edge of the mark along a ray from its centre (where fingers leave the puddle).
+function rayEdge(ux, uy) {
+  let best = 0;
+  for (let i = 0; i < SEGS.length; i += 4) {
+    const ax = SEGS[i], ay = SEGS[i + 1], ex = SEGS[i + 2] - ax, ey = SEGS[i + 3] - ay;
+    const den = ux * ey - uy * ex;
+    if (Math.abs(den) < 1e-9) continue;
+    const t = (ax * ey - ay * ex) / den, s = (ax * uy - ay * ux) / den;
+    if (t > 0 && s >= 0 && s <= 1) best = Math.max(best, t);
+  }
+  return best || 0.4;
+}
+
+// ---- field pass: every bead of goo adds a (1 - r²)³ bump, R = droplet bodies, G = their shadows ----
+const beadProg = program(`#version 300 es
+layout(location=0) in vec2 aC;
+layout(location=1) in vec4 aI;
+uniform vec2 uRes, uCenter; uniform float uScale;
+out vec2 vC; out float vW;
+void main(){
+  vC = aC; vW = aI.w;
+  vec2 p = (aI.xy + aC * aI.z) * uScale + uCenter;
+  gl_Position = vec4(p.x / uRes.x * 2. - 1., 1. - p.y / uRes.y * 2., 0., 1.);
+}`, `#version 300 es
+precision highp float;
+in vec2 vC; in float vW;
+uniform vec2 uMask;
+out vec4 o;
+void main(){
+  float r2 = dot(vC, vC);
+  if (r2 >= 1.) discard;
+  float k = 1. - r2; k = k * k * k * vW;
+  o = vec4(k * uMask.x, k * uMask.y, 0., 0.);
+}`);
+const MAX_BEADS = 6000;
+const beadData = new Float32Array(MAX_BEADS * 4);
+const beadVao = gl.createVertexArray();
+gl.bindVertexArray(beadVao);
+gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+const beadBuf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, beadBuf);
+gl.bufferData(gl.ARRAY_BUFFER, beadData.byteLength, gl.DYNAMIC_DRAW);
+gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 0, 0); gl.vertexAttribDivisor(1, 1);
+gl.bindVertexArray(null);
+
+// ---- composite: floor grid, shadows, the slime surface, and the next world through the tear ----
+const compProg = program(FS_TRI, `#version 300 es
+precision highp float;
+uniform sampler2D uSdf, uField;
+uniform vec2 uRes, uCenter;
+uniform float uScale, uTime, uFieldK, uD, uGloss, uShadowOn;
+uniform vec3 uFloorA, uLineA, uSlimeA, uFloorB, uLineB, uSlimeB;
+uniform float uHA, uHB, uSpread, uS, uWobL, uWobS, uFlat, uLanded, uShadowA;
+uniform float uReveal, uRho, uHoleAmp;
+out vec4 o;
+const float T = ${T.toFixed(3)}, W = ${EDGE.toFixed(3)}, DOM = ${DOM.toFixed(3)}, C = ${C.toFixed(3)}, RING = ${RING.toFixed(3)};
+const vec2 LS = vec2(${LS[0].toFixed(3)}, ${LS[1].toFixed(3)});
+const vec3 L1 = vec3(-0.408, -0.544, 0.816);   // normalize(-LS, 1): the same light that throws the shadows
+const vec3 L2 = vec3(0.62, -0.35, 0.70);        // a dimmer window on the upper right, for a second wet glint
+
+float hash(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+float vnoise(vec2 p){
+  vec2 i = floor(p), f = fract(p), u = f * f * (3. - 2. * f);
+  return mix(mix(hash(i), hash(i + vec2(1, 0)), u.x), mix(hash(i + vec2(0, 1)), hash(i + 1.), u.x), u.y);
+}
+float sdfAt(vec2 q){ vec2 c = clamp(q, -DOM, DOM); return texture(uSdf, q / (2. * DOM) + .5).r + length(q - c); }
+float Lf(float s){ float x = max(1. - s / W, 0.); return T * x * x; }
+float wob(vec2 q, float amp, float freq, float sp){ return amp * (vnoise(q * freq + vec2(uTime * sp, -uTime * sp * .7)) - .5); }
+float holeH(vec2 q){
+  float a = atan(q.y, q.x);
+  float n = sin(a * 5. + uTime * 1.3) * .5 + sin(a * 9. - uTime * 2.1) * .3 + sin(a * 14. + 1.7) * .2;
+  return uRho + uHoleAmp * n - length(q);
+}
+// the mark that is still in the air (identical to FA before impact, so the hand-off is exact)
+float FB(vec2 q){ return Lf(sdfAt(q) + wob(q, uWobL, 6., .6)); }
+// the mark that landed: its outline dilated into a puddle, plus the beads, minus the tear
+float FA(vec2 q, vec2 uv){
+  vec2 qs = q / uS;
+  float s = sdfAt(qs) - uSpread + wob(qs, uWobL, 6., .6) + wob(qs, uWobS, 3.2, 2.2);
+  float F = Lf(s) + texture(uField, uv).r / uFieldK;
+  if (uReveal > .5) {
+    float H = holeH(q), x = (H + RING) / .035;
+    F = F * clamp(-H / .08, 0., 1.) + (1.6 * T + F) * exp(-x * x);
+  }
+  return F;
+}
+float gridLevel(vec2 uv, float lw){
+  vec2 dd = max(fwidth(uv), vec2(1e-6));
+  vec2 d = abs(fract(uv + .5) - .5);
+  vec2 w = max(vec2(lw), dd) * .5;
+  vec2 l = clamp((w - d) / dd + .5, 0., 1.);
+  return max(l.x, l.y) * smoothstep(2.5, 8., 1. / max(dd.x, dd.y));
+}
+vec3 floorCol(vec2 q, float h, vec3 fl, vec3 ln){
+  vec2 u = q * (C + h) / C * uD;
+  float a = .42 * gridLevel(u, .035);
+  a = max(a, .72 * gridLevel(u / 4., .056 / 4.));
+  a = max(a, gridLevel(u / 16., .08 / 16.));
+  return mix(fl, ln, a);
+}
+float logoShadow(vec2 q, float h){
+  if (h <= 0.) return 0.;
+  vec2 u = q * (C + h) / C;
+  float b = .015 + .06 * h;
+  return (1. - smoothstep(-b, b, sdfAt(u - h * LS))) * .55 * min(1., 1.6 / (1. + .35 * h));
+}
+float hgt(float f, float k){ return .05 * k * (1. - exp(-max(f - T, 0.) / T * 1.3)); }
+vec4 slime(vec3 base, float f0, float fx, float fy, float pq, float k){
+  float g = length(vec2(fx - f0, fy - f0));
+  float a = clamp((f0 - T) / max(g, 1e-6) + .5, 0., 1.);
+  float h0 = hgt(f0, k);
+  vec2 dh = vec2(hgt(fx, k) - h0, -(hgt(fy, k) - h0)) / pq;
+  vec3 n = normalize(vec3(-dh, 1.));
+  float diff = max(dot(n, L1), 0.);
+  float s1 = max(dot(n, normalize(L1 + vec3(0, 0, 1))), 0.), s2 = max(dot(n, normalize(L2 + vec3(0, 0, 1))), 0.);
+  float spec = pow(s1, 90.) * 1.3 + pow(s1, 14.) * .16 + pow(s2, 60.) * .35;
+  float fr = pow(1. - n.z, 2.5);
+  float thick = clamp(h0 / (.05 * max(k, .2)), 0., 1.);
+  vec3 c = mix(base * 1.04, base * base * .85, thick * .35) * (.42 + .68 * diff);
+  c += fr * .28 * mix(base, vec3(1), .4) + spec * uGloss;
+  return vec4(c, a);
+}
+void main(){
+  vec2 px = gl_FragCoord.xy, uv = px / uRes;
+  float pq = 1. / uScale;
+  vec2 q = (vec2(px.x, uRes.y - px.y) - uCenter) * pq;
+  vec2 dqx = vec2(pq, 0.), dqy = vec2(0., -pq), dux = vec2(1. / uRes.x, 0.), duy = vec2(0., 1. / uRes.y);
+
+  vec3 col = floorCol(q, uHA, uFloorA, uLineA);
+  float fa0 = FA(q, uv), fax = FA(q + dqx, uv + dux), fay = FA(q + dqy, uv + duy);
+  float sh = uShadowOn * uShadowA * logoShadow(q, uHA);
+  float ao = uLanded * .45 * smoothstep(0., T, fa0);
+  float ds = uShadowOn * .45 * smoothstep(.03, .6, texture(uField, uv).g / uFieldK);
+  col *= (1. - sh) * (1. - ao) * (1. - ds);
+
+  if (uReveal > .5) {
+    float m = clamp((holeH(q) + RING) / pq + .5, 0., 1.);
+    vec3 cb = floorCol(q, uHB, uFloorB, uLineB) * (1. - uShadowOn * logoShadow(q, uHB));
+    vec4 sb = slime(uSlimeB, FB(q), FB(q + dqx), FB(q + dqy), pq, 1.);
+    col = mix(col, mix(cb, sb.rgb, sb.a), m);
+  }
+  vec4 sa = slime(uSlimeA, fa0, fax, fay, pq, uFlat);
+  o = vec4(mix(col, sa.rgb, sa.a), 1.);
+}`);
+
+// ---- sizing ----
+let dpr = 1, Wpx = 1, Hpx = 1, fW = 1, fH = 1, fScale = 1, fieldTex = null, fieldFb = null;
+function fit() {
+  const sq = lab.square();
+  dpr = Math.min(2, window.devicePixelRatio || 1);
+  Wpx = Math.max(1, Math.round(sq.w * dpr)); Hpx = Math.max(1, Math.round(sq.h * dpr));
+  canvas.width = Wpx; canvas.height = Hpx;
+  fScale = Math.min(1, Math.sqrt(2.4e6 / (Wpx * Hpx)));   // the field is smooth, so big screens can afford a smaller one
+  fW = Math.max(1, Math.round(Wpx * fScale)); fH = Math.max(1, Math.round(Hpx * fScale));
+  if (fieldTex) { gl.deleteTexture(fieldTex); gl.deleteFramebuffer(fieldFb); }
+  fieldTex = halfOK ? texture(fW, fH, gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT) : texture(fW, fH, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE);
+  fieldFb = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fieldFb);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, fieldTex, 0);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  fieldDirty = true; dirty = true;
+}
+
+// ---- deterministic randomness, one stream per splat ----
+function rng(seed) {
+  let a = seed >>> 0;
+  return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+}
+const lerp = (a, b, t) => a + (b - a) * t;
+const clamp01 = x => Math.min(1, Math.max(0, x));
+const smooth = (a, b, x) => { const t = clamp01((x - a) / (b - a)); return t * t * (3 - 2 * t); };
+
+// ---- the cycle ----
+let cycle = 0, phase = 'fall', tf = 0, tau = 0, sinceImpact = 1e9, splat = null, clock = 0;
+let dirty = true, fieldDirty = true, paused = false;
+const H0 = () => P.height * C;
+const zeta = () => lerp(0.32, 0.75, P.goo), omega = () => lerp(24, 13, P.goo);
+// damped spring from 0 toward 1: the puddle shoots past its final size and settles back
+function spring(t) {
+  const z = zeta(), w = omega(), wd = w * Math.sqrt(1 - z * z);
+  return 1 - Math.exp(-z * w * t) * (Math.cos(wd * t) + z * w / wd * Math.sin(wd * t));
+}
+
+function impact() {
+  phase = 'splat'; tau = 0; sinceImpact = 0;
+  const R = rng(0x5eed + cycle * 7919), g = P.goo;
+  const fingers = [], drops = [];
+  const nF = P.fingers | 0, off = R() * Math.PI * 2;
+  for (let i = 0; i < nF; i++) {
+    const th = off + (i + (R() - 0.5) * 0.8) / nF * Math.PI * 2;
+    const dx = Math.cos(th), dy = Math.sin(th), edge = rayEdge(dx, dy);
+    const V = lerp(4.4, 2.3, g) * (0.45 + 1.0 * R() ** 1.4), size = 0.75 + 0.5 * R(), swirl = (R() - 0.5) * 0.5;
+    const prof = [0.06, 0.042, 0.031, 0.025, 0.028, 0.03 + 0.032 * R()];
+    const nodes = [];
+    for (let j = 0; j < NODES; j++) {
+      const f = (j / (NODES - 1)) ** 1.35;
+      nodes.push({ x: dx * edge * 0.9, y: dy * edge * 0.9, vx: (dx - dy * swirl) * V * f, vy: (dy + dx * swirl) * V * f, r: prof[j] * size });
+    }
+    fingers.push({ dx, dy, edge, nodes, seg: lerp(0.07, 0.045, g) * (0.7 + 0.8 * R()), brk: R() < 0.3, pinch: 0 });
+  }
+  for (let i = 0, n = P.spray | 0; i < n; i++) {
+    const th = R() * Math.PI * 2, dx = Math.cos(th), dy = Math.sin(th), edge = rayEdge(dx, dy);
+    const U = lerp(4.5, 2.8, g) * (0.35 + R());
+    drops.push({ x: dx * edge * 0.92, y: dy * edge * 0.92, z: 0.02, vx: dx * U, vy: dy * U, vz: 1.2 + 3 * R(), r: 0.012 + 0.03 * R() ** 2, land: 0, flying: true });
+  }
+  splat = { fingers, drops };
+  fieldDirty = true;
+}
+
+function stepSplat(h) {
+  tau += h; sinceImpact += h;
+  const g = P.goo, drag = lerp(3.2, 8.5, g), tens = lerp(0.8, 2.2, g);
+  const spreadNow = P.spread * spring(tau);
+  for (const f of splat.fingers) {
+    const n = f.nodes, b = n[0];
+    const bx = f.dx * (f.edge + spreadNow * 0.75), by = f.dy * (f.edge + spreadNow * 0.75);
+    b.vx = (bx - b.x) / h; b.vy = (by - b.y) / h; b.x = bx; b.y = by;
+    const k = Math.exp(-drag * h);
+    for (let j = 1; j < NODES; j++) {
+      const p = n[j], a = n[j - 1];
+      const free = f.pinch > 0 && j === NODES - 1;
+      p.vx *= k; p.vy *= k;
+      if (!free) { p.vx += (a.x - p.x) * tens * h * 8; p.vy += (a.y - p.y) * tens * h * 8; }   // surface tension creeps the finger back
+      p.x += p.vx * h; p.y += p.vy * h;
+      if (free) continue;
+      // the goo only stretches so far per segment: past that the outer node is yanked back and bounces a little
+      const ex = p.x - a.x, ey = p.y - a.y, L = Math.hypot(ex, ey), max = f.seg * (j === NODES - 1 ? 1.25 : 1);
+      if (L > max) {
+        if (f.brk && j === NODES - 1 && L > max * 1.05) { f.pinch = 1e-3; continue; }
+        const ux = ex / L, uy = ey / L;
+        p.x = a.x + ux * max; p.y = a.y + uy * max;
+        const vr = (p.vx - a.vx) * ux + (p.vy - a.vy) * uy;
+        if (vr > 0) { p.vx -= ux * vr * 1.3; p.vy -= uy * vr * 1.3; }
+      }
+    }
+    if (f.pinch > 0) f.pinch = Math.min(1, f.pinch + h * 7);
+  }
+  for (const d of splat.drops) {
+    if (d.flying) {
+      d.vz -= GRAV * h; d.z += d.vz * h; d.x += d.vx * h; d.y += d.vy * h;
+      d.vx *= Math.exp(-0.6 * h); d.vy *= Math.exp(-0.6 * h);
+      if (d.z <= 0) { d.z = 0; d.flying = false; d.vx *= 0.18; d.vy *= 0.18; }
+    } else {
+      d.land = Math.min(1, d.land + h * 12);
+      const k = Math.exp(-14 * h); d.vx *= k; d.vy *= k; d.x += d.vx * h; d.y += d.vy * h;
+    }
+  }
+}
+
+// derived look of the current moment
+function look() {
+  const L = { hA: 0, spread: 0, S: 1, reveal: 0, rho: 0, holeAmp: 0, flat: 1, landed: 0, wobS: 0, shadowA: 1, rev: 0 };
+  if (phase === 'fall') { L.hA = H0() * (1 - tf / P.fall); return L; }
+  const sp = spring(tau);
+  L.spread = P.spread * sp;
+  L.flat = 1 - 0.45 * clamp01(sp);
+  L.landed = smooth(0, 0.1, tau);
+  L.shadowA = 1 - L.landed;
+  L.wobS = P.wobble * (0.07 * Math.exp(-tau * 3.2) + 0.012);
+  if (tau > P.hold) {
+    const r = tau - P.hold;
+    L.reveal = 1; L.rev = r;
+    L.rho = 0.03 + 0.6 * r + 5 * r * r;
+    L.S = 1 + 1.3 * r * r;
+    L.holeAmp = 0.06 * Math.min(1, L.rho * 2);
+  }
+  return L;
+}
+function cornerR() { const sq = lab.square(), f = fitLogo(sq); return Math.hypot(sq.w, sq.h) / 2 / f.scale + 0.05; }
+
+function advance(dt) {
+  clock += dt;
+  if (phase === 'fall') {
+    tf += dt; sinceImpact += dt;
+    if (tf >= P.fall) { const extra = tf - P.fall; tf = P.fall; impact(); stepFor(extra); }
+  } else stepFor(dt);
+  if (phase === 'splat') {
+    const L = look();
+    if (L.reveal && L.rho - L.holeAmp > cornerR()) { cycle++; phase = 'fall'; tf = 0; splat = null; fieldDirty = true; }
+  }
+}
+let acc = 0;
+function stepFor(dt) { acc += dt; while (acc >= SUB) { stepSplat(SUB); acc -= SUB; } }
+
+function dropNow() {
+  if (phase === 'fall') tf = Math.max(tf, P.fall - 0.55);
+  dirty = true;
+}
+
+// ---- colours: world k has slime colour k, and its floor is tinted by a colour half the ramp away ----
+const rgb = h => hex(h).map(v => v / 255);
+function world(k) {
+  const c = lab.palette.colors, n = c.length, tint = c[(k + Math.max(1, n >> 1)) % n];
+  return { slime: rgb(c[k % n]), floor: rgb(mix('#000000', tint, 0.1)), line: rgb(mix('#000000', tint, 0.42)) };
+}
+
+// ---- beads ----
+function catmull(p0, p1, p2, p3, t) {
+  const t2 = t * t, t3 = t2 * t;
+  return 0.5 * (2 * p1 + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 + (-p0 + 3 * p1 - 3 * p2 + p3) * t3);
+}
+let nBodies = 0, nShadows = 0;
+function buildBeads(L) {
+  let n = 0;
+  const S = L.S, sr = Math.sqrt(S);
+  const push = (x, y, R, w) => { if (n >= MAX_BEADS) return; const o = n * 4; beadData[o] = x * S; beadData[o + 1] = y * S; beadData[o + 2] = R * sr; beadData[o + 3] = w * FIELD_K; n++; };
+  for (const f of splat.fingers) {
+    const nd = f.nodes;
+    let total = 0;
+    for (let j = 1; j < NODES; j++) total += Math.hypot(nd[j].x - nd[j - 1].x, nd[j].y - nd[j - 1].y);
+    const thin = Math.min(1, Math.max(0.55, Math.sqrt(0.32 / Math.max(total, 1e-3))));   // stretched goo gets thinner
+    const rad = j => (j === 0 || j === NODES - 1) ? nd[j].r : nd[j].r * thin;
+    for (let j = 0; j < NODES - 1; j++) {
+      const a = nd[j], b = nd[j + 1], p0 = nd[Math.max(0, j - 1)], p3 = nd[Math.min(NODES - 1, j + 2)];
+      const ra = rad(j), rb = rad(j + 1), len = Math.hypot(b.x - a.x, b.y - a.y);
+      const nb = Math.min(24, Math.max(1, Math.ceil(len / (0.4 * Math.min(ra, rb)))));
+      const ds = len / nb, pinch = j === NODES - 2 ? f.pinch : 0;
+      for (let k = 0; k < nb; k++) {
+        const t = k / nb, e = t * t * (3 - 2 * t);
+        const r = lerp(ra, rb, e) * (1 - pinch * Math.sin(Math.PI * t));
+        if (r < 0.003) continue;
+        const R = r / 0.43;
+        push(catmull(p0.x, a.x, b.x, p3.x, t), catmull(p0.y, a.y, b.y, p3.y, t), R, Math.min(1, ds / (R * 0.914)));
+      }
+    }
+    const tip = nd[NODES - 1];
+    push(tip.x, tip.y, tip.r / 0.454, 1);
+  }
+  for (const d of splat.drops) {
+    const s = C / (C - Math.min(d.z, C * 0.7)), r = d.r * (1 + 0.4 * d.land);
+    push(d.x * s, d.y * s, r * s / 0.454, 1);
+  }
+  nBodies = n;
+  if (P.shadow) for (const d of splat.drops) {
+    if (d.z <= 0.001) continue;
+    push(d.x + d.z * LS[0], d.y + d.z * LS[1], d.r * (1 + 1.5 * d.z) / 0.454, 0.6 / (1 + 3 * d.z));
+  }
+  nShadows = n - nBodies;
+}
+
+// ---- render ----
+let ms = 0;
+function render() {
+  const sq = lab.square(), fl = fitLogo(sq), L = look();
+  // the thud: the camera rides the mark, so it stops with it and rattles a moment
+  let shx = 0, shy = 0;
+  if (!lab.calm && sinceImpact < 0.8) {
+    const e = Math.exp(-sinceImpact * 8) * P.shake * 0.035 * fl.scale * dpr;
+    shy = e * Math.sin(sinceImpact * 52); shx = e * 0.35 * Math.sin(sinceImpact * 37 + 1);
+  }
+  const cx = fl.cx * dpr + shx, cy = fl.cy * dpr + shy, scale = fl.scale * dpr;
+
+  gl.disable(gl.DEPTH_TEST);
+  if (phase === 'splat' || fieldDirty) {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fieldFb);
+    gl.viewport(0, 0, fW, fH);
+    gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
+    if (phase === 'splat') {
+      buildBeads(L);
+      gl.useProgram(beadProg.p);
+      gl.uniform2f(beadProg.u.uRes, fW, fH);
+      gl.uniform2f(beadProg.u.uCenter, cx * fScale, cy * fScale);
+      gl.uniform1f(beadProg.u.uScale, scale * fScale);
+      gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
+      gl.bindVertexArray(beadVao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, beadBuf);
+      gl.bufferSubData(gl.ARRAY_BUFFER, 0, beadData, 0, (nBodies + nShadows) * 4);
+      gl.uniform2f(beadProg.u.uMask, 1, 0);
+      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, nBodies);
+      if (nShadows) {
+        gl.uniform2f(beadProg.u.uMask, 0, 1);
+        gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 0, nBodies * 16);
+        gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, nShadows);
+        gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 0, 0);
+      }
+      gl.disable(gl.BLEND);
+    }
+    fieldDirty = false;
+  }
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(0, 0, Wpx, Hpx);
+  const u = compProg.u, A = world(cycle), B = world(cycle + 1);
+  gl.useProgram(compProg.p);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, sdfTex); gl.uniform1i(u.uSdf, 0);
+  gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, fieldTex); gl.uniform1i(u.uField, 1);
+  gl.uniform2f(u.uRes, Wpx, Hpx);
+  gl.uniform2f(u.uCenter, cx, cy);
+  gl.uniform1f(u.uScale, scale);
+  gl.uniform1f(u.uTime, clock);
+  gl.uniform1f(u.uFieldK, FIELD_K);
+  gl.uniform1f(u.uD, P.grid);
+  gl.uniform1f(u.uGloss, P.gloss);
+  gl.uniform1f(u.uShadowOn, P.shadow ? 1 : 0);
+  gl.uniform3fv(u.uFloorA, A.floor); gl.uniform3fv(u.uLineA, A.line); gl.uniform3fv(u.uSlimeA, A.slime);
+  gl.uniform3fv(u.uFloorB, B.floor); gl.uniform3fv(u.uLineB, B.line); gl.uniform3fv(u.uSlimeB, B.slime);
+  gl.uniform1f(u.uHA, L.hA); gl.uniform1f(u.uHB, H0());
+  gl.uniform1f(u.uSpread, L.spread); gl.uniform1f(u.uS, L.S);
+  gl.uniform1f(u.uWobL, P.wobble * 0.014); gl.uniform1f(u.uWobS, L.wobS);
+  gl.uniform1f(u.uFlat, L.flat); gl.uniform1f(u.uLanded, L.landed); gl.uniform1f(u.uShadowA, L.shadowA);
+  gl.uniform1f(u.uReveal, L.reveal); gl.uniform1f(u.uRho, L.rho); gl.uniform1f(u.uHoleAmp, L.holeAmp);
+  gl.bindVertexArray(tri);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+}
+
+function hud() {
+  const L = look();
+  let s;
+  if (lab.calm) s = 'paused mid-splat (reduced motion)';
+  else if (phase === 'fall') s = `falling · <b>${L.hA.toFixed(1)}</b> to the floor · floor at <b>${(C / (C + L.hA) * 100).toFixed(0)}%</b>`;
+  else if (!L.reveal) s = `splat · <b>${tau.toFixed(2)} s</b>`;
+  else s = 'tearing through to the next one';
+  lab.hud(`${s}<br>drop <b>${cycle + 1}</b> · ${Wpx}×${Hpx} px · <b>${ms.toFixed(2)} ms</b>`);
+}
+
+// Reduced motion: one good still, the moment the tear opens on the next mark.
+function still() {
+  cycle = 0; phase = 'fall'; tf = 0; clock = 1.3; acc = 0;
+  impact();
+  stepFor(P.hold + 0.17);
+  sinceImpact = 1e9;
+  dirty = true;
+}
+
+// ---- wiring ----
+canvas.addEventListener('pointerdown', () => dropNow());
+lab.on('resize', fit);
+lab.on('palette', () => { dirty = true; });
+lab.on('change', key => {
+  if (lab.calm && ['fingers', 'spray', 'goo', 'spread', 'hold'].includes(key)) still();
+  dirty = true;
+});
+lab.on('reset', () => { if (lab.calm) still(); });
+fit();
+if (lab.calm) still();
+
+let hudTick = 0;
+lab.loop(dt => {
+  if (paused) return;
+  if (!lab.calm) advance(dt * P.speed);
+  else if (!dirty) return;
+  const t0 = performance.now();
+  render();
+  dirty = false;
+  ms = ms * 0.9 + (performance.now() - t0) * 0.1;
+  if (++hudTick % 8 === 0 || lab.calm) hud();
+});
+hud();
+
+// test hooks: advance and draw without requestAnimationFrame
+window.__lab = {
+  step(n = 1, dt = 1 / 60) { for (let k = 0; k < n; k++) advance(dt * P.speed); render(); hud(); return this.state(); },
+  renderOnce() { render(); hud(); },
+  // jump('fall', 0.8) → 80% of the way down; jump('splat', 0.3) → 0.3 s after impact; jump('reveal', 0.2) → 0.2 s into the tear
+  jump(what = 'splat', x = 0.3) {
+    acc = 0; splat = null; fieldDirty = true; sinceImpact = 1e9;
+    if (what === 'fall') { phase = 'fall'; tf = x * P.fall; }
+    else { phase = 'fall'; tf = P.fall; impact(); stepFor(what === 'reveal' ? P.hold + x : x); sinceImpact = 1e9; }
+    render(); hud(); return this.state();
+  },
+  pause(on = true) { paused = on; },
+  state() { const L = look(); return { phase, cycle, tf: +tf.toFixed(3), tau: +tau.toFixed(3), hA: +L.hA.toFixed(3), reveal: L.reveal, rho: +L.rho.toFixed(3), beads: nBodies, shadows: nShadows, halfOK, ms: +ms.toFixed(2) }; },
+  measure(frames = 60) { const t0 = performance.now(); for (let k = 0; k < frames; k++) { advance(1 / 60); render(); } gl.finish(); return (performance.now() - t0) / frames; }
+};
+</script>
