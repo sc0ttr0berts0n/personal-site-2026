@@ -257,6 +257,11 @@ feed.addEventListener('pointermove', e => {
   drag.samples.push([e.timeStamp, e.clientX]);
   while (drag.samples.length > 2 && e.timeStamp - drag.samples[0][0] > 90) drag.samples.shift();
   placeAll(drag.dx);
+  // the toy coming into view is live as soon as any of it shows; the one on the other side rests
+  if (drag.dx) for (const s of slides.values()) {
+    if (s.offset === (drag.dx < 0 ? 1 : -1)) play(s);
+    else if (s.offset === (drag.dx < 0 ? -1 : 1)) pause(s);
+  }
 });
 function endDrag(e, cancelled) {
   if (!drag || e.pointerId !== drag.id) return;
@@ -274,6 +279,7 @@ function endDrag(e, cancelled) {
     go(d.dx < 0 ? 1 : -1, { ms, t0: performance.now() });
   } else {
     animate(true, 300); placeAll(0); settle(300);
+    for (const s of slides.values()) if (s.offset) pause(s);
   }
 }
 feed.addEventListener('pointerup', e => endDrag(e, false));
