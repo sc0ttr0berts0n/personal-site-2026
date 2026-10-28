@@ -15,6 +15,9 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const SRC = resolve(process.argv[2] || process.env.LABS_SRC || join(ROOT, '..', 'sr-personal-2026', 'labs'));
 const OUT = join(ROOT, 'labs');
 const EMBED_TAG = '<script src="../embed/lab-embed.js"></script>';
+// The labs are written for the artifact viewer, which supplies its own viewport. Served directly, a phone would
+// lay them out at desktop width unless the page says otherwise.
+const VIEWPORT_TAG = '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">';
 
 // Lab file → its folder in notes/versions, where the names differ.
 const VERSION_DIRS = { fluid: 'vessel', godrays: 'logo-light' };
@@ -50,7 +53,8 @@ for (const file of (await readdir(SRC)).filter(f => f.endsWith('.html')).sort())
     if (at < 0) { console.warn(`  ! ${file}: no <meta charset>, embed hooks not added`); }
     else {
       const end = html.indexOf('>', at) + 1;
-      html = html.slice(0, end) + '\n' + EMBED_TAG + html.slice(end);
+      const viewport = /<meta name="viewport"/i.test(html) ? '' : '\n' + VIEWPORT_TAG;
+      html = html.slice(0, end) + viewport + '\n' + EMBED_TAG + html.slice(end);
     }
   }
   await writeFile(join(OUT, file), html);

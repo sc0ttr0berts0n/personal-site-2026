@@ -1,0 +1,4 @@
+# Plain static site: no build step. labs/ is committed (made by npm run sync), so Netlify just publishes the repo.
+[build]
+  publish = "."
+  command = ""
