@@ -29,12 +29,16 @@ const LS = [0.5, 0.667];    // shadow offset per unit of height (light from the 
 const SUB = 1 / 240;        // splat physics substep, s
 const NODES = 6;            // nodes per finger: base (pinned to the puddle edge) … tip
 const GRAV = 14;            // droplet gravity, logo units / s²
-const RING = 0.05;          // the reveal's slime rim sits this far outside the hole
+// After the splat settles (times from the end of Settle): the next floor's grid fades in on the splat, the splat
+// drains into a window onto that floor, then the mound over the mark squeezes off the next mark, which drops through.
+const GRID_IN = [0, 0.4], DRAIN = [0.2, 0.75], PRESS = [0.55, 1.05];
+const PASS = 0.975;         // the old floor is dropped once the camera is this fraction of the way down to it
+const fallY = x => P.height * C * (0.92 * x * x + 0.08 * x);   // distance fallen: nearly free fall, so it starts from rest
 
 const lab = createLab({
   number: '12',
   title: 'Splat!',
-  blurb: 'A fine grid, slowly zooming. It’s really a camera locked onto the mark, the mark is made of slime, and it’s falling fast. It hits the floor, splats into fingers and droplets, then tears open on the next mark, in the next colour, already falling.',
+  blurb: 'A fine grid, slowly zooming. It’s really a camera locked onto the mark, the mark is made of slime, and it’s falling fast. It hits the floor and splats. Then the next floor’s grid shows through the splat, the pressure squeezes out the next mark in the next colour, and down it goes, through the hole the splat left.',
   teaches: 'perspective (screen size goes as 1 / distance, so a steady fall reads as an accelerating zoom) · metaballs: an additive field cut at one level, with one-pixel analytic antialiasing · springs and plastic rope chains for goo',
   hint: 'tap to drop it now',
   grid: false,
@@ -250,10 +254,9 @@ uniform sampler2D uSdf, uSoft, uField;
 uniform vec2 uRes, uCenter;
 uniform float uScale, uTime, uFieldK, uD, uGloss, uShadowOn;
 uniform vec3 uFloorA, uLineA, uSlimeA, uFloorB, uLineB, uSlimeB;
-uniform float uHA, uHB, uSpread, uS, uWobL, uWobS, uFlat, uLanded, uShadowA;
-uniform float uReveal, uRho, uHoleAmp;
+uniform float uHB, uSA, uAOn, uSpread, uWobL, uWobS, uFlat, uLanded, uShadowA, uGIn, uDrain, uPress;
 out vec4 o;
-const float T = ${T.toFixed(3)}, W = ${EDGE.toFixed(3)}, DOM = ${DOM.toFixed(3)}, C = ${C.toFixed(3)}, RING = ${RING.toFixed(3)};
+const float T = ${T.toFixed(3)}, W = ${EDGE.toFixed(3)}, DOM = ${DOM.toFixed(3)}, C = ${C.toFixed(3)};
 const vec2 LS = vec2(${LS[0].toFixed(3)}, ${LS[1].toFixed(3)});
 const vec3 L1 = vec3(-0.408, -0.544, 0.816);   // normalize(-LS, 1): the same light that throws the shadows
 const vec3 L2 = vec3(0.62, -0.35, 0.70);        // a dimmer window on the upper right, for a second wet glint
@@ -277,26 +280,29 @@ float cubic(sampler2D t, vec2 uv){
 float sdfSoft(vec2 q){ vec2 c = clamp(q, -DOM, DOM); return cubic(uSoft, q / (2. * DOM) + .5) + length(q - c); }
 float Lf(float s){ float x = max(1. - s / W, 0.); return T * x * x; }
 float wob(vec2 q, float amp, float freq, float sp){ return amp * (vnoise(q * freq + vec2(uTime * sp, -uTime * sp * .7)) - .5); }
-float holeH(vec2 q){
-  float a = atan(q.y, q.x);
-  float n = sin(a * 5. + uTime * 1.3) * .5 + sin(a * 9. - uTime * 2.1) * .3 + sin(a * 14. + 1.7) * .2;
-  return uRho + uHoleAmp * n - length(q);
-}
+// Depth below the surface's outline, read back from the field (exact for Lf).
+float depth(float f){ return W * (sqrt(max(f, T) / T) - 1.); }
 // x = the field that sets the outline, y = the mound: the mark's own body, which stays thick inside the puddle
 // the mark that is still in the air (identical to FA before impact, so the hand-off is exact)
 vec2 FB(vec2 q){ float w = wob(q, uWobL, 6., .6); return vec2(Lf(sdfAt(q) + w), Lf(sdfSoft(q) + w)); }
-// the mark that landed: its outline dilated into a puddle, plus the beads, minus the tear
-vec2 FA(vec2 q, vec2 uv){
-  vec2 qs = q / uS;
+// The mark that landed, on its own floor plane (scaled by uSA as the camera drops past it): its outline dilated
+// into a puddle, plus the beads. Then the puddle drains from its deepest parts into a window (everything but the
+// mound over the mark), and the mound is squeezed off from the mark's middle out, leaving a lip around it.
+// Returns (outline field, mound field, puddle depth, distance to the mark).
+vec4 FA(vec2 q, vec2 uv){
+  vec2 qs = q / uSA;
   float w = wob(qs, uWobL, 6., .6) + wob(qs, uWobS, 3.2, 2.2);
-  float F = Lf(sdfAt(qs) - uSpread + w) + texture(uField, uv).r / uFieldK;
+  float sB = sdfAt(qs);
+  float P0 = Lf(sB - uSpread + w), dP = depth(P0);
+  float F = P0 + texture(uField, uv).r / uFieldK;
   float M = Lf(sdfSoft(qs) - uSpread * .3 + w);
-  if (uReveal > .5) {
-    float H = holeH(q), x = (H + RING) / .035, k = clamp(-H / .08, 0., 1.);
-    F = F * k + (1.6 * T + F) * exp(-x * x);
-    M *= k;
-  }
-  return vec2(F, M);
+  float dcut = mix(.26, .022, uDrain);
+  float drain = smoothstep(.02, .05, sB) * smoothstep(dcut - .012, dcut, dP) * step(.001, uDrain);
+  float clr = clamp((sB - mix(-.11, .006, uPress)) / .015, 0., 1.);
+  float x = (sB - .026) / .014;
+  F = F * (1. - drain) * clr + uPress * T * 2. * exp(-x * x);
+  M *= (1. - drain) * clr;
+  return vec4(F, M, dP, sB);
 }
 float gridLevel(vec2 uv, float lw){
   vec2 dd = max(fwidth(uv), vec2(1e-6));
@@ -305,12 +311,11 @@ float gridLevel(vec2 uv, float lw){
   vec2 l = clamp((w - d) / dd + .5, 0., 1.);
   return max(l.x, l.y) * smoothstep(2.5, 8., 1. / max(dd.x, dd.y));
 }
-vec3 floorCol(vec2 q, float h, vec3 fl, vec3 ln){
+float gridA(vec2 q, float h){
   vec2 u = q * (C + h) / C * uD;
   float a = .42 * gridLevel(u, .035);
   a = max(a, .72 * gridLevel(u / 4., .056 / 4.));
-  a = max(a, gridLevel(u / 16., .08 / 16.));
-  return mix(fl, ln, a);
+  return max(a, gridLevel(u / 16., .08 / 16.));
 }
 float logoShadow(vec2 q, float h){
   if (h <= 0.) return 0.;
@@ -318,9 +323,7 @@ float logoShadow(vec2 q, float h){
   float b = .015 + .06 * h;
   return (1. - smoothstep(-b, b, sdfAt(u - h * LS))) * .55 * min(1., 1.6 / (1. + .35 * h));
 }
-// Depth below the surface's outline, read back from the field (exact for Lf), then a round profile:
-// a rolled edge everywhere the slime is, plus the mound of the mark's body (which flattens as it lands).
-float depth(float f){ return W * (sqrt(max(f, T) / T) - 1.); }
+// Round profiles: a rolled edge everywhere the slime is, plus the mound of the mark's body (which flattens as it lands).
 float circ(float f, float r){ float x = 1. - min(depth(f) / r, 1.); return sqrt(1. - x * x); }
 float dome(float f, float r){ float x = min(depth(f) / r, 1.); return x * (2. - x); }
 float hgt(vec2 f, float k){ return .02 * circ(f.x, .022) + .045 * k * dome(f.y, .09); }
@@ -345,21 +348,28 @@ void main(){
   vec2 q = (vec2(px.x, uRes.y - px.y) - uCenter) * pq;
   vec2 dqx = vec2(pq, 0.), dqy = vec2(0., -pq), dux = vec2(1. / uRes.x, 0.), duy = vec2(0., 1. / uRes.y);
 
-  vec3 col = floorCol(q, uHA, uFloorA, uLineA);
-  vec2 fa0 = FA(q, uv), fax = FA(q + dqx, uv + dux), fay = FA(q + dqy, uv + duy);
-  float sh = uShadowOn * uShadowA * logoShadow(q, uHA);
-  float ao = uLanded * .45 * smoothstep(0., T, fa0.x);
-  float ds = uShadowOn * .45 * smoothstep(.03, .6, texture(uField, uv).g / uFieldK);
-  col *= (1. - sh) * (1. - ao) * (1. - ds);
-
-  if (uReveal > .5) {
-    float m = clamp((holeH(q) + RING) / pq + .5, 0., 1.);
-    vec3 cb = floorCol(q, uHB, uFloorB, uLineB) * (1. - uShadowOn * logoShadow(q, uHB));
-    vec4 sb = slime(uSlimeB, FB(q), FB(q + dqx), FB(q + dqy), pq, 1.);
-    col = mix(col, mix(cb, sb.rgb, sb.a), m);
-  }
-  vec4 sa = slime(uSlimeA, fa0, fax, fay, pq, uFlat);
-  o = vec4(mix(col, sa.rgb, sa.a), 1.);
+  // the falling mark over its floor
+  float aB = gridA(q, uHB);
+  vec3 col = mix(uFloorB, uLineB, aB) * (1. - uShadowOn * logoShadow(q, uHB));
+  vec4 sb = slime(uSlimeB, FB(q), FB(q + dqx), FB(q + dqy), pq, 1.);
+  if (uAOn > .5) {
+    // the landed splat's floor, with a window through the splat onto the falling mark's floor
+    vec2 qa = q / uSA;
+    vec3 colA = mix(uFloorA, uLineA, gridA(qa, 0.));
+    vec4 fa0 = FA(q, uv), fax = FA(q + dqx, uv + dux), fay = FA(q + dqy, uv + duy);
+    float sh = uShadowOn * uShadowA * logoShadow(qa, .001);
+    float ao = uLanded * .45 * smoothstep(0., T, fa0.x);
+    float ds = uShadowOn * .45 * smoothstep(.03, .6, texture(uField, uv).g / uFieldK);
+    colA *= (1. - sh) * (1. - ao) * (1. - ds);
+    col = mix(colA, col, step(.001, uDrain) * smoothstep(0., .006, fa0.z));
+    col = mix(col, sb.rgb, sb.a);
+    vec4 sa = slime(uSlimeA, fa0.xy, fax.xy, fay.xy, pq, uFlat);
+    // the next floor's grid shows on the splat before the splat opens onto it
+    float lines = uGIn * aB * smoothstep(.02, .05, fa0.w) * smoothstep(.01, .03, fa0.z);
+    sa.rgb = mix(sa.rgb, uLineB, lines * .85);
+    col = mix(col, sa.rgb, sa.a);
+  } else col = mix(col, sb.rgb, sb.a);
+  o = vec4(col, 1.);
 }`);
 
 // ---- sizing ----
@@ -390,9 +400,12 @@ const clamp01 = x => Math.min(1, Math.max(0, x));
 const smooth = (a, b, x) => { const t = clamp01((x - a) / (b - a)); return t * t * (3 - 2 * t); };
 
 // ---- the cycle ----
-let cycle = 0, phase = 'fall', tf = 0, tau = 0, sinceImpact = 1e9, splat = null, clock = 0;
+// phase 'fall': mark `cycle` is falling; `prev` is the splat it was squeezed out of, until the camera drops past it.
+// phase 'splat': mark `cycle` has landed; mark `cycle + 1` waits under its mound.
+let cycle = 0, phase = 'fall', tf = 0, tau = 0, sinceImpact = 1e9, splat = null, prev = null, clock = 0;
 let dirty = true, fieldDirty = true, paused = false;
 const H0 = () => P.height * C;
+const pressEnd = () => P.hold + PRESS[1];
 const zeta = () => lerp(0.32, 0.75, P.goo), omega = () => lerp(24, 13, P.goo);
 // damped spring from 0 toward 1: the puddle shoots past its final size and settles back
 function spring(t) {
@@ -466,51 +479,57 @@ function stepSplat(h) {
   }
 }
 
-// derived look of the current moment
+// What to draw right now. A = the landed splat (if any), on a floor plane that rushes past the camera once the
+// next mark falls; B = the falling mark, its floor below.
 function look() {
-  const L = { hA: 0, spread: 0, S: 1, reveal: 0, rho: 0, holeAmp: 0, flat: 1, landed: 0, wobS: 0, shadowA: 1, rev: 0 };
-  if (phase === 'fall') { L.hA = H0() * (1 - tf / P.fall); return L; }
-  const sp = spring(tau);
+  const L = { y: 0, hB: H0(), Bk: cycle, AOn: 0, Ak: cycle - 1, SA: 1, sp: null, tauA: 0,
+    spread: 0, flat: 1, landed: 0, shadowA: 1, wobS: 0, gIn: 0, drain: 0, press: 0 };
+  if (phase === 'splat') { L.AOn = 1; L.Ak = cycle; L.Bk = cycle + 1; L.sp = splat; L.tauA = tau; }
+  else {
+    L.y = fallY(tf / P.fall); L.hB = H0() - L.y;
+    if (prev && L.y < C * PASS) { L.AOn = 1; L.sp = prev.splat; L.tauA = prev.tau; L.SA = C / (C - L.y); }
+  }
+  if (!L.AOn) return L;
+  const t = L.tauA, sp = spring(t), r = t - P.hold;
   L.spread = P.spread * sp;
   L.flat = 1 - 0.45 * clamp01(sp);
-  L.landed = smooth(0, 0.1, tau);
+  L.landed = smooth(0, 0.1, t);
   L.shadowA = 1 - L.landed;
-  L.wobS = P.wobble * (0.07 * Math.exp(-tau * 3.2) + 0.012) * smooth(0, 0.06, tau);
-  if (tau > P.hold) {
-    const r = tau - P.hold;
-    L.reveal = 1; L.rev = r;
-    L.rho = 0.03 + 0.45 * r + 3.4 * r * r;   // the tear accelerates out past the corners
-    L.S = 1 + 0.9 * r * r;                   // and sweeps the old splat out ahead of it
-    L.holeAmp = 0.06 * Math.min(1, L.rho * 2);
-  }
+  L.wobS = P.wobble * (0.07 * Math.exp(-t * 3.2) + 0.012) * smooth(0, 0.06, t);
+  L.gIn = smooth(GRID_IN[0], GRID_IN[1], r);
+  L.drain = smooth(DRAIN[0], DRAIN[1], r);
+  L.press = smooth(PRESS[0], PRESS[1], r);
   return L;
 }
-function cornerR() { const sq = lab.square(), f = fitLogo(sq); return Math.hypot(sq.w, sq.h) / 2 / f.scale + 0.05; }
 
 function advance(dt) {
   clock += dt;
   if (phase === 'fall') {
     tf += dt; sinceImpact += dt;
-    if (tf >= P.fall) { const extra = tf - P.fall; tf = P.fall; impact(); stepFor(extra); }
-  } else stepFor(dt);
-  if (phase === 'splat') {
-    const L = look();
-    if (L.reveal && L.rho - L.holeAmp > cornerR()) { cycle++; phase = 'fall'; tf = 0; splat = null; fieldDirty = true; }
+    if (tf >= P.fall) { const extra = tf - P.fall; tf = P.fall; prev = null; impact(); stepFor(extra); }
+  } else {
+    stepFor(dt);
+    if (tau >= pressEnd()) dropThrough(tau - pressEnd());
   }
+}
+// the squeezed-out mark starts to fall, through the splat it came from
+function dropThrough(t = 0) {
+  prev = { splat, tau };
+  cycle++; phase = 'fall'; tf = t; splat = null; fieldDirty = true;
 }
 let acc = 0;
 function stepFor(dt) { acc += dt; while (acc >= SUB) { stepSplat(SUB); acc -= SUB; } }
 
 function dropNow() {
-  if (phase === 'fall') tf = Math.max(tf, P.fall - 0.55);
+  if (phase === 'fall') { tf = Math.max(tf, P.fall - 0.55); prev = null; }
   dirty = true;
 }
 
-// ---- colours: world k has slime colour k, and its floor is tinted by a colour half the ramp away ----
+// ---- colours: mark k is slime colour k, and its floor is the colour of the splat it fell through ----
 const rgb = h => hex(h).map(v => v / 255);
 function world(k) {
-  const c = lab.palette.colors, n = c.length, tint = c[(k + Math.max(1, n >> 1)) % n];
-  return { slime: rgb(c[k % n]), floor: rgb(mix('#000000', tint, 0.1)), line: rgb(mix('#000000', tint, 0.42)) };
+  const c = lab.palette.colors, n = c.length, at = i => c[((i % n) + n) % n], tint = at(k - 1);
+  return { slime: rgb(at(k)), floor: rgb(mix('#000000', tint, 0.16)), line: rgb(mix('#000000', tint, 0.55)) };
 }
 
 // ---- beads ----
@@ -521,8 +540,9 @@ function catmull(p0, p1, p2, p3, t) {
 let nBodies = 0, nShadows = 0;
 function buildBeads(L) {
   let n = 0;
+  const splat = L.sp, y = L.y;
   // the goo squeezes out of the mark's edge over the first instants instead of appearing all at once
-  const S = L.S, sr = Math.sqrt(S) * smooth(0, 0.07, tau);
+  const S = L.SA, sr = S * smooth(0, 0.07, L.tauA);
   const push = (x, y, R, w) => { if (n >= MAX_BEADS) return; const o = n * 4; beadData[o] = x * S; beadData[o + 1] = y * S; beadData[o + 2] = R * sr; beadData[o + 3] = w * FIELD_K; n++; };
   for (const f of splat.fingers) {
     const nd = f.nodes;
@@ -550,7 +570,8 @@ function buildBeads(L) {
     push(tip.x, tip.y, tip.r / 0.454, 1);
   }
   for (const d of splat.drops) {
-    const s = C / (C - Math.min(d.z, C * 0.7)), r = d.r * (1 + 0.4 * d.land);
+    // push() scales by S again, so this is the droplet's own perspective relative to its floor
+    const s = C / Math.max(0.05, C - y - Math.min(d.z, C * 0.7)) / S, r = d.r * (1 + 0.4 * d.land);
     push(d.x * s, d.y * s, r * s / 0.454, 1);
   }
   nBodies = n;
@@ -574,11 +595,12 @@ function render() {
   const cx = fl.cx * dpr + shx, cy = fl.cy * dpr + shy, scale = fl.scale * dpr;
 
   gl.disable(gl.DEPTH_TEST);
-  if (phase === 'splat' || fieldDirty) {
+  const beads = L.AOn > 0;
+  if (beads || fieldDirty) {
     gl.bindFramebuffer(gl.FRAMEBUFFER, fieldFb);
     gl.viewport(0, 0, fW, fH);
     gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
-    if (phase === 'splat') {
+    if (beads) {
       buildBeads(L);
       gl.useProgram(beadProg.p);
       gl.uniform2f(beadProg.u.uRes, fW, fH);
@@ -598,12 +620,12 @@ function render() {
       }
       gl.disable(gl.BLEND);
     }
-    fieldDirty = false;
+    fieldDirty = beads;
   }
 
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   gl.viewport(0, 0, Wpx, Hpx);
-  const u = compProg.u, A = world(cycle), B = world(cycle + 1);
+  const u = compProg.u, A = world(L.Ak), B = world(L.Bk);
   gl.useProgram(compProg.p);
   gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, sdfTex); gl.uniform1i(u.uSdf, 0);
   gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, fieldTex); gl.uniform1i(u.uField, 1);
@@ -618,11 +640,11 @@ function render() {
   gl.uniform1f(u.uShadowOn, P.shadow ? 1 : 0);
   gl.uniform3fv(u.uFloorA, A.floor); gl.uniform3fv(u.uLineA, A.line); gl.uniform3fv(u.uSlimeA, A.slime);
   gl.uniform3fv(u.uFloorB, B.floor); gl.uniform3fv(u.uLineB, B.line); gl.uniform3fv(u.uSlimeB, B.slime);
-  gl.uniform1f(u.uHA, L.hA); gl.uniform1f(u.uHB, H0());
-  gl.uniform1f(u.uSpread, L.spread); gl.uniform1f(u.uS, L.S);
+  gl.uniform1f(u.uHB, L.hB); gl.uniform1f(u.uSA, L.SA); gl.uniform1f(u.uAOn, L.AOn);
+  gl.uniform1f(u.uSpread, L.spread);
   gl.uniform1f(u.uWobL, P.wobble * 0.014); gl.uniform1f(u.uWobS, L.wobS);
   gl.uniform1f(u.uFlat, L.flat); gl.uniform1f(u.uLanded, L.landed); gl.uniform1f(u.uShadowA, L.shadowA);
-  gl.uniform1f(u.uReveal, L.reveal); gl.uniform1f(u.uRho, L.rho); gl.uniform1f(u.uHoleAmp, L.holeAmp);
+  gl.uniform1f(u.uGIn, L.gIn); gl.uniform1f(u.uDrain, L.drain); gl.uniform1f(u.uPress, L.press);
   gl.bindVertexArray(tri);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
 }
@@ -630,18 +652,18 @@ function render() {
 function hud() {
   const L = look();
   let s;
-  if (lab.calm) s = 'paused mid-splat (reduced motion)';
-  else if (phase === 'fall') s = `falling · <b>${L.hA.toFixed(1)}</b> to the floor · floor at <b>${(C / (C + L.hA) * 100).toFixed(0)}%</b>`;
-  else if (!L.reveal) s = `splat · <b>${tau.toFixed(2)} s</b>`;
-  else s = 'tearing through to the next one';
+  if (lab.calm) s = 'paused mid-squeeze (reduced motion)';
+  else if (phase === 'fall') s = (L.AOn ? 'falling through the splat · ' : 'falling · ') + `<b>${L.hB.toFixed(1)}</b> to the floor · floor at <b>${(C / (C + L.hB) * 100).toFixed(0)}%</b>`;
+  else if (tau < P.hold) s = `splat · <b>${tau.toFixed(2)} s</b>`;
+  else s = L.press > 0 ? 'squeezing out the next one' : 'the next floor shows through';
   lab.hud(`${s}<br>drop <b>${cycle + 1}</b> · ${Wpx}×${Hpx} px · <b>${ms.toFixed(2)} ms</b>`);
 }
 
-// Reduced motion: one good still, the moment the tear opens on the next mark.
+// Reduced motion: one good still, the next mark half squeezed out of the splat, its floor showing through.
 function still() {
-  cycle = 0; phase = 'fall'; tf = 0; clock = 1.3; acc = 0;
+  cycle = 0; phase = 'fall'; tf = 0; clock = 1.3; acc = 0; prev = null;
   impact();
-  stepFor(P.hold + 0.26);
+  stepFor(P.hold + 0.78);
   sinceImpact = 1e9;
   dirty = true;
 }
@@ -675,16 +697,22 @@ hud();
 window.__lab = {
   step(n = 1, dt = 1 / 60) { for (let k = 0; k < n; k++) advance(dt * P.speed); render(); hud(); return this.state(); },
   renderOnce() { render(); hud(); },
-  // jump('fall', 0.8) → 80% of the way down; jump('splat', 0.3) → 0.3 s after impact; jump('reveal', 0.2) → 0.2 s into the tear
+  // jump('fall', 0.8) → 80% of the way down (no splat above); jump('splat', 0.3) → 0.3 s after impact;
+  // jump('reveal', 0.6) → 0.6 s after it settles (grid, drain, squeeze); jump('through', 0.5) → 0.5 s into the next fall
   jump(what = 'splat', x = 0.3) {
-    acc = 0; splat = null; fieldDirty = true; sinceImpact = 1e9;
+    acc = 0; splat = null; prev = null; fieldDirty = true;
     if (what === 'fall') { phase = 'fall'; tf = x * P.fall; }
-    else { phase = 'fall'; tf = P.fall; impact(); stepFor(what === 'reveal' ? P.hold + x : x); sinceImpact = 1e9; }
+    else {
+      phase = 'fall'; tf = P.fall; impact();
+      stepFor(what === 'reveal' ? P.hold + x : what === 'through' ? pressEnd() : x);
+      if (what === 'through') dropThrough(x);
+    }
+    sinceImpact = 1e9;
     render(); hud(); return this.state();
   },
   pause(on = true) { paused = on; },
   still() { still(); render(); hud(); return this.state(); },   // the reduced-motion frame
-  state() { const L = look(); return { phase, cycle, tf: +tf.toFixed(3), tau: +tau.toFixed(3), hA: +L.hA.toFixed(3), reveal: L.reveal, rho: +L.rho.toFixed(3), beads: nBodies, shadows: nShadows, halfOK, ms: +ms.toFixed(2) }; },
+  state() { const L = look(); return { phase, cycle, tf: +tf.toFixed(3), tau: +tau.toFixed(3), hB: +L.hB.toFixed(3), y: +L.y.toFixed(3), throughSplat: !!(phase === 'fall' && L.AOn), beads: nBodies, shadows: nShadows, halfOK, ms: +ms.toFixed(2) }; },
   measure(frames = 60) { const t0 = performance.now(); for (let k = 0; k < frames; k++) { advance(1 / 60); render(); } gl.finish(); return (performance.now() - t0) / frames; }
 };
 </script>

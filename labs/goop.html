@@ -1069,8 +1069,15 @@ if (!gl) {
 }
 warming = window.labWarming = !!gl;
 if (warming) lab.hud('compiling the shader…');
+let failed = false;
 function finishWarming() {
-  compile();
+  try { compile(); } catch (e) {
+    // say so once and stop polling; the render loop stays off (warming), but nothing waits on it any more
+    failed = true; window.labWarming = false;
+    console.error(e);
+    lab.hud('The shader didn’t compile on this device.');
+    return;
+  }
   warming = window.labWarming = false;
   render(); hud();
 }
@@ -1100,7 +1107,7 @@ window.__lab = {
 let hudTick = 0;
 lab.loop(dt => {
   if (!gl) return;
-  if (warming) { if (compileReady()) finishWarming(); return; }
+  if (warming) { if (!failed && compileReady()) finishWarming(); return; }
   const active = !lab.calm || nowS() - lastInteract < 10;
   if (active) simulate(dt);
   if (active || dirty) render();

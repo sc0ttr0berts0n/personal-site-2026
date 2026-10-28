@@ -45,7 +45,9 @@ function savePoster(slug, url) {
 
 // ---- URL ----
 function readHash() {
-  const h = decodeURIComponent(location.hash.slice(1));
+  // a hand-typed or truncated link can hold a stray % (e.g. #sand/50%), which decodeURIComponent rejects
+  let h = location.hash.slice(1);
+  try { h = decodeURIComponent(h); } catch (e) {}
   const i = h.indexOf('/');
   const slug = i < 0 ? h : h.slice(0, i), code = i < 0 ? '' : h.slice(i + 1);
   if (!bySlug.has(slug)) return null;
@@ -103,15 +105,8 @@ function mount(s) {
 
 function dispose(s) {
   slides.delete(s.toy.slug);
-  if (!s.iframe) { s.el.remove(); return; }
-  // free WebGL contexts now rather than whenever the frame is collected
-  try {
-    for (const c of s.iframe.contentDocument?.querySelectorAll('canvas') || []) {
-      const gl = c.getContext('webgl2') || c.getContext('webgl');
-      gl?.getExtension('WEBGL_lose_context')?.loseContext();
-    }
-  } catch (e) {}
-  s.iframe.src = 'about:blank';
+  // unloading the document releases its WebGL contexts right away
+  if (s.iframe) s.iframe.src = 'about:blank';
   s.el.remove();
 }
 
@@ -194,8 +189,8 @@ function jump(i) {
   cur = i;
   const t = toys[cur];
   let s = slides.get(t.slug) || makeSlide(t, true, heavy(t));
+  animate(false);   // first, so slides still sliding from a recent swipe cut instead of crossing the screen
   for (const o of slides.values()) { o.offset = rel(indexOf(o.toy.slug)); if (o !== old) place(o); }
-  animate(false);
   if (old) { old.pinned = true; old.el.classList.add('pinned'); place(old); }
   s.el.classList.remove('entering'); void s.el.offsetWidth; s.el.classList.add('entering');
   place(s);
@@ -247,10 +242,14 @@ feed.addEventListener('pointermove', e => {
   if (!drag.active) {
     if (Math.abs(dx) > SLOP && Math.abs(dx) > Math.abs(dy)) {
       drag.active = true;
-      drag.x0 += Math.sign(dx) * SLOP;          // start from zero, no jump at the slop
+      // pick up from where the slides are now: mid-slide after a quick second swipe, at rest otherwise
+      const c = slides.get(toys[cur].slug);
+      const at = c && !c.pinned ? new DOMMatrix(getComputedStyle(c.el).transform).m41 : 0;
+      drag.x0 = e.clientX - at;                 // no jump at the slop either
       feed.setPointerCapture(e.pointerId);
       clearTimeout(settleTimer); clearTimeout(neighbourTimer);
       animate(false);
+      placeAll(at);
       // a neighbour that isn't mounted yet (fast swiping) gets mounted now, frozen
       loadNeighbours();
     } else if (Math.abs(dy) > 16) drag = null;
@@ -316,15 +315,23 @@ function reloadCurrent() {
 }
 
 // ---- dialogs ----
+const closing = new Map();   // dialog → cancels its pending close, so a quick reopen isn't shut by it
 function openDialog(d) {
-  d.showModal();
+  closing.get(d)?.();
+  if (!d.open) d.showModal();
   requestAnimationFrame(() => requestAnimationFrame(() => d.classList.add('open')));
 }
 function closeDialog(d) {
   if (!d.open) return;
   d.classList.remove('open');
-  const done = () => { d.close(); d.removeEventListener('transitionend', done); };
-  if (calm) done(); else { d.addEventListener('transitionend', done); setTimeout(done, 400); }
+  if (calm) { d.close(); return; }
+  let timer = 0;
+  const cancel = () => { clearTimeout(timer); d.removeEventListener('transitionend', done); closing.delete(d); };
+  const done = e => { if (e && e.target !== d) return; cancel(); d.close(); };
+  closing.get(d)?.();
+  closing.set(d, cancel);
+  d.addEventListener('transitionend', done);
+  timer = setTimeout(done, 400);
 }
 for (const d of document.querySelectorAll('dialog')) {
   d.addEventListener('cancel', e => { e.preventDefault(); closeDialog(d); });
