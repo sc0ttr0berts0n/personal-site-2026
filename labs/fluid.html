@@ -147,8 +147,24 @@ const cavities = polys.map((_, pi) => {
       ys.push(-((j + 0.5) / N - 0.5) * DOM * W);
     }
   }
-  return { xs: Float32Array.from(xs), ys: Float32Array.from(ys), yw: new Float32Array(xs.length), sorted: new Float32Array(xs.length) };
+  const n = xs.length;
+  return { xs: Float32Array.from(xs), ys: Float32Array.from(ys), yw: new Float32Array(n), sorted: new Float32Array(n), ka: new Uint32Array(n), kb: new Uint32Array(n) };
 });
+// Sorts float32s ascending in place, bit for bit as f.sort() does, but in linear time (it runs on every cavity
+// twice a frame): the float bits become unsigned keys that order like the numbers, then 3 radix passes of 11 bits.
+const HIST = new Uint32Array(2048);
+function sortHeights(f, a, b) {
+  const u = new Uint32Array(f.buffer, f.byteOffset, f.length), n = u.length;
+  for (let i = 0; i < n; i++) { const x = u[i]; a[i] = x & 0x80000000 ? ~x : x | 0x80000000; }
+  for (let sh = 0; sh < 32; sh += 11) {
+    HIST.fill(0);
+    for (let i = 0; i < n; i++) HIST[(a[i] >>> sh) & 2047]++;
+    for (let i = 0, s = 0; i < 2048; i++) { const c = HIST[i]; HIST[i] = s; s += c; }
+    for (let i = 0; i < n; i++) { const k = a[i]; b[HIST[(k >>> sh) & 2047]++] = k; }
+    const t = a; a = b; b = t;
+  }
+  for (let i = 0; i < n; i++) { const k = a[i]; u[i] = k & 0x80000000 ? k ^ 0x80000000 : ~k; }
+}
 
 // ---- renderer ----
 const { canvas } = lab.canvas({ context: 'none' });
@@ -564,10 +580,19 @@ function hydrostatics(k = 1) {
     if (f <= 0.002) { st.level = -1e3; st.bL = 0; return; }
     if (f >= 0.998) { st.level = 1e3; st.bL = 0; return; }
     for (let j = 0; j < n; j++) cav.yw[j] = s * cav.xs[j] + c * cav.ys[j];
-    cav.sorted.set(cav.yw); cav.sorted.sort();
+    cav.sorted.set(cav.yw); sortHeights(cav.sorted, cav.ka, cav.kb);
     const qf = f * (n - 1), j0 = Math.floor(qf);
     const guess = cav.sorted[j0] + (cav.sorted[Math.min(n - 1, j0 + 1)] - cav.sorted[j0]) * (qf - j0);
-    const want = f * n, below = L => { let a = 0; for (let j = 0; j < n; j++) a += Math.min(1, Math.max(0, (L - cav.yw[j]) / CELL + 0.5)); return a; };
+    // A sample's share below L falls as its height rises, so on the sorted heights the ones under the band about L
+    // count 1 each, the ones over it 0, and only the band needs adding up (this runs twice a frame on a phone's CPU).
+    const ys = cav.sorted, share = (L, y) => Math.min(1, Math.max(0, (L - y) / CELL + 0.5));
+    const want = f * n, below = L => {
+      let a = 0, b = n;
+      while (a < b) { const m = (a + b) >> 1; if (share(L, ys[m]) >= 1) a = m + 1; else b = m; }
+      let s = a;
+      for (let j = a; j < n; j++) { const w = share(L, ys[j]); if (w <= 0) break; s += w; }
+      return s;
+    };
     let lo = guess - CELL, hi = guess + CELL;
     for (let it = 0; it < 14; it++) { const m = (lo + hi) / 2; if (below(m) < want) lo = m; else hi = m; }
     const lvl = (lo + hi) / 2;
