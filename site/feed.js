@@ -110,16 +110,20 @@ function paintPies() {
     const s = solo ? null : slides.get(toys[wrap(cur + d)].slug);
     const state = !s || s.ready ? '' : s.iframe ? 'loading' : 'queued';
     cue.classList.toggle('nudge', !!state);   // its chevron nudges the way it points, now and then, until it's ready
-    const key = state && `${s.toy.slug} ${state} ${s.born}`;
-    if (pie.dataset.key === key) continue;
-    pie.dataset.key = key;
-    pie.classList.remove('loading', 'queued');
-    if (!state) continue;
-    pie.style.setProperty('--eta', `${Math.round(eta(s.toy.slug) * 1.2)}ms`);
-    pie.style.setProperty('--t0', `${Math.round(performance.now() - s.born)}ms`);
-    void pie.offsetWidth;   // restart the fill
-    pie.classList.add(state);
+    fillPie(pie, s, state);
   }
+}
+// state: 'loading' (fills over the guess, from when s's frame was made), 'queued' (an empty ring) or '' (hidden)
+function fillPie(pie, s, state) {
+  const key = state && `${s.toy.slug} ${state} ${s.born}`;
+  if (pie.dataset.key === key) return;
+  pie.dataset.key = key;
+  pie.classList.remove('loading', 'queued');
+  if (!state) return;
+  pie.style.setProperty('--eta', `${Math.round(eta(s.toy.slug) * 1.2)}ms`);
+  pie.style.setProperty('--t0', `${Math.round(performance.now() - s.born)}ms`);
+  void pie.offsetWidth;   // restart the fill
+  pie.classList.add(state);
 }
 function placeCues() {
   const cap = slides.get(toys[cur].slug)?.el.querySelector('.caption');
@@ -178,7 +182,7 @@ function makeSlide(t, play, defer = false) {
     <div class="stage">
       <img class="poster" alt="" hidden>
       <div class="loader" aria-hidden="true">${logoSVG({ size: 56 })}</div>
-      <i class="wait" aria-hidden="true"></i>
+      <i class="wait" aria-hidden="true"></i><i class="pie" aria-hidden="true"><b></b><b></b></i>
       <div class="edge lo" aria-hidden="true"></div><div class="edge hi" aria-hidden="true"></div>
       <span class="toyhint" aria-hidden="true"></span>
     </div>
@@ -235,9 +239,15 @@ function play(s) { if (!s.playing) { s.playing = true; s.playAt = performance.no
 function pause(s) { if (s.playing) { s.playing = false; s.wantLive = false; send(s, 'pause'); } }
 // A spinner over the toy on screen while it hasn't drawn, or has been told to play and hasn't moved yet
 // (feed.css shows it only after a moment, so a quick start never flashes it). It spins on the compositor too.
+// While it hasn't drawn (loading, compiling its shaders) a pie inside the spinner fills over the guess at its load,
+// like the ones by the chevrons: Goop's twenty-odd seconds read as a wait with an end, not a hang.
 function waiting() {
   const c = slides.get(toys[cur].slug);
-  for (const s of slides.values()) s.el.classList.toggle('waiting', s === c && (!s.ready || !!s.wantLive));
+  for (const s of slides.values()) {
+    const on = s === c;
+    s.el.classList.toggle('waiting', on && (!s.ready || !!s.wantLive));
+    fillPie(s.el.querySelector('.stage .pie'), s, on && !s.ready ? (s.iframe ? 'loading' : 'queued') : '');
+  }
 }
 
 function place(s, dx = 0) {
@@ -737,4 +747,5 @@ snapTimer = setTimeout(() => send(first, 'snap', { width: 540 }), 2600);
 prefetchAround();
 placeCues();
 setLive();
+waiting();
 scheduleNeighbours();
