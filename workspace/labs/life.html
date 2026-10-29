@@ -95,13 +95,13 @@ const lab = createLab({
     brush:    { type: 'select', label: 'Brush', value: 'glider', options: [['glider', 'Glider, aimed at the mark'], ['lwss', 'Spaceship (LWSS)'], ['cell', 'Single cells'], ['r', 'R-pentomino'], ['acorn', 'Acorn']] },
     hCycle:   { type: 'heading', label: 'Cycle' },
     auto:     { type: 'toggle', label: 'Fire gliders when idle', value: true },
-    hold:     { type: 'range', label: 'Rest before firing', min: 1, max: 12, step: 0.5, value: 3, unit: ' s' },
+    hold:     { type: 'range', label: 'Rest before firing', min: 1, max: 12, step: 0.5, value: 3, unit: ' s', when: P => P.auto },
     rebuild:  { type: 'toggle', label: 'Rebuild after the chaos', value: true },
-    chaos:    { type: 'range', label: 'Chaos before rebuild', min: 150, max: 2000, step: 50, value: 200, unit: ' gen' },
+    chaos:    { type: 'range', label: 'Chaos before rebuild', min: 150, max: 2000, step: 50, value: 200, unit: ' gen', when: P => P.rebuild },
     hLook:    { type: 'heading', label: 'Look' },
-    ageColor: { type: 'toggle', label: 'Colour new cells by age', value: true },
+    ageColor: { type: 'toggle', label: 'Color new cells by age', value: true },
     trails:   { type: 'toggle', label: 'Ghost trails', value: true },
-    glow:     { type: 'toggle', label: 'Glow', value: true }
+    glow:     { type: 'toggle', label: 'Glow (color palettes only)', value: true }
   },
   actions: [
     { label: 'Fire glider', primary: true, action: () => fire() },
