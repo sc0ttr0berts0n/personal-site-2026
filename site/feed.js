@@ -1,4 +1,4 @@
-// The feed: one toy at a time, swiped sideways, preloaded like a video feed.
+// The feed: one toy at a time, swiped sideways (up/down on a portrait phone), preloaded like a video feed.
 //
 // Window: the current toy plays; its two neighbours are mounted but frozen (paused after a few warm-up
 // frames, so a swipe never lands on a blank stage). Anything further away is disposed, which keeps live
@@ -19,6 +19,13 @@ const calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const stripTags = s => s.replace(/<br\s*\/?>/gi, ' · ').replace(/<[^>]+>/g, '');
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const $ = id => document.getElementById(id);
+
+// The swipe axis: 'y' on a portrait touch phone, 'x' everywhere else (desktop, tablets, phones held sideways).
+// Everything that moves slides or reads a drag asks this, so it's the one place the decision lives.
+const verticalMQ = matchMedia('(orientation: portrait) and (hover: none) and (pointer: coarse) and (max-width: 600px)');
+const axis = () => verticalMQ.matches ? 'y' : 'x';
+const along = (e, a = axis()) => a === 'y' ? e.clientY : e.clientX;   // a pointer's position on the swipe axis
+const across = (e, a = axis()) => a === 'y' ? e.clientX : e.clientY;
 
 const feed = $('feed'), slidesEl = $('slides');
 const codes = new Map();          // slug → settings code from the URL
@@ -77,7 +84,7 @@ function makeSlide(t, play, defer = false) {
         <span class="num">lab ${t.number}</span>
         <span class="title">${esc(t.title)}</span>
         <span class="blurb">${esc(t.blurb)}</span>
-        <span class="more">more ↑</span>
+        <span class="more">more <span class="arr" aria-hidden="true"></span></span>
       </button>
       <a class="btn primary play" href="${esc(pageHref(t))}">Play with this <span aria-hidden="true">→</span></a>
     </div>`;
@@ -121,7 +128,8 @@ function play(s) { if (!s.playing) { s.playing = true; s.playAt = performance.no
 function pause(s) { if (s.playing) { s.playing = false; send(s, 'pause'); } }
 
 function place(s, dx = 0) {
-  s.el.style.transform = s.pinned ? 'none' : `translate3d(calc(${s.offset * 100}% + ${dx}px), 0, 0)`;
+  const d = `calc(${s.offset * 100}% + ${dx}px)`;
+  s.el.style.transform = s.pinned ? 'none' : axis() === 'y' ? `translate3d(0, ${d}, 0)` : `translate3d(${d}, 0, 0)`;
 }
 function placeAll(dx = 0) { for (const s of slides.values()) place(s, dx); }
 function animate(on, ms) {
@@ -241,18 +249,21 @@ let drag = null;
 const SLOP = 8;
 feed.addEventListener('pointerdown', e => {
   if (e.button !== 0 || dialogOpen()) return;
-  drag = { id: e.pointerId, x0: e.clientX, y0: e.clientY, dx: 0, active: false, samples: [[e.timeStamp, e.clientX]] };
+  // positions are along the swipe axis (x0, dx) and across it (y0); the axis is fixed for the life of a drag
+  const a = axis();
+  drag = { id: e.pointerId, axis: a, x0: along(e, a), y0: across(e, a), dx: 0, active: false, samples: [[e.timeStamp, along(e, a)]] };
 });
 feed.addEventListener('pointermove', e => {
   if (!drag || e.pointerId !== drag.id) return;
-  const dx = e.clientX - drag.x0, dy = e.clientY - drag.y0;
+  const a = drag.axis, dx = along(e, a) - drag.x0, dy = across(e, a) - drag.y0;
   if (!drag.active) {
     if (Math.abs(dx) > SLOP && Math.abs(dx) > Math.abs(dy)) {
       drag.active = true;
       // pick up from where the slides are now: mid-slide after a quick second swipe, at rest otherwise
       const c = slides.get(toys[cur].slug);
-      const at = c && !c.pinned ? new DOMMatrix(getComputedStyle(c.el).transform).m41 : 0;
-      drag.x0 = e.clientX - at;                 // no jump at the slop either
+      const m = c && !c.pinned ? new DOMMatrix(getComputedStyle(c.el).transform) : null;
+      const at = m ? (a === 'y' ? m.m42 : m.m41) : 0;
+      drag.x0 = along(e, a) - at;               // no jump at the slop either
       feed.setPointerCapture(e.pointerId);
       clearTimeout(settleTimer); clearTimeout(neighbourTimer);
       animate(false);
@@ -262,8 +273,8 @@ feed.addEventListener('pointermove', e => {
     } else if (Math.abs(dy) > 16) drag = null;
     return;
   }
-  drag.dx = e.clientX - drag.x0;
-  drag.samples.push([e.timeStamp, e.clientX]);
+  drag.dx = along(e, a) - drag.x0;
+  drag.samples.push([e.timeStamp, along(e, a)]);
   while (drag.samples.length > 2 && e.timeStamp - drag.samples[0][0] > 90) drag.samples.shift();
   placeAll(drag.dx);
   // the toy coming into view is live as soon as any of it shows; the one on the other side rests
@@ -277,7 +288,7 @@ function endDrag(e, cancelled) {
   const d = drag; drag = null;
   if (!d.active) return;
   suppressClickUntil = performance.now() + 80;
-  const W = feed.clientWidth;
+  const W = d.axis === 'y' ? feed.clientHeight : feed.clientWidth;
   const [ta, xa] = d.samples[0], [tb, xb] = d.samples.at(-1);
   // px/ms over the last ~90 ms of movement; a finger that stopped before lifting has no flick left
   const v = tb > ta && e.timeStamp - tb < 80 ? (xb - xa) / (tb - ta) : 0;
@@ -297,6 +308,14 @@ function endDrag(e, cancelled) {
 }
 feed.addEventListener('pointerup', e => endDrag(e, false));
 feed.addEventListener('pointercancel', e => endDrag(e, true));
+// rotating a phone swaps the axis: a drag in flight is dropped (as if cancelled) and the slides cut to rest on the new axis
+verticalMQ.addEventListener('change', () => {
+  document.documentElement.dataset.axis = axis();
+  if (drag?.active) endDrag({ pointerId: drag.id, timeStamp: performance.now() }, true);
+  drag = null;
+  animate(false); placeAll(0);
+});
+document.documentElement.dataset.axis = axis();
 // a drag that started on the caption or the play button doesn't also click it
 let suppressClickUntil = 0;
 addEventListener('click', e => { if (performance.now() < suppressClickUntil) { e.stopPropagation(); e.preventDefault(); } }, true);
