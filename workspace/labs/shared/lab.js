@@ -13,7 +13,8 @@ import { PALETTES } from './palettes.js';
  * @param {{touch:'tap'|'hold'|'drag'|'none', hint?:string}} [spec.feed]  what a finger does to the toy in the site's
  *   feed: 'none' lets a drag anywhere on it move to the next toy; hint is touch wording, shown as it arrives.
  *   Kept on one line in each lab: npm run sync reads it into the feed's manifest.
- * @param {object} spec.params   { key: { type: 'range'|'select'|'toggle'|'heading', label, ... } } (heading = section label only)
+ * @param {object} spec.params   { key: { type: 'range'|'select'|'toggle'|'heading', label, when?, ... } } (heading = section label only;
+ *   when: P => boolean hides a control while it has no effect)
  * @param {string[]} [spec.palettes] keys of PALETTES, or palette objects; 'bench' is always first
  * @param {{label:string, action:Function, primary?:boolean}[]} [spec.actions]
  * @param {boolean} [spec.grid=true] draw the CSS bench grid behind the canvas
@@ -85,6 +86,10 @@ export function createLab(spec) {
   const params = {};
   const form = document.querySelector('.ctls');
   const inputs = {};
+  // a control with when: P => bool shows only while it has an effect (e.g. Inline gap only for inline edges)
+  const conditional = [];
+  const refreshWhen = () => { for (const [el, when] of conditional) el.style.display = when(params) ? '' : 'none'; };
+  listeners.change.push(refreshWhen);
   for (const [key, p] of Object.entries(spec.params || {})) {
     if (p.type === 'heading') {
       const h = document.createElement('div');
@@ -121,8 +126,10 @@ export function createLab(spec) {
       cb.addEventListener('change', () => { params[key] = cb.checked; emit('change', key, cb.checked, params); });
       inputs[key] = { set: v => { cb.checked = v; } };
     }
+    if (p.when) conditional.push([wrap, p.when]);
     form.appendChild(wrap);
   }
+  refreshWhen();
 
   // ---- actions ----
   const btns = document.querySelector('.lab-panel > .btns');
