@@ -85,8 +85,8 @@ const MARK = (() => {
 const lab = createLab({
   number: '08',
   title: 'Pachinko',
-  blurb: 'A pegboard everywhere the mark isn’t. The lattice is cut from the mark itself, along its two edge directions and in step with the grid it was drawn on, so every peg beside an edge sits the same distance from it, and the walls zigzag along the same lines. The pegs double as a halftone screen that the mark and the balls light up. Tap anywhere to drop a ball at that point, or hold to pour.',
-  teaches: 'the Galton board: each peg is nearly a coin flip, so bins drift toward a binomial bell curve, and the mark carves a shadow in it; on an inclined board gravity is g·sin θ',
+  blurb: 'A Galton board everywhere the mark isn’t, cut along the mark’s own angles. Tap to drop a ball or hold to pour, and watch the bins lean toward a bell curve.',
+  teaches: 'Canvas 2D with planck.js physics for the balls. Every peg is placed from the logo’s geometry, so the board fits the mark exactly. Pour enough balls and the bins lean toward a bell curve, with a dent where the mark casts its shadow.',
   hint: 'tap to drop at that x · hold to pour<br>mark = 40 cm wide',
   palettes: ['cmy', 'spectrum', 'synthwave', 'ember', 'reef', 'aurora', 'ultraviolet', 'gold'],
   defaultPalette: 'cmy',

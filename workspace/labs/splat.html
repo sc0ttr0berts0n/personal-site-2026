@@ -45,8 +45,8 @@ const FLAT = [0.86, 0.985];                   // fraction of the fall over which
 const lab = createLab({
   number: '12',
   title: 'Splat!',
-  blurb: 'A fine grid, slowly zooming. It’s really a camera locked onto the mark, the mark is made of slime, and it’s falling fast. It hits the floor and splats, and the next mark, in the next colour, pops up out of the splat. Then the floor gives way in the shape of the splat, and down they both go.',
-  teaches: 'perspective (screen size goes as 1 / distance, so a steady fall reads as an accelerating zoom) · metaballs: an additive field cut at one level, with one-pixel analytic antialiasing · springs and plastic rope chains for goo',
+  blurb: 'The mark is made of slime and falling fast. It splats on the floor, the next mark pops out of the splat, then the floor gives way and down they go.',
+  teaches: 'Raw WebGL2: every bead of goo is drawn with instanced rendering into a floating-point field (metaballs), then one composite pass lights the slime and the floors. The zoom is just perspective: a steady fall reads as an accelerating zoom.',
   hint: 'tap it mid-fall to tilt it',
   grid: false,
   palettes: [
