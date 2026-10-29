@@ -43,7 +43,7 @@ const lab = createLab({
   teaches: 'three.js loaded straight from a CDN through an import map, with no build step. A custom GLSL shader bends the background grid through the glass once per color channel, which is where the rainbow fringes come from, and the beams are pixel-exact screen-space lines with bloom on top. The beams follow Snell’s law at seven wavelengths; the grid fakes it with three, one per color channel.',
   hint: 'move to aim · drag the emitter to move it<br>on touch: drag to aim',
   feed: { touch: 'drag', hint: 'drag to aim · drag the emitter to move it' },
-  palettes: ['spectrum', 'synthwave', 'reef', 'ember', 'aurora', 'ultraviolet',
+  palettes: ['spectrum', 'synthwave', 'ember', 'aurora', 'ultraviolet',
     { key: 'neonred', name: 'Neon Red', bg: '#000000', grid: '#170505', ink: '#ff3a24', colors: ['#ff1a0c', '#ff3b22', '#ff5a3a', '#e8200f', '#b80c05'] }],
   defaultPalette: 'spectrum',
   grid: false,
@@ -58,46 +58,47 @@ const lab = createLab({
     hLight:     { type: 'heading', label: 'Light' },
     glass:      { type: 'select', label: 'Glass', value: 'diamond', options: Object.entries(GLASSES).map(([k, g]) => [k, g.label]) },
     dispersion: { type: 'range', label: 'Dispersion', min: 1, max: 12, step: 0.5, value: 12, unit: '×' },
-    waves:      { type: 'range', label: 'Wavelengths', min: 3, max: 24, step: 1, value: 7 },
+    waves:      { type: 'range', label: 'Wavelengths traced', min: 3, max: 24, step: 1, value: 7 },
     fresnel:    { type: 'toggle', label: 'Fresnel reflections', value: false },
-    bounces:    { type: 'range', label: 'Max interactions', min: 4, max: 60, step: 1, value: 4 },
-    sweep:      { type: 'toggle', label: 'Auto sweep when idle', value: true },
+    bounces:    { type: 'range', label: 'Max bounces per ray', min: 4, max: 60, step: 1, value: 4 },
     hBeam:      { type: 'heading', label: 'Beam' },
     beam:       { type: 'range', label: 'Beam brightness', min: 0.2, max: 1.5, step: 0.05, value: 0.85 },
-    width:      { type: 'range', label: 'Beam width', min: 0.5, max: 4, step: 0.1, value: 1.9, unit: 'px' },
-    bloom:      { type: 'range', label: 'Bloom', min: 0, max: 2.5, step: 0.05, value: 0.4 },
-    bloomRadius:{ type: 'range', label: 'Bloom spread', min: 0, max: 1, step: 0.05, value: 0 },
-    hGlass:     { type: 'heading', label: 'Glass look' },
-    edges:      { type: 'select', label: 'Edges', value: 'studio', options: [['hairline', 'Hairline'], ['inline', 'Inline (double line)'], ['neon', 'Neon tube'], ['black', 'Black rim'], ['blackwhite', 'Black rim, white line'], ['studio', 'Studio reflection (black and white)'], ['off', 'Off']] },
-    rimDark:    { type: 'range', label: 'Rim strength (black / studio)', min: 0, max: 1, step: 0.01, value: 0.77 },
-    lightAngle: { type: 'range', label: 'Studio light angle', min: -90, max: 90, step: 1, value: -73, unit: '°' },
-    edgeWidth:  { type: 'range', label: 'Edge width', min: 0.5, max: 4, step: 0.1, value: 2.1, unit: 'px' },
-    edgeGlow:   { type: 'range', label: 'Edge glow', min: 0, max: 4, step: 0.05, value: 1.7 },
-    gap:        { type: 'range', label: 'Inline gap', min: 0.03, max: 0.3, step: 0.01, value: 0.03 },
-    body:       { type: 'range', label: 'Body fill', min: 0, max: 0.6, step: 0.01, value: 0 },
-    backlight:  { type: 'range', label: 'Backlight', min: 0, max: 2.5, step: 0.05, value: 0.1 },
-    backShape:  { type: 'select', label: 'Backlight shape', value: 'pool', options: [['mark', 'Mark-shaped glow'], ['pool', 'Round pool']] },
-    backSize:   { type: 'range', label: 'Backlight size', min: 0.8, max: 2.4, step: 0.05, value: 0.9, unit: '×' },
-    hSurface:   { type: 'heading', label: 'Glass surface' },
-    bevel:      { type: 'range', label: 'Edge rounding', min: 0, max: 0.4, step: 0.01, value: 0.06 },
-    refraction: { type: 'range', label: 'Grid refraction', min: 0, max: 2, step: 0.05, value: 0.6, unit: '×' },
-    lift:       { type: 'range', label: 'Lift off the bench', min: 0, max: 4, step: 0.05, value: 4 },
-    ripple:     { type: 'range', label: 'Surface ripple', min: 0, max: 1, step: 0.01, value: 0.1 },
-    rippleScale:{ type: 'range', label: 'Ripple scale', min: 0.3, max: 4, step: 0.05, value: 1.15, unit: '×' },
+    width:      { type: 'range', label: 'Beam width', min: 0.5, max: 4, step: 0.1, value: 1.9, unit: ' px' },
+    bloom:      { type: 'range', label: 'Bloom', min: 0, max: 2, step: 0.05, value: 0.4 },
+    bloomRadius:{ type: 'range', label: 'Bloom spread', min: 0, max: 1, step: 0.05, value: 0, when: P => P.bloom > 0 },
+    hGlass:     { type: 'heading', label: 'Glass edges' },
+    edges:      { type: 'select', label: 'Edge style', value: 'studio', options: [['hairline', 'Hairline'], ['inline', 'Inline (double line)'], ['neon', 'Neon tube'], ['black', 'Black rim'], ['blackwhite', 'Black rim, white line'], ['studio', 'Studio reflection (black and white)'], ['off', 'Off']] },
+    lightAngle: { type: 'range', label: 'Studio light angle', min: -90, max: 90, step: 1, value: -73, unit: '°', when: P => P.edges === 'studio' },
+    rimDark:    { type: 'range', label: 'Rim strength', min: 0, max: 1, step: 0.01, value: 0.77, when: P => ['black', 'blackwhite', 'studio'].includes(P.edges) },
+    edgeWidth:  { type: 'range', label: 'Edge width', min: 0.5, max: 4, step: 0.1, value: 2.1, unit: ' px', when: P => !['studio', 'off'].includes(P.edges) },
+    gap:        { type: 'range', label: 'Inline gap', min: 0.03, max: 0.3, step: 0.01, value: 0.03, when: P => P.edges === 'inline' },
+    edgeGlow:   { type: 'range', label: 'Edge glow', min: 0, max: 4, step: 0.05, value: 1.7, when: P => ['hairline', 'inline', 'neon', 'blackwhite'].includes(P.edges) },
+    hBody:      { type: 'heading', label: 'Glass body' },
+    body:       { type: 'range', label: 'Body fill', min: 0, max: 0.4, step: 0.01, value: 0 },
     texture:    { type: 'range', label: 'Noise texture', min: 0, max: 1, step: 0.01, value: 0 },
+    bevel:      { type: 'range', label: 'Edge rounding', min: 0, max: 0.4, step: 0.01, value: 0.06 },
     sheen:      { type: 'range', label: 'Edge sheen', min: 0, max: 2, step: 0.05, value: 0.25 },
+    refraction: { type: 'range', label: 'Grid refraction', min: 0, max: 2, step: 0.05, value: 0.6, unit: '×' },
+    ripple:     { type: 'range', label: 'Surface ripple', min: 0, max: 1, step: 0.01, value: 0.1 },
+    rippleScale:{ type: 'range', label: 'Ripple scale', min: 0.3, max: 4, step: 0.05, value: 1.15, unit: '×', when: P => P.ripple > 0 },
+    hBack:      { type: 'heading', label: 'Backlight' },
+    backlight:  { type: 'range', label: 'Backlight', min: 0, max: 2.5, step: 0.05, value: 0.1 },
+    backShape:  { type: 'select', label: 'Backlight shape', value: 'pool', options: [['mark', 'Mark-shaped glow'], ['pool', 'Round pool']], when: P => P.backlight > 0 },
+    backSize:   { type: 'range', label: 'Backlight size', min: 0.8, max: 2.4, step: 0.05, value: 0.9, unit: '×', when: P => P.backlight > 0 },
+    flicker:    { type: 'range', label: 'Neon flicker (edges and backlight)', min: 0, max: 1, step: 0.05, value: 0 },
     hFilm:      { type: 'heading', label: 'Film' },
-    flicker:    { type: 'range', label: 'Neon flicker', min: 0, max: 1, step: 0.05, value: 0 },
-    grain:      { type: 'range', label: 'Film grain', min: 0, max: 0.3, step: 0.01, value: 0.06 },
+    grain:      { type: 'range', label: 'Film grain', min: 0, max: 0.2, step: 0.01, value: 0.06 },
     vignette:   { type: 'range', label: 'Vignette', min: 0, max: 1.6, step: 0.05, value: 1.15 },
     hView:      { type: 'heading', label: 'View' },
     rotation:   { type: 'range', label: 'Mark rotation', min: -180, max: 180, step: 1, value: 0, unit: '°' },
+    sweep:      { type: 'toggle', label: 'Auto sweep the beam when idle', value: true },
     msaa:       { type: 'toggle', label: 'Antialiasing (4× MSAA)', value: true }
   }
 });
 
 // ---- world: the key square is 10 units, the mark is LOGO_FILL of that ----
 const SQ = 10, LOGO_W = SQ * LOGO_FILL, BEAM_Y = LOGO_DEPTH * LOGO_W / 2;
+const LIFT = 4;   // height of the slab off the bench; Grid refraction scales the same bend
 
 const { canvas } = lab.canvas({ context: 'none' });
 let renderer;
@@ -579,8 +580,8 @@ function frame(dt, t) {
   U.uGap.value = P.gap;
   U.uBody.value = P.body * (0.4 + 0.6 * strike);
   U.uBevel.value = P.bevel;
-  // a lifted slab has a longer drop to the bench, so the rim bends the grid further
-  U.uThick.value = (LOGO_DEPTH * LOGO_W + P.lift) * P.refraction;
+  // the slab sits LIFT above the bench, so the rim bends the grid further than its own depth would
+  U.uThick.value = (LOGO_DEPTH * LOGO_W + LIFT) * P.refraction;
   U.uRipple.value = P.ripple;
   U.uRippleFreq.value = 2.2 * P.rippleScale;
   U.uTexture.value = P.texture;

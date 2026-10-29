@@ -37,18 +37,23 @@ const lab = createLab({
   palettes: ['cmy', 'spectrum', 'synthwave', 'ember', 'reef', 'aurora', 'ultraviolet', 'gold'],
   defaultPalette: 'cmy',
   params: {
+    hWorld:      { type: 'heading', label: 'World' },
     gravity:     { type: 'range', label: 'Gravity', min: 1.6, max: 25, step: 0.01, value: 9.81, unit: ' m/s²' },
+    timeScale:   { type: 'range', label: 'Time scale', min: 0.1, max: 1, step: 0.05, value: 1, unit: '×' },
+    floor:       { type: 'range', label: 'Plinth height', min: 4, max: 24, step: 1, value: 14, unit: ' cm' },
+    // every body shares these: balls, pieces, plinths, floor and walls
+    restitution: { type: 'range', label: 'Bounciness (restitution)', min: 0, max: 0.95, step: 0.05, value: 0.3 },
+    friction:    { type: 'range', label: 'Friction μ', min: 0, max: 1, step: 0.05, value: 0.5 },
+    hBall:       { type: 'heading', label: 'Your throw' },
     ballRadius:  { type: 'range', label: 'Ball radius', min: 1.5, max: 14, step: 0.5, value: 4.8, unit: ' cm' },
     ballDensity: { type: 'range', label: 'Ball density', min: 0.1, max: 11.3, step: 0.1, value: 4.9, unit: ' g/cm³' },
-    restitution: { type: 'range', label: 'Restitution', min: 0, max: 0.95, step: 0.05, value: 0.3 },
-    friction:    { type: 'range', label: 'Friction μ', min: 0, max: 1, step: 0.05, value: 0.5 },
-    floor:       { type: 'range', label: 'Plinth height', min: 4, max: 24, step: 1, value: 14, unit: ' cm' },
-    timeScale:   { type: 'range', label: 'Time scale', min: 0.1, max: 1, step: 0.05, value: 1, unit: '×' },
-    balls:       { type: 'range', label: 'Balls per fling', min: 1, max: 5, step: 1, value: 1 },
-    split:       { type: 'toggle', label: 'Volley balls split 5 → 3 → 3', value: true },
-    splitForce:  { type: 'range', label: 'Split force', min: 0.5, max: 8, step: 0.1, value: 5, unit: '×' },
-    trails:      { type: 'toggle', label: 'Motion trails', value: true },
-    autoReset:   { type: 'toggle', label: 'Auto reset when settled', value: true }
+    balls:       { type: 'range', label: 'Balls per throw', min: 1, max: 5, step: 1, value: 1 },
+    hDemo:       { type: 'heading', label: 'Idle volley' },
+    split:       { type: 'toggle', label: 'Volley balls burst apart (5 → 3 → 3)', value: true },
+    splitForce:  { type: 'range', label: 'Burst force', min: 0.5, max: 8, step: 0.1, value: 5, unit: '×', when: P => P.split },
+    autoReset:   { type: 'toggle', label: 'Rebuild the mark when settled', value: true },
+    hView:       { type: 'heading', label: 'View' },
+    trails:      { type: 'toggle', label: 'Motion trails', value: true }
   },
   actions: [
     { label: 'Reset', primary: true, action: () => reset() },

@@ -62,20 +62,20 @@ const lab = createLab({
     fallH: { type: 'heading', label: 'Fall' },
     fall: { type: 'range', label: 'Fall time', min: 2, max: 14, step: 0.5, value: 4, unit: ' s' },
     height: { type: 'range', label: 'Drop height', min: 6, max: 60, step: 1, value: 6, format: v => `${v}×` },
-    grid: { type: 'range', label: 'Grid density', min: 6, max: 40, step: 1, value: 10 },
-    shake: { type: 'range', label: 'Impact shake', min: 0, max: 1, step: 0.05, value: 1 },
     flutter: { type: 'range', label: 'Flutter', min: 0, max: 1, step: 0.05, value: 0.15 },
+    shake: { type: 'range', label: 'Impact shake', min: 0, max: 1, step: 0.05, value: 1 },
+    speed: { type: 'range', label: 'Overall speed', min: 0.25, max: 2, step: 0.05, value: 2, unit: '×' },
     splatH: { type: 'heading', label: 'Splat' },
     goo: { type: 'range', label: 'Goo (viscosity)', min: 0, max: 1, step: 0.05, value: 0.5 },
     spread: { type: 'range', label: 'Spread', min: 0.04, max: 0.3, step: 0.01, value: 0.14 },
     fingers: { type: 'range', label: 'Fingers', min: 0, max: 40, step: 1, value: 22 },
-    spray: { type: 'range', label: 'Spray', min: 0, max: 60, step: 1, value: 24 },
+    spray: { type: 'range', label: 'Spray droplets', min: 0, max: 60, step: 1, value: 24 },
     hold: { type: 'range', label: 'Floor opens after', min: 0.3, max: 3, step: 0.05, value: 0.7, unit: ' s' },
     lookH: { type: 'heading', label: 'Look' },
     gloss: { type: 'range', label: 'Gloss', min: 0, max: 1, step: 0.05, value: 0.6 },
     wobble: { type: 'range', label: 'Jiggle', min: 0, max: 1, step: 0.05, value: 0.75 },
     shadow: { type: 'toggle', label: 'Shadows', value: true },
-    speed: { type: 'range', label: 'Speed', min: 0.25, max: 2, step: 0.05, value: 2, unit: '×' }
+    grid: { type: 'range', label: 'Floor grid density', min: 6, max: 40, step: 1, value: 10 }
   },
   actions: [{ label: 'Splat now', primary: true, action: () => dropNow() }]
 });
