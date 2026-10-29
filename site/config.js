@@ -14,6 +14,24 @@ export const START = null;
 // they now compile in the background and set window.labWarming until they can draw, so the list is empty.
 export const NO_PRELOAD = [];
 
+// What each toy does with a finger in the feed, until the lab says so itself (window.labFeed, see embed/lab-embed.js).
+// touch: 'tap' | 'hold' | 'drag' gets pointer input in the middle of the screen; 'none' lets a drag anywhere swipe.
+// hint: a few words shown over the toy when it arrives, until it's touched. Touch wording; mice see the lab's own hint.
+export const TOUCH = {
+  prism:    { touch: 'tap',  hint: 'tap to fire the laser from there' },
+  fluid:    { touch: 'drag', hint: 'drag to tilt · flick to slosh' },
+  goop:     { touch: 'drag', hint: 'tap the pool · tap the mark' },
+  knockout: { touch: 'drag', hint: 'pull back · let go to throw' },
+  bigbang:  { touch: 'drag', hint: 'drag to orbit · tap to replay' },
+  godrays:  { touch: 'drag', hint: 'touch to steer the light' },
+  maze:     { touch: 'tap',  hint: 'tap a maze to move its start' },
+  pachinko: { touch: 'hold', hint: 'tap to drop · hold to pour' },
+  neural:   { touch: 'drag', hint: 'draw on it' },
+  sand:     { touch: 'drag', hint: 'drag to paint' },
+  life:     { touch: 'drag', hint: 'tap or drag to draw cells' },
+  splat:    { touch: 'tap',  hint: 'tap it mid-fall to tilt it' }
+};
+
 // Placeholders: Scott supplies the mugshot, bio and links.
 export const ARTIST = {
   name: 'Scott Robertson',
