@@ -53,9 +53,10 @@ const fx = calm || new URLSearchParams(location.search).get('fx') === 'off' ? nu
 // They sit over the ripple, so they stay in sight through a move. (Wide screens have the ‹ › buttons.)
 const cues = document.createElement('div');
 cues.className = 'cues'; cues.setAttribute('aria-hidden', 'true');
-cues.innerHTML = '<i class="slot"></i><i class="cue lo"></i><i class="cue hi"></i><i class="ring"></i>';
+cues.innerHTML = '<i class="slot"></i><i class="cue lo"></i><i class="cue hi"></i><i class="ring"></i>' +
+  '<i class="pie lo"><b></b><b></b></i><i class="pie hi"><b></b><b></b></i>';
 feed.appendChild(cues);
-const [slot, cueLo, cueHi, ring] = cues.children;
+const [slot, cueLo, cueHi, ring, pieLo, pieHi] = cues.children;
 const swiping = on => feed.classList.toggle('swiping', on);
 // While a drag is on, the chevron it pulls from rides just ahead of the finger, and a ring waits where the drag
 // counts: letting go there moves on (EASY of the screen), or, for a touched toy, getting there does (HARD). Reach
@@ -81,6 +82,26 @@ function guide(d, e) {
 function unguide() {
   for (const el of [slot, cueLo, cueHi, ring]) el.style.cssText = '';
   feed.classList.remove('guiding', 'armed');
+}
+// Beside each chevron, a small pie fills while the toy that way loads, and fades once it has drawn, so a swipe
+// there lands on a live toy. An empty ring: it's waiting its turn. The pie turns on the compositor (transforms
+// only), so it keeps going while a toy starting up holds the main thread. Its pace is that toy's last load here.
+const LOAD_GUESS = 2500;
+function eta(slug) { try { return +localStorage.getItem('feed-load:' + slug) || LOAD_GUESS; } catch (e) { return LOAD_GUESS; } }
+function paintPies() {
+  for (const [pie, d] of [[pieHi, 1], [pieLo, -1]]) {
+    const s = solo ? null : slides.get(toys[wrap(cur + d)].slug);
+    const state = !s || s.ready ? '' : s.iframe ? 'loading' : 'queued';
+    const key = state && `${s.toy.slug} ${state} ${s.born}`;
+    if (pie.dataset.key === key) continue;
+    pie.dataset.key = key;
+    pie.classList.remove('loading', 'queued');
+    if (!state) continue;
+    pie.style.setProperty('--eta', `${Math.round(eta(s.toy.slug) * 1.2)}ms`);
+    pie.style.setProperty('--t0', `${Math.round(performance.now() - s.born)}ms`);
+    void pie.offsetWidth;   // restart the fill
+    pie.classList.add(state);
+  }
 }
 function placeCues() {
   const cap = slides.get(toys[cur].slug)?.el.querySelector('.caption');
@@ -139,6 +160,7 @@ function makeSlide(t, play, defer = false) {
     <div class="stage">
       <img class="poster" alt="" hidden>
       <div class="loader" aria-hidden="true">${logoSVG({ size: 56 })}</div>
+      <i class="wait" aria-hidden="true"></i>
       <div class="edge lo" aria-hidden="true"></div><div class="edge hi" aria-hidden="true"></div>
       <span class="toyhint" aria-hidden="true"></span>
     </div>
@@ -191,8 +213,14 @@ function dispose(s) {
 
 const send = (s, feedMsg, extra) => s?.iframe?.contentWindow?.postMessage({ feed: feedMsg, ...extra }, location.origin);
 const playCurrent = () => { const c = slides.get(toys[cur].slug); if (c) play(c); };
-function play(s) { if (!s.playing) { s.playing = true; s.playAt = performance.now(); send(s, 'play'); } }
-function pause(s) { if (s.playing) { s.playing = false; send(s, 'pause'); } }
+function play(s) { if (!s.playing) { s.playing = true; s.playAt = performance.now(); s.wantLive = true; send(s, 'play'); waiting(); } }
+function pause(s) { if (s.playing) { s.playing = false; s.wantLive = false; send(s, 'pause'); } }
+// A spinner over the toy on screen while it hasn't drawn, or has been told to play and hasn't moved yet
+// (feed.css shows it only after a moment, so a quick start never flashes it). It spins on the compositor too.
+function waiting() {
+  const c = slides.get(toys[cur].slug);
+  for (const s of slides.values()) s.el.classList.toggle('waiting', s === c && (!s.ready || !!s.wantLive));
+}
 
 function place(s, dx = 0) {
   const d = `calc(${s.offset * 100}% + ${dx}px)`;
@@ -204,26 +232,32 @@ function animate(on, ms) {
   if (ms) document.documentElement.style.setProperty('--slide-ms', ms + 'ms');
 }
 
-// Neighbours load once the current toy has drawn, so they never compete with it for the first frame.
-// Until it has, they get their slide (still or loader) and no frame: a toy still compiling its shaders (Goop takes
-// many seconds) holds the GPU, and a neighbour starting up behind it would wait on it with the page's main thread,
-// which every toy shares, so the feed froze and couldn't be swiped. They load when it draws ('ready').
+// Neighbours load one at a time, and only once the toy on screen has drawn: the next toy first, then the one
+// before, each after the last has drawn. Until its turn a neighbour has its slide (still or loader) and no frame.
+// Every toy shares the page's main thread, and starting one up holds it for a second or more on a phone (a toy
+// still compiling its shaders, like Goop, holds the GPU for many seconds), so two starting together, or one behind
+// the toy on screen, froze the feed and the toy you're playing with. One at a time leaves gaps between the stalls.
 let neighbourTimer = 0;
+const STUCK = 8000;   // a neighbour that hasn't drawn in this long stops holding up the next
 function loadNeighbours() {
   clearTimeout(neighbourTimer);
   if (solo) return;
-  const wait = !slides.get(toys[cur].slug)?.ready;
+  let busy = !slides.get(toys[cur].slug)?.ready;
   for (const d of [1, -1]) {
-    const t = toys[wrap(cur + d)], s = slides.get(t.slug);
+    const t = toys[wrap(cur + d)];
+    let s = slides.get(t.slug);
     // a heavy toy still gets its slide (poster or loader), just no frame until someone stops on it
-    if (!s) { const n = makeSlide(t, false, heavy(t) || wait); n.offset = d; place(n); }
-    else if (!s.iframe && !heavy(t) && !wait) mount(s);
+    if (!s) { s = makeSlide(t, false, true); s.offset = d; place(s); }
+    if (!s.iframe && !heavy(t) && !busy) mount(s);
+    if (s.iframe && !s.ready && performance.now() - s.born < STUCK) busy = true;
   }
+  paintPies();
+  if (busy) neighbourTimer = setTimeout(loadNeighbours, 2000);   // in case a 'ready' never comes
 }
 function scheduleNeighbours() {
   clearTimeout(neighbourTimer);
   const c = slides.get(toys[cur].slug);
-  if (c?.ready) neighbourTimer = setTimeout(loadNeighbours, settling ? 460 : 60);
+  if (c?.ready) neighbourTimer = setTimeout(loadNeighbours, settling ? 460 : 300);
   else neighbourTimer = setTimeout(loadNeighbours, 1500);
 }
 
@@ -248,6 +282,7 @@ function becameCurrent(s, t0, held = false) {
   for (const o of slides.values()) if (o !== s) pause(o);
   s.peeked = false; s.touched = false;
   if (!s.playing) { if (!held) play(s); s.swipeAt = t0; }
+  waiting(); paintPies();
   clearTimeout(snapTimer);
   snapTimer = setTimeout(() => send(s, 'snap', { width: 540 }), 2600);
   updateCurrentTile();
@@ -324,14 +359,16 @@ addEventListener('message', e => {
     // the lab's own word on what it does with a finger beats the feed's table
     if (m.touch) s.touch = m.touch;
     if (m.hint) s.hint = m.hint;
-    s.ready = true; s.el.classList.add('ready'); warmed.add(s.toy.slug);
+    s.ready = true; s.wantLive = false; s.el.classList.add('ready'); warmed.add(s.toy.slug);
     if (s.toy === toys[cur]) { setLive(); showHint(s); }
+    waiting(); paintPies();
+    try { localStorage.setItem('feed-load:' + s.toy.slug, Math.round(now - s.born)); } catch (e) {}
     metrics.loads.push({ slug: s.toy.slug, ms: Math.round(now - s.born), asNeighbour: !s.playing && !s.swipeAt });
     if (s.swipeAt) { metrics.swipes.push({ slug: s.toy.slug, msToLive: Math.round(now - s.swipeAt), wasPreloaded: false }); s.swipeAt = 0; }
-    if (s.toy === toys[cur]) scheduleNeighbours();
-  } else if (m.feed === 'live' && s.swipeAt) {
-    metrics.swipes.push({ slug: s.toy.slug, msToLive: Math.round(now - s.swipeAt), wasPreloaded: s.ready });
-    s.swipeAt = 0;
+    scheduleNeighbours();   // the toy on screen, or a neighbour: either way the next one in line can start
+  } else if (m.feed === 'live') {
+    s.wantLive = false; waiting();
+    if (s.swipeAt) { metrics.swipes.push({ slug: s.toy.slug, msToLive: Math.round(now - s.swipeAt), wasPreloaded: s.ready }); s.swipeAt = 0; }
   } else if (m.feed === 'stats') {
     metrics.stats[s.toy.slug] = { fps: +m.fps.toFixed(1), cbMs: +m.cbMs.toFixed(2), worstMs: Math.round(m.worstMs) };
     if (showStats && s.toy === toys[cur]) renderStats(s.toy.slug);

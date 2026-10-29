@@ -103,6 +103,26 @@ html[data-axis="y"] .cues { display: block; position: absolute; inset: 0; z-inde
 .guiding .cue, .guiding .ring, .guiding .slot { transition: opacity .12s, border-color .12s, filter .12s, box-shadow .15s; }   /* following: no easing */
 .guiding .ring { opacity: .5; }
 .guiding.armed .ring { opacity: 1; box-shadow: 0 0 10px rgb(244 244 246 / .55); }
+/* Loading pies beside the chevrons (feed.js paintPies): a ring while the toy that way waits its turn, filling while
+   it loads, gone once it has drawn. Two half-discs turning in two half-windows: transforms only, so the compositor
+   keeps them going while a toy starting up holds the main thread. --eta: how long the fill takes; --t0: time
+   already spent loading. Out of the way during a swipe. */
+.cues .pie { position: absolute; left: calc(50% + 16px); width: 11px; height: 11px; margin-top: -1px; border: 1px solid var(--dim);
+  border-radius: 50%; opacity: 0; transition: opacity .4s; }
+.cues .pie.lo { top: calc(var(--edge-y) - 18px); }
+.cues .pie.hi { top: calc(var(--cap-top, calc(100% - var(--edge-y))) + 30px); }
+.cues .pie.queued { opacity: .35; }
+.cues .pie.loading { opacity: .6; }
+.swiping .pie { opacity: 0 !important; transition-duration: .12s; }
+.pie b { position: absolute; top: 1px; bottom: 1px; width: calc(50% - 1px); overflow: hidden; }
+.pie b:first-child { left: 50%; }
+.pie b:last-child { right: 50%; }
+.pie b::before { content: ""; position: absolute; inset: 0; background: var(--ink); rotate: -180deg; opacity: 0; }   /* hidden at rest: no hairline at the seam */
+.pie b:first-child::before { border-radius: 0 99px 99px 0; transform-origin: 0 50%; }
+.pie b:last-child::before { border-radius: 99px 0 0 99px; transform-origin: 100% 50%; }
+.pie.loading b:first-child::before { animation: fill calc(var(--eta) / 2) linear calc(var(--t0) * -1) both; }
+.pie.loading b:last-child::before { animation: fill calc(var(--eta) / 2) linear calc(var(--eta) / 2 - var(--t0)) both; }
+@keyframes fill { from { rotate: -180deg; opacity: 0; } 1% { opacity: 1; } to { rotate: 0deg; opacity: 1; } }
 
 /* what a finger does to the toy, over it as it arrives */
 .toyhint { position: absolute; z-index: 1; left: 50%; top: calc(max(12px, env(safe-area-inset-top, 0px)) + 58px); translate: -50% 0; pointer-events: none;
@@ -111,6 +131,14 @@ html[data-axis="y"] .cues { display: block; position: absolute; inset: 0; z-inde
   opacity: 0; transition: opacity .3s; }
 .slide.hinting .toyhint { opacity: 1; transition-delay: .35s; }
 .slide.ready .loader, .slide.has-poster .loader { opacity: 0; }
+/* the toy on screen hasn't drawn yet, or hasn't moved since it was told to play (feed.js waiting()). Over its
+   still only: with no still, the breathing mark already says it's loading. A beat late, so a quick start never
+   shows it. Spins on the compositor, so it keeps turning through a stall. */
+.wait { position: absolute; z-index: 1; left: 50%; top: 50%; width: 22px; height: 22px; margin: -11px 0 0 -11px; border-radius: 50%;
+  border: 1.5px solid rgb(244 244 246 / .16); border-top-color: var(--ink); opacity: 0; transition: opacity .2s; pointer-events: none;
+  animation: spin .8s linear infinite; }
+.slide.waiting.has-poster .wait { opacity: .85; transition-delay: .3s; }
+@keyframes spin { to { rotate: 360deg; } }
 /* the GL transition overlay (site/transition.js): over the slides, under the chrome; only shown mid-transition */
 .fx { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 3; pointer-events: none; visibility: hidden;
   opacity: 0; transition: opacity .18s, visibility 0s .18s; }
@@ -224,5 +252,6 @@ dialog.open::backdrop { opacity: 1; }
 @media (prefers-reduced-motion: reduce) {
   .slide.anim, .sheet, .overview, dialog::backdrop, .toyhint, .edge::before, .edge::after, .cue, .cues .ring, .cues .slot { transition: none; }
   .loader svg { animation: none; }
+  .wait { animation: breathe 1.6s ease-in-out infinite; }
   .slide.entering { animation-duration: .12s; }
 }
