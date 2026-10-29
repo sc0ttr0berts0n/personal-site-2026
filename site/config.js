@@ -18,7 +18,7 @@ export const NO_PRELOAD = [];
 export const ARTIST = {
   name: 'Scott Robertson',
   avatar: null,                      // e.g. 'site/img/scott.jpg'; null shows the mark
-  line: 'Placeholder: one line about Scott.',
+  line: 'Creative Developer',
   links: [
     { label: 'Email', href: 'mailto:you@example.com', text: 'you@example.com' },
     { label: 'Instagram', href: '#', text: '@placeholder' },
