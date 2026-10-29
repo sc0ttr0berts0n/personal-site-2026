@@ -8,7 +8,7 @@
 import { LABS } from '../labs/manifest.js';
 import { ORDER, START, ARTIST, NO_PRELOAD } from './config.js';
 import { logoSVG } from '../labs/shared/logo.js';
-import { createTransitions, EFFECTS } from './transition.js';
+import { createTransitions } from './transition.js';
 
 const bySlug = new Map(LABS.map(l => [l.slug, l]));
 const toys = [...ORDER.filter(s => bySlug.has(s)), ...LABS.map(l => l.slug).filter(s => !ORDER.includes(s))].map(s => bySlug.get(s));
@@ -41,9 +41,8 @@ window.feedMetrics = metrics;
 const showStats = new URLSearchParams(location.search).has('stats');
 const solo = new URLSearchParams(location.search).has('solo');   // measuring only: no preloaded neighbours
 
-// ---- GL transitions over the slides (site/transition.js); ?fx=off, reduced motion or no WebGL keep the CSS slide ----
-const fxName = new URLSearchParams(location.search).get('fx');
-const fx = calm || fxName === 'off' ? null : createTransitions(feed, { effect: EFFECTS.includes(fxName) ? fxName : EFFECTS[0] });
+// ---- the ripple transition over the slides (site/transition.js); ?fx=off, reduced motion or no WebGL keep the CSS slide ----
+const fx = calm || new URLSearchParams(location.search).get('fx') === 'off' ? null : createTransitions(feed);
 if (fx) { metrics.fx = fx.stats; window.requestIdleCallback ? requestIdleCallback(() => fx.prepare()) : fx.prepare(); }
 
 // ---- posters: a small snapshot of each toy, for the overview grid and as an underlay while a toy loads ----
@@ -251,7 +250,7 @@ function renderStats(slug) {
   el.innerHTML = `${slug} · <b>${st.fps}</b> fps · lab js <b>${st.cbMs}</b> ms/frame · worst gap <b>${st.worstMs}</b> ms` +
     `<br>mounted <b>${slides.size}</b>${mem ? ` · js heap <b>${Math.round(mem.usedJSHeapSize / 1048576)}</b> MB` : ''}` +
     (lastSwipe ? ` · last swipe live in <b>${lastSwipe.msToLive}</b> ms` : '') +
-    (fx ? `<br>fx <b>${fx.effect}</b> (f) · worst fx frame <b>${Math.round(fx.stats.worstMs)}</b> ms` : '');
+    (fx ? `<br>ripple · worst frame <b>${Math.round(fx.stats.worstMs)}</b> ms · up in <b>${fx.stats.coverMs}</b> ms` : '');
 }
 
 // ---- gestures: drag, wheel/trackpad, keys, buttons ----
@@ -353,7 +352,6 @@ addEventListener('keydown', e => {
   if (e.key === 'ArrowRight' || e.key === 'ArrowDown' || e.key === 'PageDown') { e.preventDefault(); go(1); }
   else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp' || e.key === 'PageUp') { e.preventDefault(); go(-1); }
   else if (e.key === 'g') openOverview();
-  else if (e.key === 'f' && fx) fx.effect = EFFECTS[(EFFECTS.indexOf(fx.effect) + 1) % EFFECTS.length];
 });
 $('prev').addEventListener('click', () => go(-1));
 $('next').addEventListener('click', () => go(1));

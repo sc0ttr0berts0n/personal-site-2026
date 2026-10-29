@@ -1,263 +1,59 @@
-// GL transitions between toys: one full-screen canvas over the slides plays a shader from a snapshot of the
-// outgoing toy to one of the incoming toy, then hides so the live incoming iframe shows through.
+// The ripple transition between toys: one full-screen canvas over the slides plays a shader from a snapshot of
+// the outgoing toy to one of the incoming toy, then hides so the live incoming iframe shows through.
+//
+// A shockwave in spacetime rolls out from beyond the edge the incoming toy enters by; the wavefront refracts and
+// splits the light, and the incoming toy is inside it. (Eleven other effects were tried on the way here; they
+// are in this file's git history, e.g. lens, focus, reeded, turbulence, ink.)
 //
 // The feed keeps moving its slides underneath exactly as before (the CSS slide is the fallback when there's
 // no WebGL, for reduced motion, and with ?fx=off), so the overlay only has to cover them and get out of the way.
 //
 // Snapshots come from the toys' 'grab' message (embed/lab-embed.js): an ImageBitmap of the stage, drawn the
-// frame it's asked for and transferred, so there is no encode or decode on the main thread. While an effect
-// runs, the toys that are playing are re-grabbed every frame, so the picture keeps moving under the effect.
+// frame it's asked for and transferred, so there is no encode or decode on the main thread. While the ripple
+// runs, the toys that are playing are re-grabbed every frame, so the picture keeps moving under it.
 // A toy that hasn't drawn yet shows its poster, or the bench with the mark.
-//
-//   ?fx=ink | lens | focus | reeded | wormhole | turbulence | caustics | gravity | ripple | chevron | pixels | logo | off
-//                                                pick the effect (f cycles them; ?stats shows which)
 import { logoPath2D } from '../labs/shared/logo.js';
 
-// Scott's ratings so far: ripple 5, lens 4, turbulence 3, ink 3, focus 3, pixels 2; caustics, gravity, chevron, logo 1;
-// reeded, wormhole not rated yet. The first is the default; f cycles in this order.
-export const EFFECTS = ['ripple', 'lens', 'turbulence', 'ink', 'focus', 'pixels', 'reeded', 'wormhole', 'caustics', 'gravity', 'chevron', 'logo'];
-
-// Each effect: how long a full transition from rest takes, and a GLSL body that sets `col` from
-//   uv (0..1, y down)  p (progress 0..1)  s (0 where the outgoing toy leaves, 1 where the incoming enters)
-//   q (across the swipe, -0.5..0.5)  dir (unit, the way the content travels, in uv)  asp (uv → square units)
-//   A(uv) / B(uv) (samplers)  Ac(uv, o) / Bc(uv, o) (with red and blue split by o)  uTime (seconds)
-//   blur(uFrom | uTo, uv, radius) (a soft disc, radius in screen heights; bright spots bloom into bokeh)
-const BODIES = {
-  // ink: the incoming toy bleeds in along a noisy front from the side it enters, both pictures smeared by
-  // the same noise, with a dark rim of ink on the front
-  ink: { ms: 640, glsl: `
-    float n = fbm(uv * vec2(uAspect, 1.0) * 3.0 + dir * p * 1.5);
-    float t = s * 0.55 + n * 0.45;
-    float f = 1.0 - p * 1.25;                 // front sweeps past both ends
-    float m = smoothstep(f - 0.02, f + 0.02, t);
-    vec2 warp = dir * (n - 0.5) * 0.12;
-    vec4 a = A(uv + warp * p + dir * p * 0.08);
-    vec4 b = B(uv - warp * (1.0 - p) - dir * (1.0 - p) * 0.08);
-    col = mix(a, b, m);
-    float rim = smoothstep(0.09, 0.0, abs(t - f)) * (1.0 - smoothstep(0.85, 1.0, p));
-    col.rgb *= 1.0 - rim * 0.85;` },
-
-  // lens: a glass magnifier slides in from the entering side with the incoming toy blown up inside it, then
-  // grows to fill the screen while the magnification relaxes; rim shadow, fringing, a specular glint
-  lens: { ms: 900, glsl: `
-    float k = 1.0 - smoothstep(0.8, 1.0, p);          // the glass itself fades out at the end
-    vec2 c = vec2(0.5) - dir * 0.7 * (1.0 - smoothstep(0.0, 0.6, p));
-    float R = mix(0.24, 1.35, smoothstep(0.3, 1.0, p));
-    vec2 d = (uv - c) * asp;
-    float r = length(d), x = r / R;
-    float h = sqrt(max(1.0 - x * x, 0.0));           // the bulge of the glass
-    float mag = mix(2.4, 1.0, smoothstep(0.35, 1.0, p));
-    vec2 ub = c + d / mix(1.0, mag, h) / asp;
-    vec2 ab = d / asp * 0.05 * (1.0 - h) * k;
-    vec4 b = Bc(ub, ab);
-    vec4 a = A(uv) * (1.0 - 0.45 * k * exp(-max(x - 1.0, 0.0) * R * 14.0));   // its shadow on the outgoing toy
-    col = x < 1.0 ? b : a;
-    col.rgb *= 1.0 - 0.5 * k * smoothstep(0.82, 1.0, x) * step(x, 1.0);       // darker toward the rim
-    col.rgb += k * exp(-abs(x - 1.0) * R * 260.0) * 0.6;                     // the rim catching light
-    col.rgb += k * h * exp(-dot(d / R - vec2(-0.35, -0.4), d / R - vec2(-0.35, -0.4)) * 28.0) * 0.45;` },
-
-  // focus: a rack focus from one toy to the other: the outgoing toy goes soft (its highlights bloom into
-  // bokeh) as the incoming one sharpens out of a blur, both breathing slightly as focus shifts
-  focus: { ms: 900, glsl: `
-    float e = p * p * (3.0 - 2.0 * p);
-    float ra = smoothstep(0.0, 0.6, p) * 0.04;
-    float rb = (1.0 - smoothstep(0.4, 1.0, p)) * 0.04;
-    vec2 za = (uv - 0.5) / (1.0 + 0.05 * e) + 0.5;
-    vec2 zb = (uv - 0.5) / (1.0 - 0.05 * (1.0 - e)) + 0.5;
-    float m = smoothstep(0.3, 0.7, p + (s - 0.5) * 0.25);
-    col = mix(m < 1.0 ? blur(uFrom, za, ra) : vec4(0.0), m > 0.0 ? blur(uTo, zb, rb) : vec4(0.0), m);` },
-
-  // reeded: a pane of fluted glass slides across the swipe; each flute bends and frosts a strip of what's
-  // behind it, and the toy behind the pane changes as it passes
-  reeded: { ms: 950, glsl: `
-    float w = 0.5;
-    float f = mix(1.0 + w * 0.5 + 0.03, -w * 0.5 - 0.03, p);   // the pane's middle, along the swipe
-    float lx = fract(s * 28.0) - 0.5;                          // across one flute
-    vec2 off = dir * lx * 0.07;
-    vec2 ab = dir * 0.006;
-    float t = clamp((s - (f - w * 0.5)) / w, 0.0, 1.0);
-    vec4 glass = mix(blur(uFrom, uv - off, 0.006), blur(uTo, uv - off, 0.006), smoothstep(0.35, 0.65, t));
-    glass.rgb = glass.rgb * (0.85 + 0.15 * cos(lx * 6.2832)) + pow(1.0 - abs(lx) * 2.0, 10.0) * 0.18;
-    float inPane = step(abs(s - f), w * 0.5);
-    col = inPane > 0.0 ? glass : (s > f ? B(uv) : A(uv));
-    col.rgb += exp(-abs(abs(s - f) - w * 0.5) * 900.0) * 0.5;` },
-
-  // wormhole: a throat opens near the middle and swallows the screen; space outside falls toward it and spins,
-  // the incoming toy unwinds out of it, and the event horizon burns blue
-  wormhole: { ms: 900, glsl: `
-    float e = p * p * (3.0 - 2.0 * p);
-    vec2 c = vec2(0.5) - dir * 0.3 * (1.0 - e);
-    vec2 d = (uv - c) * asp;
-    float r = length(d), ang = atan(d.y, d.x);
-    float R = 1.5 * pow(e, 1.7);                      // the throat's radius
-    float edge = r - R;
-    float rs = sqrt(r * r + R * R * 0.9);             // outside: pulled in from further out
-    float spin = 2.6 * e * exp(-max(edge, 0.0) * 2.5);
-    vec2 ua = c + vec2(cos(ang - spin), sin(ang - spin)) * rs / asp;
-    vec2 ab = normalize(d + 1e-4) / asp * 0.014 * e;
-    vec4 a = Ac(ua, ab) * mix(0.2, 1.0, smoothstep(0.0, 0.35, edge));
-    float rho = r / max(R, 1e-3);                     // inside: unwinding, and zooming out to rest
-    float un = 3.0 * (1.0 - e) * (1.0 - rho);
-    vec2 ub = c + vec2(cos(ang + un), sin(ang + un)) * r * mix(0.35, 1.0, e) / asp;
-    col = r < R ? B(ub) : a;
-    float rim = exp(-abs(edge) * 38.0) * (1.0 - smoothstep(0.75, 1.0, p));
-    col.rgb += vec3(0.55, 0.75, 1.0) * rim * 1.4;` },
-
-  // turbulence: a domain-warped noise field churns both toys; the incoming one boils up through it from the
-  // side it enters, with a hot edge where they meet
-  turbulence: { ms: 800, glsl: `
-    vec2 P = uv * asp * 2.2;
-    vec2 w1 = vec2(fbm(P + vec2(0.0, uTime * 0.15)), fbm(P + vec2(5.2, 1.3) - uTime * 0.12));
-    vec2 w2 = vec2(fbm(P + 3.5 * w1 + vec2(1.7, 9.2)), fbm(P + 3.5 * w1 + vec2(8.3, 2.8)));
-    float n = fbm(P + 3.0 * w2);
-    float amp = sin(3.14159 * p);
-    vec2 disp = (w2 - 0.5) * 0.45 * amp + dir * amp * 0.04;
-    float t = s * 0.5 + n * 0.5;
-    float f = 1.05 - p * 1.6;
-    float m = smoothstep(f - 0.03, f + 0.03, t);
-    vec2 ab = (w1 - 0.5) * 0.04 * amp;
-    col = mix(Ac(uv + disp, ab), Bc(uv - disp * 0.8, ab), m);
-    col.rgb += vec3(1.0, 0.55, 0.25) * exp(-abs(t - f) * 30.0) * amp;` },
-
-  // caustics: a wall of water rolls across from the entering side, refracting both toys and throwing
-  // rippling caustic light; the incoming toy is what's left when it has passed
-  caustics: { ms: 850, glsl: `
-    vec2 P = uv * asp * 5.0;
-    float T = uTime * 0.6 + p * 3.0;
-    vec2 w = vec2(noise(P * 0.6 + T * 0.3), noise(P * 0.6 + 7.1 - T * 0.3));
-    float r1 = 1.0 - abs(noise(P + w * 2.5 + T * 0.5) * 2.0 - 1.0);
-    float r2 = 1.0 - abs(noise(P * 1.6 - w * 2.5 - T * 0.4 + 3.3) * 2.0 - 1.0);
-    float caus = pow(r1, 10.0) + pow(r2, 10.0);
-    float f = 1.25 - p * 1.5;
-    float wet = (exp(-pow((s - f) * 5.0, 2.0)) + 0.12 * sin(3.14159 * p)) * smoothstep(0.0, 0.08, p) * (1.0 - smoothstep(0.9, 1.0, p));
-    vec2 refr = (w - 0.5) * 0.09 * wet;
-    float m = smoothstep(f - 0.04, f + 0.04, s + (w.x - 0.5) * 0.15);
-    col = mix(A(uv + refr), B(uv - refr), m);
-    col.rgb += vec3(0.7, 0.95, 1.0) * caus * wet * 0.9;` },
-
-  // gravity: a black hole crosses the screen along the swipe, bending the light around it into an Einstein
-  // ring; space it has passed through belongs to the incoming toy
-  gravity: { ms: 950, glsl: `
-    vec2 c = vec2(0.5) - dir * mix(0.85, -0.85, p);
-    vec2 d = (uv - c) * asp;
-    float r = length(d);
-    float E = 0.07 + 0.17 * sin(3.14159 * p);         // Einstein radius
-    vec2 bend = d / (r * r + 0.002) * E * E / asp;
-    float shimmer = (noise(uv * asp * 18.0 + uTime * 2.0) - 0.5) * 0.02;
-    vec2 src = uv - bend + shimmer * dir;
-    float behind = dot((src - c) * asp, -dir);
-    float m = smoothstep(-0.015, 0.015, behind + (noise(vec2(q * 9.0, uTime)) - 0.5) * 0.04);
-    vec2 ab = bend * 0.08;
-    col = mix(Ac(src, ab), Bc(src, ab), m);
-    col.rgb *= smoothstep(E * 0.45, E * 0.75, r);     // the shadow
-    col.rgb += vec3(1.0, 0.8, 0.5) * exp(-abs(r - E) * 55.0) * 1.2;` },
-
-  // ripple: a shockwave in spacetime rolls out from beyond the entering edge; the wavefront refracts and
-  // splits the light, and the incoming toy is inside it
-  ripple: { ms: 800, glsl: `
-    vec2 o = vec2(0.5) - dir * 0.75;
-    vec2 d = (uv - o) * asp;
-    float r = length(d);
-    vec2 far = (abs(dir) * 1.25 + (1.0 - abs(dir)) * 0.5) * asp;
-    float R = mix(-0.1, length(far) + 0.15, p);
-    float x = r - R;
-    float wave = sin(x * 70.0) * exp(-abs(x) * 14.0);
-    vec2 nrm = d / max(r, 1e-3) / asp;
-    vec2 off = nrm * wave * 0.035;
-    vec2 ab = nrm * 0.012 * exp(-abs(x) * 8.0);
-    col = x < 0.0 ? Bc(uv + off, ab) : Ac(uv + off, ab);
-    col.rgb += pow(max(wave, 0.0), 3.0) * 0.5;` },
-
-  // chevron: the mark's chevron, pointing the way the swipe goes, sweeps across as a band of ink with a
-  // trailing hairline; the toys drift with it
-  chevron: { ms: 560, glsl: `
-    float k = 0.55 / uAspectAlong;            // how far the chevron's wings trail behind its tip
-    float c = s - k * abs(q);                 // 0..1 along the swipe, bent into a chevron
-    float f = mix(1.0, -k * 0.5 - 0.2, p);   // the front, from just off the entering edge to past the far one
-    vec4 a = A(uv + dir * p * 0.18);
-    vec4 b = B(uv - dir * (1.0 - p) * 0.18);
-    float band = 0.12;
-    col = c > f + band ? b : a;
-    float inBand = step(f, c) * step(c, f + band);
-    float hair = step(f + band + 0.018, c) * step(c, f + band + 0.024);
-    col = mix(col, vec4(0.957, 0.957, 0.965, 1.0), max(inBand, hair));` },
-
-  // pixels: both toys break into cells that grow and shrink again; cells flip to the incoming toy in a
-  // ragged wave from the side it enters
-  pixels: { ms: 600, glsl: `
-    float size = mix(1.0, 44.0, pow(sin(3.14159 * p), 1.5)) * uDpr;
-    vec2 cell = floor(uv * uRes / size);
-    vec2 cuv = (cell + 0.5) * size / uRes;
-    float r = hash(cell);
-    float cs = dot(cuv - 0.5, -dir) + 0.5;
-    float flip = step(cs * 0.6 + r * 0.4, p * 1.0 + (p > 0.98 ? 1.0 : 0.0));
-    col = mix(A(cuv), B(cuv), flip);` },
-
-  // logo: the incoming toy opens through the mark, which flies in from the entering side and grows past the
-  // screen; the outgoing toy darkens and falls back
-  logo: { ms: 720, glsl: `
-    float e = p * p * (3.0 - 2.0 * p);
-    vec2 c = vec2(0.5) - dir * 0.45 * (1.0 - e);
-    float sc = mix(0.3, 10.0, pow(e, 2.0));      // mark width as a fraction of the screen's short side
-    vec2 d = (uv - c) * uRes / min(uRes.x, uRes.y) / sc;
-    vec2 lt = d * 0.9 + 0.5;
-    float raw = all(equal(clamp(lt, 0.0, 1.0), lt)) ? texture2D(uLogo, lt).r : 0.0;
-    float m = max(smoothstep(0.42, 0.58, raw), smoothstep(0.8, 1.0, p));
-    float rim = min(1.0, 1.6 * (smoothstep(0.1, 0.42, raw) - smoothstep(0.42, 0.7, raw))) * (1.0 - smoothstep(0.6, 0.9, p));
-    vec4 a = A(mix(uv, vec2(0.5), e * 0.12)) * (1.0 - 0.6 * e);
-    vec4 b = B(uv);
-    col = mix(mix(a, b, m), vec4(0.957, 0.957, 0.965, 1.0), rim);` }
-};
+const MS = 800;      // a full transition from rest
 
 const VERT = `attribute vec2 aPos; void main() { gl_Position = vec4(aPos, 0.0, 1.0); }`;
-const frag = body => `#ifdef GL_FRAGMENT_PRECISION_HIGH
+// uv (0..1, y down); dir: unit, the way the content travels; snapshots are uploaded top row first, so uv samples
+// them as is, and past the edge repeats the edge
+const FRAG = `#ifdef GL_FRAGMENT_PRECISION_HIGH
 precision highp float;
 #else
 precision mediump float;
 #endif
-uniform sampler2D uFrom, uTo, uLogo;
+uniform sampler2D uFrom, uTo;
 uniform vec2 uRes, uDir;
-uniform float uP, uAspect, uAspectAlong, uDpr, uTime;
-float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-float noise(vec2 p) {
-  vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
-  return mix(mix(hash(i), hash(i + vec2(1, 0)), f.x), mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), f.x), f.y);
-}
-float fbm(vec2 p) { float v = 0.0, a = 0.5; for (int i = 0; i < 4; i++) { v += a * noise(p); p *= 2.03; a *= 0.5; } return v; }
-// snapshots are uploaded top row first, so uv (y down) samples them as is; past the edge repeats the edge
+uniform float uP, uAspect;
 vec4 A(vec2 uv) { return texture2D(uFrom, clamp(uv, 0.0, 1.0)); }
 vec4 B(vec2 uv) { return texture2D(uTo, clamp(uv, 0.0, 1.0)); }
+// with red and blue pulled apart by o
 vec4 Ac(vec2 uv, vec2 o) { return vec4(A(uv + o).r, A(uv).g, A(uv - o).b, 1.0); }
 vec4 Bc(vec2 uv, vec2 o) { return vec4(B(uv + o).r, B(uv).g, B(uv - o).b, 1.0); }
-vec4 blur(sampler2D t, vec2 uv, float rad) {
-  if (rad < 0.0005) return texture2D(t, clamp(uv, 0.0, 1.0));
-  vec4 acc = vec4(0.0); float wsum = 0.0;
-  float spin = hash(gl_FragCoord.xy) * 6.2832;        // a different disc per pixel hides the sample pattern
-  for (int i = 0; i < 16; i++) {
-    float fi = float(i);
-    float a = fi * 2.39996 + spin, r = sqrt((fi + 0.5) / 16.0) * rad;
-    vec4 c = texture2D(t, clamp(uv + vec2(cos(a) / uAspect, sin(a)) * r, 0.0, 1.0));
-    float w = 1.0 + 6.0 * pow(dot(c.rgb, vec3(0.3, 0.59, 0.11)), 4.0);
-    acc += c * w; wsum += w;
-  }
-  return acc / wsum;
-}
 void main() {
   vec2 uv = vec2(gl_FragCoord.x / uRes.x, 1.0 - gl_FragCoord.y / uRes.y);
-  vec2 dir = uDir;
-  float p = uP;
-  float s = dot(uv - 0.5, -dir) + 0.5;
-  float q = dot(uv - 0.5, vec2(-dir.y, dir.x));
-  vec2 asp = vec2(uAspect, 1.0);
-  vec4 col;
-  ${body}
+  vec2 dir = uDir, asp = vec2(uAspect, 1.0);
+  vec2 o = vec2(0.5) - dir * 0.75;                  // the wave's source, beyond the entering edge
+  vec2 d = (uv - o) * asp;
+  float r = length(d);
+  vec2 far = (abs(dir) * 1.25 + (1.0 - abs(dir)) * 0.5) * asp;   // to the furthest corner
+  float R = mix(-0.1, length(far) + 0.15, uP);
+  float x = r - R;
+  float wave = sin(x * 70.0) * exp(-abs(x) * 14.0);
+  vec2 nrm = d / max(r, 1e-3) / asp;
+  vec2 off = nrm * wave * 0.035;
+  vec2 ab = nrm * 0.012 * exp(-abs(x) * 8.0);
+  vec4 col = x < 0.0 ? Bc(uv + off, ab) : Ac(uv + off, ab);
+  col.rgb += pow(max(wave, 0.0), 3.0) * 0.5;
   gl_FragColor = vec4(col.rgb, 1.0);
 }`;
 
 const ease = t => 1 - Math.pow(1 - t, 3);
 
 // host: the element to cover (the feed). Returns null when WebGL isn't there.
-export function createTransitions(host, { effect = EFFECTS[0] } = {}) {
+export function createTransitions(host) {
   const canvas = document.createElement('canvas');
   canvas.className = 'fx';
   canvas.setAttribute('aria-hidden', 'true');
@@ -271,22 +67,22 @@ export function createTransitions(host, { effect = EFFECTS[0] } = {}) {
   const stats = { frames: 0, worstMs: 0, workMs: 0, coverMs: 0, worstCoverMs: 0, slid: 0, grabs: 0, last: 0 };
   const timed = fn => (...a) => { const t0 = performance.now(); try { return fn(...a); } finally { stats.workMs = Math.max(stats.workMs, performance.now() - t0); } };
 
-  // ---- GL setup: one triangle over the screen, three textures, one program per effect (compiled lazily) ----
+  // ---- GL setup: one triangle over the screen, two textures, one program (compiled on first use) ----
   const buf = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, buf);
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
-  const programs = {};
-  function program(name) {
-    if (programs[name]) return programs[name];
-    const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) console.warn('fx', name, gl.getShaderInfoLog(s)); return s; };
+  let prog = null;
+  function program() {
+    if (prog) return prog;
+    const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) console.warn('fx', gl.getShaderInfoLog(s)); return s; };
     const pr = gl.createProgram();
     gl.attachShader(pr, sh(gl.VERTEX_SHADER, VERT));
-    gl.attachShader(pr, sh(gl.FRAGMENT_SHADER, frag(BODIES[name].glsl)));
+    gl.attachShader(pr, sh(gl.FRAGMENT_SHADER, FRAG));
     gl.bindAttribLocation(pr, 0, 'aPos');
     gl.linkProgram(pr);
     const u = {};
-    for (const k of ['uFrom', 'uTo', 'uLogo', 'uRes', 'uDir', 'uP', 'uAspect', 'uAspectAlong', 'uDpr', 'uTime']) u[k] = gl.getUniformLocation(pr, k);
-    return (programs[name] = { pr, u });
+    for (const k of ['uFrom', 'uTo', 'uRes', 'uDir', 'uP', 'uAspect']) u[k] = gl.getUniformLocation(pr, k);
+    return (prog = { pr, u });
   }
   const texture = () => {
     const t = gl.createTexture();
@@ -295,16 +91,8 @@ export function createTransitions(host, { effect = EFFECTS[0] } = {}) {
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0, 0, 0, 255]));
     return t;
   };
-  const tex = { from: texture(), to: texture(), logo: texture() };
+  const tex = { from: texture(), to: texture() };
   const upload = (t, img) => { gl.bindTexture(gl.TEXTURE_2D, t); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img); };
-  {
-    // the mark, white on black, 0.9 of the width of a square texture (the shader samples d * 0.9 + 0.5)
-    const S = 512, c = document.createElement('canvas'); c.width = c.height = S;
-    const g = c.getContext('2d');
-    g.fillStyle = '#000'; g.fillRect(0, 0, S, S);
-    g.translate(S / 2, S / 2); g.scale(S * 0.9, S * 0.9); g.fillStyle = '#fff'; g.fill(logoPath2D());
-    upload(tex.logo, c);
-  }
 
   let dpr = 1, W = 0, H = 0;
   function resize() {
@@ -383,7 +171,7 @@ export function createTransitions(host, { effect = EFFECTS[0] } = {}) {
   const put = timed((t, img) => { upload(t, img); img.close?.(); });
 
   // ---- state ----
-  // hold: a drag is under way; from/next/prev pictures load in the background and the effect follows the finger
+  // hold: a drag is under way; from/next/prev pictures load in the background and the ripple follows the finger
   // run: the effect is animating to 1 (commit) or back to 0 (release) by itself
   let st = null;      // { from, to: {1: slide, -1: slide}, pics: {from, 1, -1}, side, p, axis, shown, anim, live }
   let raf = 0;
@@ -396,7 +184,7 @@ export function createTransitions(host, { effect = EFFECTS[0] } = {}) {
   function draw() {
     if (!st?.shown) return;
     const side = st.side || 1;
-    const pr = program(effect);
+    const pr = program();
     gl.viewport(0, 0, W, H);
     gl.useProgram(pr.pr);
     gl.enableVertexAttribArray(0);
@@ -404,15 +192,11 @@ export function createTransitions(host, { effect = EFFECTS[0] } = {}) {
     gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, tex.from);
     gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, tex.to);
-    gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, tex.logo);
-    gl.uniform1i(pr.u.uFrom, 0); gl.uniform1i(pr.u.uTo, 1); gl.uniform1i(pr.u.uLogo, 2);
+    gl.uniform1i(pr.u.uFrom, 0); gl.uniform1i(pr.u.uTo, 1);
     gl.uniform2f(pr.u.uRes, W, H);
     gl.uniform2f(pr.u.uDir, ...dirVec(side, st.axis));
     gl.uniform1f(pr.u.uP, Math.max(0, Math.min(1, st.p)));
     gl.uniform1f(pr.u.uAspect, W / H);
-    gl.uniform1f(pr.u.uAspectAlong, st.axis === 'y' ? H / W : W / H);
-    gl.uniform1f(pr.u.uDpr, dpr);
-    gl.uniform1f(pr.u.uTime, performance.now() / 1000 % 600);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 
@@ -493,12 +277,9 @@ export function createTransitions(host, { effect = EFFECTS[0] } = {}) {
   let live = !new URLSearchParams(location.search).has('fx-static');
 
   return {
-    get effect() { return effect; },
-    // switching compiles the new shader now, not on the next move
-    set effect(name) { if (BODIES[name]) { effect = name; program(name); } },
     stats,
-    // warm the effect's shader before the first swipe needs it
-    prepare() { resize(); program(effect); },
+    // compile the shader before the first swipe needs it
+    prepare() { resize(); program(); },
 
     // a drag started on `from`, with its neighbours prev/next (slides, any may be missing)
     hold(from, prev, next, axis = 'x') {
@@ -522,7 +303,7 @@ export function createTransitions(host, { effect = EFFECTS[0] } = {}) {
       if (st.shown) draw();
       else show();
     },
-    // the drag let go short: run the effect back to 0, then hide
+    // the drag let go short: run the ripple back to 0, then hide
     release(ms = 300) {
       if (!st) return;
       if (!st.shown) return clear();
@@ -535,7 +316,7 @@ export function createTransitions(host, { effect = EFFECTS[0] } = {}) {
       const dragged = st && !st.anim && st.to[side] === to && st.from === from;
       if (dragged && st.shown) {
         useSide(side);
-        const dur = Math.max(ms + 40, BODIES[effect].ms * (1 - st.p));
+        const dur = Math.max(ms + 40, MS * (1 - st.p));
         st.anim = { t0: performance.now(), ms: dur, p0: st.p, p1: 1 };
         slide();
         return true;
@@ -550,7 +331,7 @@ export function createTransitions(host, { effect = EFFECTS[0] } = {}) {
       mine.onShown = () => {
         stats.coverMs = Math.round(performance.now() - t0);
         stats.worstCoverMs = Math.max(stats.worstCoverMs, stats.coverMs);
-        mine.anim = { t0: performance.now(), ms: Math.max(ms + 40, BODIES[effect].ms), p0: 0, p1: 1 };
+        mine.anim = { t0: performance.now(), ms: Math.max(ms + 40, MS), p0: 0, p1: 1 };
         go();
       };
       // waiting on two pictures: if they take longer than a few frames, slide the plain way instead
