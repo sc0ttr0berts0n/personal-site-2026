@@ -416,11 +416,11 @@ function openSheet(t) {
     <span class="num">lab ${t.number}</span>
     <h2 id="sheet-title">${esc(t.title)}</h2>
     <p class="blurb">${esc(t.blurb)}</p>
-    <p class="teaches"><span>teaches →</span> ${esc(t.teaches)}</p>
+    <p class="teaches"><span>demonstrates →</span> ${esc(t.teaches)}</p>
     ${t.hint ? `<p class="hint"><span>on its own page →</span> ${esc(stripTags(t.hint))}</p>` : ''}
     <div class="row"><a class="btn primary" href="${esc(pageHref(t))}">Play with this <span aria-hidden="true">→</span></a></div>
     ${motion ? `<section><span class="label">Motion</span>
-      <p class="stub">${forced ? 'Toys play full motion even though your system asks for reduced motion.' : 'Your system asks for reduced motion, so the toys hold still.'}</p>
+      <p class="stub">${forced ? 'Labs play full motion even though your system asks for reduced motion.' : 'Your system asks for reduced motion, so the labs hold still.'}</p>
       <div class="row"><button type="button" class="btn" id="motion-toggle">${forced ? 'Reduce motion again' : 'Play motion anyway'}</button></div></section>` : ''}
     <section>
       <span class="label">Process</span>
@@ -454,7 +454,7 @@ $('artist-btn').addEventListener('click', () => {
 // ---- overview ----
 let overviewWasPlaying = null;
 function renderTiles() {
-  $('ov-count').textContent = `${N} toys`;
+  $('ov-count').textContent = `${N} labs`;
   // the still from npm run posters, then this browser's own snapshot, then the mark
   $('tiles').innerHTML = toys.map((t, i) => `<li><button type="button" class="tile" data-slug="${t.slug}" data-i="${i}"${i === cur ? ' aria-current="true"' : ''}>
       <span class="mark">${logoSVG({ size: 32 })}</span><img src="posters/${t.slug}.jpg" alt="" loading="lazy" decoding="async">
