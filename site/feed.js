@@ -115,15 +115,32 @@ function paintPies() {
     fillPie(pie, s, state);
   }
 }
-// state: 'loading' (fills over the guess, from when s's frame was made), 'queued' (an empty ring) or '' (hidden)
+// state: 'loading' (fills over the guess, from when s's frame was made), 'queued' (an empty ring) or '' (hidden).
+// A toy that loads sooner than the guess doesn't leave its pie part-filled: the fill runs out to full in FINISH,
+// then the pie fades (unless it hadn't shown yet). One that takes longer sits full until it's done.
+const FINISH = 220;
 function fillPie(pie, s, state) {
   const key = state && `${s.toy.slug} ${state} ${s.born}`;
   if (pie.dataset.key === key) return;
   pie.dataset.key = key;
-  pie.classList.remove('loading', 'queued');
+  clearTimeout(pie.finishTimer);
+  const t = performance.now(), left = pie.etaMs - (t - pie.bornAt);
+  // full, it fades ('done' holds it full); a pie that never showed just goes
+  const done = () => { pie.classList.remove('loading', 'queued', 'finishing'); pie.classList.add('done'); };
+  if (!state && pie.classList.contains('loading') && t - pie.addedAt > 500) {
+    const runs = left > FINISH && pie.getAnimations?.({ subtree: true }) || [];
+    if (runs.length) {
+      for (const a of runs) a.updatePlaybackRate ? a.updatePlaybackRate(left / FINISH) : (a.playbackRate = left / FINISH);
+      pie.classList.add('finishing');
+      pie.finishTimer = setTimeout(done, FINISH + 40);
+    } else done();
+    return;
+  }
+  pie.classList.remove('loading', 'queued', 'finishing', 'done');
   if (!state) return;
-  pie.style.setProperty('--eta', `${Math.round(eta(s.toy.slug) * 1.2)}ms`);
-  pie.style.setProperty('--t0', `${Math.round(performance.now() - s.born)}ms`);
+  pie.etaMs = Math.round(eta(s.toy.slug) * 1.2); pie.bornAt = s.born; pie.addedAt = t;
+  pie.style.setProperty('--eta', `${pie.etaMs}ms`);
+  pie.style.setProperty('--t0', `${Math.round(t - s.born)}ms`);
   void pie.offsetWidth;   // restart the fill
   pie.classList.add(state);
 }

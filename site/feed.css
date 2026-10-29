@@ -143,6 +143,7 @@ html[data-axis="y"] .cues { display: block; position: absolute; inset: 0; z-inde
 .pie b:last-child::before { border-radius: 99px 0 0 99px; transform-origin: 100% 50%; }
 .pie.loading b:first-child::before { animation: fill calc(var(--eta) / 2) linear calc(var(--t0) * -1) both; }
 .pie.loading b:last-child::before { animation: fill calc(var(--eta) / 2) linear calc(var(--eta) / 2 - var(--t0)) both; }
+.pie.done b::before { rotate: 0deg; opacity: 1; }   /* full while it fades */
 @keyframes fill { from { rotate: -180deg; opacity: 0; } 1% { opacity: 1; } to { rotate: 0deg; opacity: 1; } }
 
 /* what a finger does to the toy, over it as it arrives */
@@ -164,6 +165,7 @@ html[data-axis="y"] .cues { display: block; position: absolute; inset: 0; z-inde
   border: 1px solid rgb(244 244 246 / .3); opacity: 0; transition: opacity .2s; pointer-events: none; }
 .stage .pie b { top: 2px; bottom: 2px; width: calc(50% - 2px); }
 .slide.waiting .stage .pie.loading, .slide.waiting .stage .pie.queued { opacity: .85; transition-delay: .3s; }
+.stage .pie.finishing { opacity: .85; transition-delay: 0s; }   /* running out to full once the toy beat its guess */
 .slide:not(.has-poster) :is(.wait, .stage .pie) { translate: 0 64px; }
 @keyframes spin { to { rotate: 360deg; } }
 /* the GL transition overlay (site/transition.js): over the slides, under the chrome; only shown mid-transition */
