@@ -4,8 +4,9 @@
 //   lab.html?embed=1              stage only, full frame, playing
 //   lab.html?embed=1&paused=1     stage only, frozen; draws &warm=N frames first (default 6) so it isn't blank
 //
-// The feed drives it by postMessage ({ feed: 'play' | 'pause' | 'snap' }) and hears back
-// { feed: 'ready' | 'playing' | 'live' | 'frozen' | 'stats' | 'snap' }.
+// The feed drives it by postMessage ({ feed: 'play' | 'pause' | 'snap' | 'grab' }) and hears back
+// { feed: 'ready' | 'playing' | 'live' | 'frozen' | 'stats' | 'snap' | 'grab' }.
+// 'grab' is the fast snapshot for the feed's GL transitions: an ImageBitmap of the stage (no encode), transferred.
 // 'ready' is the first drawn frame; 'live' is the first frame drawn after a 'play'.
 //
 // Pausing works on any lab without touching its code: requestAnimationFrame callbacks are parked while
@@ -29,7 +30,7 @@
     html.lab-embed .lab-stage { width: 100%; height: 100%; aspect-ratio: auto; max-height: none; border: 0; }`;
   document.head.appendChild(css);
 
-  const post = msg => parent.postMessage({ ...msg, slug: location.pathname.split('/').pop().replace(/\.html$/, '') }, location.origin);
+  const post = (msg, transfer) => parent.postMessage({ ...msg, slug: location.pathname.split('/').pop().replace(/\.html$/, '') }, location.origin, transfer);
 
   let playing = !q.has('paused');
   let warm = playing ? 0 : Math.max(1, +q.get('warm') || 6);
@@ -39,7 +40,7 @@
   const rawRAF = window.requestAnimationFrame.bind(window);
   let seq = 0;
   const pending = new Set(), cancelled = new Set(), parked = new Map();
-  let frameCbMs = 0, drew = false, snapWidth = 0;
+  let frameCbMs = 0, drew = false, snapWidth = 0, grabs = [];
   const run = (cb, ts) => {
     const t0 = performance.now();
     try { cb(ts); } finally {
@@ -48,6 +49,7 @@
       if (!window.labWarming) drew = true;
       // read the canvases in the same frame they were drawn, so WebGL buffers are still valid
       if (snapWidth && drew) { const w = snapWidth; snapWidth = 0; post({ feed: 'snap', url: snapshot(w) }); }
+      if (grabs.length && drew) sendGrabs();
     }
   };
   window.requestAnimationFrame = cb => {
@@ -74,7 +76,11 @@
     if (v === playing) return;
     playing = v;
     if (v) { warm = 0; liveWanted = true; release(); post({ feed: 'playing' }); }
-    else post({ feed: 'frozen' });
+    else {
+      // a grab or snap asked for just before the pause still gets its frame
+      if (grabs.length || snapWidth) { warm = Math.max(warm, 1); release(); }
+      post({ feed: 'frozen' });
+    }
     visibility();
   }
 
@@ -82,6 +88,9 @@
   let frames = 0, last = 0, gaps = 0, worst = 0, statT = performance.now(), firstSent = false, liveWanted = false;
   const meter = now => {
     rawRAF(meter);
+    // a lab that only draws on input never runs a frame for a grab: answer from the meter after a few frames
+    // (its WebGL canvas may read blank by then)
+    if (grabs.length && ++grabWait > 3) sendGrabs();
     if (!drew) { last = now; return; }
     drew = false;
     if (!firstSent) { firstSent = true; post({ feed: 'ready' }); }
@@ -99,12 +108,32 @@
 
   // ---- snapshot: every canvas on the stage, over the bench grid, as a small JPEG ----
   function snapshot(w) {
+    const c = compose(document.createElement('canvas'), w);
+    if (!c) return null;
+    try { return c.toDataURL('image/jpeg', 0.82); } catch (e) { return null; }
+  }
+  // grab: the same picture as an ImageBitmap, drawn on one reused offscreen canvas and handed over without copying
+  let grabCanvas = null, grabWait = 0;
+  function sendGrabs() {
+    const list = grabs; grabs = []; grabWait = 0;
+    for (const { id, w } of list) {
+      let bitmap = null;
+      try {
+        grabCanvas ||= typeof OffscreenCanvas === 'function' ? new OffscreenCanvas(1, 1) : null;
+        if (grabCanvas && compose(grabCanvas, w)) bitmap = grabCanvas.transferToImageBitmap();
+      } catch (e) { bitmap = null; }
+      post({ feed: 'grab', id, bitmap }, bitmap ? [bitmap] : []);
+    }
+  }
+  // draws the stage onto canvas c at width w; returns c, or null if there's no stage to draw
+  function compose(c, w) {
     const stage = document.querySelector('.lab-stage');
     if (!stage) return null;
     const r = stage.getBoundingClientRect();
     if (!r.width || !r.height) return null;
     const s = w / r.width, h = Math.round(r.height * s);
-    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    if (c.width !== w) c.width = w;
+    if (c.height !== h) c.height = h;
     const g = c.getContext('2d');
     const cs = getComputedStyle(root);
     g.fillStyle = cs.getPropertyValue('--bg') || '#000'; g.fillRect(0, 0, w, h);
@@ -122,7 +151,7 @@
       try { g.drawImage(cv, (b.left - r.left) * s, (b.top - r.top) * s, b.width * s, b.height * s); } catch (e) {}
     }
     g.globalAlpha = 1;
-    try { return c.toDataURL('image/jpeg', 0.82); } catch (e) { return null; }
+    return c;
   }
 
   addEventListener('message', e => {
@@ -133,6 +162,9 @@
     else if (m.feed === 'snap') {
       snapWidth = Math.max(64, Math.min(1024, m.width || 480));
       // a frozen lab won't draw again, so take one frame to snap it
+      if (!running()) { warm = 1; release(); }
+    } else if (m.feed === 'grab') {
+      grabs.push({ id: m.id, w: Math.max(64, Math.min(2048, m.width || 720)) });
       if (!running()) { warm = 1; release(); }
     }
   });

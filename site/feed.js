@@ -8,6 +8,7 @@
 import { LABS } from '../labs/manifest.js';
 import { ORDER, START, ARTIST, NO_PRELOAD } from './config.js';
 import { logoSVG } from '../labs/shared/logo.js';
+import { createTransitions, EFFECTS } from './transition.js';
 
 const bySlug = new Map(LABS.map(l => [l.slug, l]));
 const toys = [...ORDER.filter(s => bySlug.has(s)), ...LABS.map(l => l.slug).filter(s => !ORDER.includes(s))].map(s => bySlug.get(s));
@@ -32,6 +33,12 @@ const metrics = { loads: [], swipes: [], stats: {} };
 window.feedMetrics = metrics;
 const showStats = new URLSearchParams(location.search).has('stats');
 const solo = new URLSearchParams(location.search).has('solo');   // measuring only: no preloaded neighbours
+
+// ---- GL transitions over the slides (site/transition.js); ?fx=off, reduced motion or no WebGL keep the CSS slide ----
+const fxName = new URLSearchParams(location.search).get('fx');
+const fx = calm || fxName === 'off' ? null : createTransitions(feed, { effect: EFFECTS.includes(fxName) ? fxName : EFFECTS[0] });
+const axis = () => 'x';   // the swipe axis the transitions follow ('y' once portrait phones swipe up/down)
+if (fx) { metrics.fx = fx.stats; window.requestIdleCallback ? requestIdleCallback(() => fx.prepare()) : fx.prepare(); }
 
 // ---- posters: a small snapshot of each toy, for the overview grid and as an underlay while a toy loads ----
 const posters = new Map();
@@ -174,13 +181,15 @@ function becameCurrent(s, t0) {
 
 // Move by one toy (dir ±1). ms: slide duration, shorter after a fast flick.
 function go(dir, { ms = 420, t0 = performance.now() } = {}) {
+  const from = slides.get(toys[cur].slug);
   cur = wrap(cur + dir);
   const t = toys[cur];
   let s = slides.get(t.slug);
   if (!s) { s = makeSlide(t, true, heavy(t)); s.offset = dir; place(s); s.el.getBoundingClientRect(); }
   for (const o of slides.values()) o.offset = rel(indexOf(o.toy.slug));
-  animate(true, ms);
-  placeAll();
+  // with a GL transition the slide runs underneath it, once the overlay is up
+  const slide = () => { animate(true, ms); placeAll(); };
+  if (!fx?.cover(from, s, dir, ms, slide, axis())) slide();
   if (calm) { s.el.classList.remove('entering'); void s.el.offsetWidth; s.el.classList.add('entering'); }
   becameCurrent(s, t0);
   writeHash();
@@ -193,6 +202,7 @@ function jump(i) {
   const d = rel(i);
   if (Math.abs(d) === 1) return go(d);
   const old = slides.get(toys[cur].slug);
+  fx?.stop();
   cur = i;
   const t = toys[cur];
   let s = slides.get(t.slug) || makeSlide(t, true, heavy(t));
@@ -223,7 +233,8 @@ addEventListener('message', e => {
   } else if (m.feed === 'stats') {
     metrics.stats[s.toy.slug] = { fps: +m.fps.toFixed(1), cbMs: +m.cbMs.toFixed(2), worstMs: Math.round(m.worstMs) };
     if (showStats && s.toy === toys[cur]) renderStats(s.toy.slug);
-  } else if (m.feed === 'snap' && m.url) savePoster(s.toy.slug, m.url);
+  } else if (m.feed === 'frozen') fx?.keep(s);
+  else if (m.feed === 'snap' && m.url) savePoster(s.toy.slug, m.url);
 });
 
 function renderStats(slug) {
@@ -232,7 +243,8 @@ function renderStats(slug) {
   el.hidden = false;
   el.innerHTML = `${slug} · <b>${st.fps}</b> fps · lab js <b>${st.cbMs}</b> ms/frame · worst gap <b>${st.worstMs}</b> ms` +
     `<br>mounted <b>${slides.size}</b>${mem ? ` · js heap <b>${Math.round(mem.usedJSHeapSize / 1048576)}</b> MB` : ''}` +
-    (lastSwipe ? ` · last swipe live in <b>${lastSwipe.msToLive}</b> ms` : '');
+    (lastSwipe ? ` · last swipe live in <b>${lastSwipe.msToLive}</b> ms` : '') +
+    (fx ? `<br>fx <b>${fx.effect}</b> (f) · worst fx frame <b>${Math.round(fx.stats.worstMs)}</b> ms` : '');
 }
 
 // ---- gestures: drag, wheel/trackpad, keys, buttons ----
@@ -259,6 +271,7 @@ feed.addEventListener('pointermove', e => {
       placeAll(at);
       // a neighbour that isn't mounted yet (fast swiping) gets mounted now, frozen
       loadNeighbours();
+      fx?.hold(c, slides.get(toys[wrap(cur - 1)].slug), slides.get(toys[wrap(cur + 1)].slug), axis());
     } else if (Math.abs(dy) > 16) drag = null;
     return;
   }
@@ -266,6 +279,7 @@ feed.addEventListener('pointermove', e => {
   drag.samples.push([e.timeStamp, e.clientX]);
   while (drag.samples.length > 2 && e.timeStamp - drag.samples[0][0] > 90) drag.samples.shift();
   placeAll(drag.dx);
+  fx?.drag(drag.dx / feed.clientWidth);
   // the toy coming into view is live as soon as any of it shows; the one on the other side rests
   if (drag.dx) for (const s of slides.values()) {
     if (s.offset === (drag.dx < 0 ? 1 : -1)) { play(s); s.peeked = true; }
@@ -288,6 +302,7 @@ function endDrag(e, cancelled) {
     go(d.dx < 0 ? 1 : -1, { ms, t0: performance.now() });
   } else {
     animate(true, 300); placeAll(0); settle(300);
+    fx?.release(300);
     for (const s of slides.values()) if (s.offset) pause(s);
     // a toy that was peeked at and sent back starts over next time, not from where the peek left it
     setTimeout(() => {
@@ -319,6 +334,7 @@ addEventListener('keydown', e => {
   if (e.key === 'ArrowRight' || e.key === 'ArrowDown' || e.key === 'PageDown') { e.preventDefault(); go(1); }
   else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp' || e.key === 'PageUp') { e.preventDefault(); go(-1); }
   else if (e.key === 'g') openOverview();
+  else if (e.key === 'f' && fx) fx.effect = EFFECTS[(EFFECTS.indexOf(fx.effect) + 1) % EFFECTS.length];
 });
 $('prev').addEventListener('click', () => go(-1));
 $('next').addEventListener('click', () => go(1));
