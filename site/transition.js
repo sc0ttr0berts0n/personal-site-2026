@@ -13,7 +13,9 @@
 //                                                pick the effect (f cycles them; ?stats shows which)
 import { logoPath2D } from '../labs/shared/logo.js';
 
-export const EFFECTS = ['ink', 'lens', 'focus', 'reeded', 'wormhole', 'turbulence', 'caustics', 'gravity', 'ripple', 'chevron', 'pixels', 'logo'];
+// Scott's ratings so far: ripple 5, lens 4, turbulence 3, ink 3, focus 3, pixels 2; caustics, gravity, chevron, logo 1;
+// reeded, wormhole not rated yet. The first is the default; f cycles in this order.
+export const EFFECTS = ['ripple', 'lens', 'turbulence', 'ink', 'focus', 'pixels', 'reeded', 'wormhole', 'caustics', 'gravity', 'chevron', 'logo'];
 
 // Each effect: how long a full transition from rest takes, and a GLSL body that sets `col` from
 //   uv (0..1, y down)  p (progress 0..1)  s (0 where the outgoing toy leaves, 1 where the incoming enters)
@@ -255,7 +257,7 @@ void main() {
 const ease = t => 1 - Math.pow(1 - t, 3);
 
 // host: the element to cover (the feed). Returns null when WebGL isn't there.
-export function createTransitions(host, { effect = 'ink' } = {}) {
+export function createTransitions(host, { effect = EFFECTS[0] } = {}) {
   const canvas = document.createElement('canvas');
   canvas.className = 'fx';
   canvas.setAttribute('aria-hidden', 'true');
