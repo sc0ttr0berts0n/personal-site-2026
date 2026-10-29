@@ -3,9 +3,9 @@ export const LABS = [
   {
     "slug": "prism",
     "number": "01",
-    "title": "Logo Prism",
-    "blurb": "A laser crosses the mark from overhead. Each wavelength refracts at its own angle, and steep hits bounce inside the chevrons by total internal reflection.",
-    "teaches": "Snell’s law n₁ sin θ₁ = n₂ sin θ₂, dispersion, critical angle θc = asin(1/n), Fresnel reflection",
+    "title": "Prism",
+    "blurb": "A laser crosses the mark from above. Each color bends at its own angle, and steep rays get trapped, bouncing around inside the glass.",
+    "teaches": "three.js loaded straight from a CDN through an import map, with no build step. A custom GLSL shader bends the background grid through the glass once per color channel, which is where the rainbow fringes come from, and the beams are pixel-exact screen-space lines with bloom on top. The beams follow Snell’s law at seven wavelengths; the grid fakes it with three, one per color channel.",
     "hint": "move to aim · click to fire from there",
     "href": "labs/prism.html",
     "versions": []
@@ -13,9 +13,9 @@ export const LABS = [
   {
     "slug": "fluid",
     "number": "02",
-    "title": "Logo Vessel",
-    "blurb": "Each chevron is a sealed glass vessel partly filled with liquid. Tilt it and the surface finds level again, ringing down in damped sloshing waves.",
-    "teaches": "hydrostatics: a free surface stays level at fixed volume; sloshing modes ω² = gk·tanh(kh), viscous damping, capillary meniscus ℓc = √(γ/ρg)",
+    "title": "Vessel",
+    "blurb": "Each chevron is a sealed glass vessel, part-filled with liquid. Tilt it and watch the surface slosh, then settle level again.",
+    "teaches": "Inspired in part by Valve’s liquid-in-a-bottle work: no fluid solver, just a level surface plus damped sloshing waves. The whole scene is one full-screen raymarching shader in three.js, tracing the glass and liquid through distance fields baked from the logo. It’s heavy, so it compiles in the background and the page never stalls.",
     "hint": "drag to tilt · flick to slosh",
     "href": "labs/fluid.html",
     "versions": [
@@ -32,9 +32,9 @@ export const LABS = [
   {
     "slug": "goop",
     "number": "03",
-    "title": "Out of the Goop",
-    "blurb": "The mark is hauled up out of a pool of black oil, and the camera rides up with it. Then it hangs there while the oil lets go: thick sheets sag and slide off, ropes hang all the way back down to the pool, neck and snap, and the crisp solid mark shows through.",
-    "teaches": "Gravity drainage of a viscous film: the coat clears from the top down, slowest at the lowest edges · Plateau–Rayleigh instability and viscous necking: a rope thins until it pinches off, in about τ ≈ μR/γ · Fresnel on a dark dielectric: oil reflects ~4% head-on and turns to a mirror at grazing angles",
+    "title": "Neon Oil",
+    "blurb": "The mark rises out of a pool of black oil. Sheets of it slide off, long ropes stretch back down to the pool and snap, and the clean mark shows through.",
+    "teaches": "Beautiful eye candy for its own sake. Raw WebGL2, no library: the logo’s outline is baked into a half-float texture, and one large shader draws the oil, the drips and the reflections. It’s the heaviest shader on the site, so it compiles in the background while the page stays responsive.",
     "hint": "tap the pool for a ripple · drag through it for a wake<br>tap the mark to pour a drip",
     "href": "labs/goop.html",
     "versions": [
@@ -65,7 +65,7 @@ export const LABS = [
     "number": "04",
     "title": "Knockout",
     "blurb": "The mark stands on three slim plinths with rubber caps. Pull back anywhere and let go to throw a ball at it.",
-    "teaches": "momentum and impulse J = Δp, restitution, torque about the center of mass, static friction on a slope (μ ≥ tan θ)",
+    "teaches": "Canvas 2D drawing with planck.js, a JavaScript port of the Box2D physics engine. The logo’s concave shapes are cut into convex pieces the engine can simulate, and lines snap to whole device pixels so they stay sharp on any screen.",
     "hint": "drag back anywhere · release to fling<br>mark = 1 m wide",
     "href": "labs/knockout.html",
     "versions": []
@@ -74,8 +74,8 @@ export const LABS = [
     "slug": "bigbang",
     "number": "05",
     "title": "Big Bang",
-    "blurb": "A cold dust cloud falls in on itself. It spins up, heats, streams into three chevrons and ignites as the mark. Replay blows it apart and lets gravity do it again.",
-    "teaches": "Gravitational collapse. As the cloud shrinks by a factor r, angular momentum L = mvr is conserved, so its spin climbs as 1/r²; the virial theorem says its temperature climbs as 1/r. The gas is fBm noise summed over octaves, domain-warped, and raymarched through a pull field built from the mark’s signed distance.",
+    "blurb": "A cold dust cloud collapses into the mark.",
+    "teaches": "A volumetric cloud in three.js, raymarched at reduced resolution and smoothed over several frames by temporal reprojection, the trick games use to make expensive effects affordable. A pull field shaped like the logo draws the gas in, and it spins up as it shrinks, like a real collapsing cloud.",
     "hint": "drag to orbit · tap to replay",
     "href": "labs/bigbang.html",
     "versions": [
@@ -104,9 +104,9 @@ export const LABS = [
   {
     "slug": "godrays",
     "number": "06",
-    "title": "Logo Light",
-    "blurb": "A lamp glows behind the mark in a hazy room. You only see the beams where haze is lit, so the chevrons carve shafts of shadow that stream toward you.",
-    "teaches": "crepuscular rays: light scattered by a medium shows the beam, and occluders cut it into shafts (volumetric scattering as a radial blur with decay)",
+    "title": "Radiant",
+    "blurb": "A lamp glows behind the mark in a hazy room and carves out light shafts as the light shines through.",
+    "teaches": "Two-pass god rays in three.js: render the lamp and a black silhouette of the logo off screen, then blur it outward from the light. Colors are mixed in OKLab, so gradients pass through clean hues instead of muddy gray.",
     "hint": "move to steer the light · click to pin it",
     "href": "labs/godrays.html",
     "versions": [
@@ -128,8 +128,8 @@ export const LABS = [
     "slug": "maze",
     "number": "07",
     "title": "Maze",
-    "blurb": "Each chevron of the mark holds its own maze, cut along the band’s own grain, and A* solves all three at once. Change the heuristic and the weight to see how much of each maze it explores.",
-    "teaches": "A* search: f = g + h, admissible heuristics, and why weighting trades optimality for speed",
+    "blurb": "Each chevron holds its own maze, and A* solves all three at once. Change the heuristic and see how much of each maze it has to explore.",
+    "teaches": "Plain Canvas 2D on stacked layers (floor, search, walls, overlay), so only what changes gets redrawn. The maze grid is derived from the logo’s own SVG path data, and A* runs live, step by step, with its heuristic and weight as controls.",
     "hint": "tap a maze to move its start",
     "href": "labs/maze.html",
     "versions": [
@@ -159,8 +159,8 @@ export const LABS = [
     "slug": "pachinko",
     "number": "08",
     "title": "Pachinko",
-    "blurb": "A pegboard everywhere the mark isn’t. The lattice is cut from the mark itself, along its two edge directions and in step with the grid it was drawn on, so every peg beside an edge sits the same distance from it, and the walls zigzag along the same lines. The pegs double as a halftone screen that the mark and the balls light up. Tap anywhere to drop a ball at that point, or hold to pour.",
-    "teaches": "the Galton board: each peg is nearly a coin flip, so bins drift toward a binomial bell curve, and the mark carves a shadow in it; on an inclined board gravity is g·sin θ",
+    "blurb": "A Galton board everywhere the mark isn’t, cut along the mark’s own angles. Tap to drop a ball or hold to pour, and watch the bins lean toward a bell curve.",
+    "teaches": "Canvas 2D with planck.js physics for the balls. Every peg is placed from the logo’s geometry, so the board fits the mark exactly. Pour enough balls and the bins lean toward a bell curve, with a dent where the mark casts its shadow.",
     "hint": "tap to drop at that x · hold to pour<br>mark = 40 cm wide",
     "href": "labs/pachinko.html",
     "versions": [
@@ -173,9 +173,9 @@ export const LABS = [
   {
     "slug": "neural",
     "number": "09",
-    "title": "Neural",
-    "blurb": "A small neural network learns the mark from scratch, live, in about twenty seconds. It only ever sees one pixel at a time: where it is, and how bright it should be. Scribble on it and watch it forget, then heal.",
-    "teaches": "gradient descent with Adam, Fourier features and spectral bias (coarse before fine), implicit neural representations f(x, y) → rgb, catastrophic interference in a shared network",
+    "title": "Neural Mark",
+    "blurb": "A small neural network learns the mark from scratch, live, in seconds. Scribble on it and watch it forget, then heal.",
+    "teaches": "A neural network written from scratch in plain JavaScript, no ML library. It trains in a Web Worker so the page keeps its frame rate, with WebGL2 drawing what it has learned; it pauses when the tab is hidden and falls back to time-sliced work where workers aren’t available.",
     "hint": "",
     "href": "labs/neural.html",
     "versions": [
@@ -189,8 +189,8 @@ export const LABS = [
     "slug": "sand",
     "number": "10",
     "title": "Falling Sand",
-    "blurb": "The mark as a sandbox. Lava on the left, water on the right, wood in the middle, all in a round basin cut into bedrock. Lava chews through wood a cell at a time, water and lava make stone and steam, and water sitting on wood, stone or ash grows flowers that bloom pixel by pixel.",
-    "teaches": "cellular automata: local rules, update order and scan bias, density swaps, conserved budgets (every petal costs water)",
+    "blurb": "The mark as a sandbox of lava, water and wood. Lava eats the wood, water and lava make stone and steam, and wet ground grows flowers.",
+    "teaches": "A cellular automaton on Canvas 2D, writing raw pixels through ImageData, one pixel per grain. A seeded random number generator means each loop replays exactly until you paint on it.",
     "hint": "drag to paint · keys 1–7 pick · [ ] brush",
     "href": "labs/sand.html",
     "versions": [
@@ -236,8 +236,8 @@ export const LABS = [
     "slug": "life",
     "number": "11",
     "title": "Life",
-    "blurb": "The mark, laid out cell by cell as a still life in Conway’s Game of Life. The grid leans to the logo’s own 42.8° edges, so every arm is laid out on one even grid of little square blocks that hold perfectly still. One glider is enough to unravel it. When the chaos burns down, it rebuilds.",
-    "teaches": "Conway’s Game of Life (born on 3 neighbours, survives on 2 or 3), still lifes, gliders and spaceships, and how one collision cascades through a fragile pattern",
+    "blurb": "The mark, built as a still life in Conway’s Game of Life. One glider is enough to unravel it, and when the chaos burns out, it rebuilds.",
+    "teaches": "Conway’s Game of Life on Canvas 2D, on a grid sheared to the logo’s 42.8° edges. The rules only care about neighbors, not angles, so the slant costs nothing, and the still life is laid out so not one cell moves until you disturb it.",
     "hint": "tap to drop the brush · drag to draw cells<br>gliders aim at the mark",
     "href": "labs/life.html",
     "versions": [
@@ -255,8 +255,8 @@ export const LABS = [
     "slug": "splat",
     "number": "12",
     "title": "Splat!",
-    "blurb": "A fine grid, slowly zooming. It’s really a camera locked onto the mark, the mark is made of slime, and it’s falling fast. It hits the floor and splats, and the next mark, in the next colour, pops up out of the splat. Then the floor gives way in the shape of the splat, and down they both go.",
-    "teaches": "perspective (screen size goes as 1 / distance, so a steady fall reads as an accelerating zoom) · metaballs: an additive field cut at one level, with one-pixel analytic antialiasing · springs and plastic rope chains for goo",
+    "blurb": "The mark is made of slime and falling fast. It splats on the floor, the next mark pops out of the splat, then the floor gives way and down they go.",
+    "teaches": "Raw WebGL2: every bead of goo is drawn with instanced rendering into a floating-point field (metaballs), then one composite pass lights the slime and the floors. The zoom is just perspective: a steady fall reads as an accelerating zoom.",
     "hint": "tap it mid-fall to tilt it",
     "href": "labs/splat.html",
     "versions": []

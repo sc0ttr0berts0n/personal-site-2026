@@ -26,9 +26,9 @@ const SNAPS = 10;              // filmstrip frames per learning run (plus the ra
 
 const lab = createLab({
   number: '09',
-  title: 'Neural',
-  blurb: 'A small neural network learns the mark from scratch, live, in about twenty seconds. It only ever sees one pixel at a time: where it is, and how bright it should be. Scribble on it and watch it forget, then heal.',
-  teaches: 'gradient descent with Adam, Fourier features and spectral bias (coarse before fine), implicit neural representations f(x, y) → rgb, catastrophic interference in a shared network',
+  title: 'Neural Mark',
+  blurb: 'A small neural network learns the mark from scratch, live, in seconds. Scribble on it and watch it forget, then heal.',
+  teaches: 'A neural network written from scratch in plain JavaScript, no ML library. It trains in a Web Worker so the page keeps its frame rate, with WebGL2 drawing what it has learned; it pauses when the tab is hidden and falls back to time-sliced work where workers aren’t available.',
   palettes: ['cmy', 'spectrum', 'synthwave', 'ember', 'reef', 'aurora', 'ultraviolet', 'gold'],
   defaultPalette: 'ember',
   params: {

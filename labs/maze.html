@@ -32,8 +32,8 @@ const MONO = { key: 'mono', name: 'Mono', bg: '#000000', grid: '#1a1a1a', ink: '
 const lab = createLab({
   number: '07',
   title: 'Maze',
-  blurb: 'Each chevron of the mark holds its own maze, cut along the band’s own grain, and A* solves all three at once. Change the heuristic and the weight to see how much of each maze it explores.',
-  teaches: 'A* search: f = g + h, admissible heuristics, and why weighting trades optimality for speed',
+  blurb: 'Each chevron holds its own maze, and A* solves all three at once. Change the heuristic and see how much of each maze it has to explore.',
+  teaches: 'Plain Canvas 2D on stacked layers (floor, search, walls, overlay), so only what changes gets redrawn. The maze grid is derived from the logo’s own SVG path data, and A* runs live, step by step, with its heuristic and weight as controls.',
   hint: 'tap a maze to move its start',
   palettes: [MONO],
   defaultPalette: 'mono',

@@ -146,8 +146,8 @@ for (const s of SPECIES) {
 const lab = createLab({
   number: '10',
   title: 'Falling Sand',
-  blurb: 'The mark as a sandbox. Lava on the left, water on the right, wood in the middle, all in a round basin cut into bedrock. Lava chews through wood a cell at a time, water and lava make stone and steam, and water sitting on wood, stone or ash grows flowers that bloom pixel by pixel.',
-  teaches: 'cellular automata: local rules, update order and scan bias, density swaps, conserved budgets (every petal costs water)',
+  blurb: 'The mark as a sandbox of lava, water and wood. Lava eats the wood, water and lava make stone and steam, and wet ground grows flowers.',
+  teaches: 'A cellular automaton on Canvas 2D, writing raw pixels through ImageData, one pixel per grain. A seeded random number generator means each loop replays exactly until you paint on it.',
   hint: 'drag to paint · keys 1–7 pick · [ ] brush',
   palettes: [
     { key: 'nature', name: 'Nature', bg: '#000000', grid: '#17171d', ink: '#f4f4f6', colors: ['#2a74ea', '#8a5530', '#ff7a14', '#e8304a', '#3c9a40'] },
