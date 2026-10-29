@@ -129,6 +129,7 @@ function dispose(s) {
 }
 
 const send = (s, feedMsg, extra) => s?.iframe?.contentWindow?.postMessage({ feed: feedMsg, ...extra }, location.origin);
+const playCurrent = () => { const c = slides.get(toys[cur].slug); if (c) play(c); };
 function play(s) { if (!s.playing) { s.playing = true; s.playAt = performance.now(); send(s, 'play'); } }
 function pause(s) { if (s.playing) { s.playing = false; send(s, 'pause'); } }
 
@@ -176,10 +177,11 @@ function settle(ms) {
 }
 
 let snapTimer = 0;
-function becameCurrent(s, t0) {
+// held: the ripple is covering the move and starts the toy itself when it lifts
+function becameCurrent(s, t0, held = false) {
   for (const o of slides.values()) if (o !== s) pause(o);
   s.peeked = false;
-  if (s.playing) {} else { play(s); s.swipeAt = t0; }
+  if (!s.playing) { if (!held) play(s); s.swipeAt = t0; }
   clearTimeout(snapTimer);
   snapTimer = setTimeout(() => send(s, 'snap', { width: 540 }), 2600);
   updateCurrentTile();
@@ -195,9 +197,11 @@ function go(dir, { ms = 420, t0 = performance.now() } = {}) {
   for (const o of slides.values()) o.offset = rel(indexOf(o.toy.slug));
   // with a GL transition the slide runs underneath it, once the overlay is up
   const slide = () => { animate(true, ms); placeAll(); };
-  if (!fx?.cover(from, s, dir, ms, slide, axis())) slide();
+  // the ripple plays over stills: the incoming toy stays paused until it lifts, so it carries on from its picture
+  const held = !!fx?.cover(from, s, dir, ms, slide, axis(), playCurrent);
+  if (!held) slide();
   if (calm) { s.el.classList.remove('entering'); void s.el.offsetWidth; s.el.classList.add('entering'); }
-  becameCurrent(s, t0);
+  becameCurrent(s, t0, held);
   writeHash();
   settle(calm ? 160 : ms);
 }
@@ -281,6 +285,7 @@ feed.addEventListener('pointermove', e => {
       // a neighbour that isn't mounted yet (fast swiping) gets mounted now, frozen
       loadNeighbours();
       fx?.hold(c, slides.get(toys[wrap(cur - 1)].slug), slides.get(toys[wrap(cur + 1)].slug), a);
+      if (fx && c) pause(c);   // under the ripple everything is a still until it lifts
     } else if (Math.abs(dy) > 16) drag = null;
     return;
   }
@@ -289,9 +294,10 @@ feed.addEventListener('pointermove', e => {
   while (drag.samples.length > 2 && e.timeStamp - drag.samples[0][0] > 90) drag.samples.shift();
   placeAll(drag.dx);
   fx?.drag(drag.dx / (a === 'y' ? feed.clientHeight : feed.clientWidth));
-  // the toy coming into view is live as soon as any of it shows; the one on the other side rests
+  // the toy coming into view is live as soon as any of it shows (unless the ripple is showing stills); the one
+  // on the other side rests
   if (drag.dx) for (const s of slides.values()) {
-    if (s.offset === (drag.dx < 0 ? 1 : -1)) { play(s); s.peeked = true; }
+    if (s.offset === (drag.dx < 0 ? 1 : -1)) { if (!fx) { play(s); s.peeked = true; } }
     else if (s.offset === (drag.dx < 0 ? -1 : 1)) pause(s);
   }
 });
@@ -311,7 +317,7 @@ function endDrag(e, cancelled) {
     go(d.dx < 0 ? 1 : -1, { ms, t0: performance.now() });
   } else {
     animate(true, 300); placeAll(0); settle(300);
-    fx?.release(300);
+    fx?.release(300, () => { if (!drag?.active) playCurrent(); });
     for (const s of slides.values()) if (s.offset) pause(s);
     // a toy that was peeked at and sent back starts over next time, not from where the peek left it
     setTimeout(() => {
@@ -324,7 +330,7 @@ feed.addEventListener('pointercancel', e => endDrag(e, true));
 // rotating a phone swaps the axis: a drag in flight is dropped (as if cancelled) and the slides cut to rest on the new axis
 verticalMQ.addEventListener('change', () => {
   document.documentElement.dataset.axis = axis();
-  fx?.stop();
+  if (fx) { fx.stop(); playCurrent(); }
   if (drag?.active) endDrag({ pointerId: drag.id, timeStamp: performance.now() }, true);
   drag = null;
   animate(false); placeAll(0);

@@ -9,9 +9,10 @@
 // no WebGL, for reduced motion, and with ?fx=off), so the overlay only has to cover them and get out of the way.
 //
 // Snapshots come from the toys' 'grab' message (embed/lab-embed.js): an ImageBitmap of the stage, drawn the
-// frame it's asked for and transferred, so there is no encode or decode on the main thread. While the ripple
-// runs, the toys that are playing are re-grabbed every frame, so the picture keeps moving under it.
-// A toy that hasn't drawn yet shows its poster, or the bench with the mark.
+// frame it's asked for and transferred, so there is no encode or decode on the main thread. They are stills:
+// the feed holds both toys paused while the ripple runs (see cover's `done`) and starts the incoming one as it
+// lifts, so the picture under the ripple is exactly where the toy carries on. A toy that hasn't drawn yet shows
+// its poster, or the bench with the mark.
 import { logoPath2D } from '../labs/shared/logo.js';
 
 const MS = 800;      // a full transition from rest
@@ -64,7 +65,7 @@ export function createTransitions(host) {
   // frames: effect frames drawn; worstMs: longest gap between them; workMs: longest main-thread time the effect
   // took in one go (uploads + draw); coverMs: from a move to the overlay being up (the snapshot delay), last and
   // worst; slid: moves that gave up waiting for pictures and kept the plain CSS slide
-  const stats = { frames: 0, worstMs: 0, workMs: 0, coverMs: 0, worstCoverMs: 0, slid: 0, grabs: 0, last: 0 };
+  const stats = { frames: 0, worstMs: 0, workMs: 0, coverMs: 0, worstCoverMs: 0, slid: 0, last: 0 };
   const timed = fn => (...a) => { const t0 = performance.now(); try { return fn(...a); } finally { stats.workMs = Math.max(stats.workMs, performance.now() - t0); } };
 
   // ---- GL setup: one triangle over the screen, two textures, one program (compiled on first use) ----
@@ -168,12 +169,11 @@ export function createTransitions(host) {
     });
   }
   const inUse = img => !!st && Object.values(st.pics).includes(img);
-  const put = timed((t, img) => { upload(t, img); img.close?.(); });
 
   // ---- state ----
   // hold: a drag is under way; from/next/prev pictures load in the background and the ripple follows the finger
   // run: the effect is animating to 1 (commit) or back to 0 (release) by itself
-  let st = null;      // { from, to: {1: slide, -1: slide}, pics: {from, 1, -1}, side, p, axis, shown, anim, live }
+  let st = null;      // { from, to: {1: slide, -1: slide}, pics: {from, 1, -1}, side, p, axis, shown, anim }
   let raf = 0;
 
   function dirVec(side, axis) {
@@ -218,23 +218,6 @@ export function createTransitions(host) {
     loop();
   });
 
-  // live refresh: keep re-grabbing the playing toys while the effect is on screen, one request in flight each
-  function refresh() {
-    if (!st?.shown || !live) return;
-    for (const [key, slide, t] of [['from', st.from, tex.from], ['to', st.to[st.side], tex.to]]) {
-      if (!slide?.playing || st.inflight[key]) continue;
-      st.inflight[key] = true;
-      const mine = st;
-      grab(slide, 120).then(b => {
-        mine.inflight[key] = false;
-        if (!b) return;
-        if (mine !== st || (key === 'to' && slide !== st.to[st.side])) { b.close?.(); return; }
-        stats.grabs++;
-        put(t, b);
-      });
-    }
-  }
-
   function loop() {
     cancelAnimationFrame(raf);
     const tick = now => {
@@ -247,7 +230,6 @@ export function createTransitions(host) {
         st.p = a.p0 + (a.p1 - a.p0) * ease(k);
         if (k >= 1) { draw(); return finish(); }
       }
-      refresh();
       timed(draw)();
       raf = requestAnimationFrame(tick);
     };
@@ -274,8 +256,6 @@ export function createTransitions(host) {
     for (const p of pics) if (!isKept(p)) p.close?.();
   }
 
-  let live = !new URLSearchParams(location.search).has('fx-static');
-
   return {
     stats,
     // compile the shader before the first swipe needs it
@@ -285,7 +265,7 @@ export function createTransitions(host) {
     hold(from, prev, next, axis = 'x') {
       if (st) finish();
       resize();
-      st = { from, to: { 1: next, '-1': prev }, pics: {}, side: 0, p: 0, axis, shown: false, anim: null, inflight: {} };
+      st = { from, to: { 1: next, '-1': prev }, pics: {}, side: 0, p: 0, axis, shown: false, anim: null };
       const mine = st;
       const load = (key, slide) => picture(slide).then(pic => {
         if (mine !== st) { pic.close?.(); return; }
@@ -303,39 +283,40 @@ export function createTransitions(host) {
       if (st.shown) draw();
       else show();
     },
-    // the drag let go short: run the ripple back to 0, then hide
-    release(ms = 300) {
-      if (!st) return;
-      if (!st.shown) return clear();
-      st.anim = { t0: performance.now(), ms: Math.max(120, ms * st.p * 1.6), p0: st.p, p1: 0 };
+    // the drag let go short: run the ripple back to 0, then hide and call done()
+    release(ms = 300, done) {
+      if (!st) return done?.();
+      if (!st.shown) { clear(); return done?.(); }
+      st.anim = { t0: performance.now(), ms: Math.max(120, ms * st.p * 1.6), p0: st.p, p1: 0, done };
     },
 
     // a move to `to` (side ±1) is starting. Calls slide() once the overlay covers the slides (or right away
-    // if it can't), so the feed's own slide runs underneath. Returns false if it won't play.
-    cover(from, to, side, ms, slide, axis = 'x') {
+    // if it can't), so the feed's own slide runs underneath, and done() once the overlay has lifted off the
+    // incoming toy (or when it gives up and slides plainly). Not called if another move or stop() takes over.
+    cover(from, to, side, ms, slide, axis = 'x', done) {
       const dragged = st && !st.anim && st.to[side] === to && st.from === from;
       if (dragged && st.shown) {
         useSide(side);
         const dur = Math.max(ms + 40, MS * (1 - st.p));
-        st.anim = { t0: performance.now(), ms: dur, p0: st.p, p1: 1 };
+        st.anim = { t0: performance.now(), ms: dur, p0: st.p, p1: 1, done };
         slide();
         return true;
       }
       // a move during a move: the overlay holds its last frame until this one is ready
       if (st?.shown) drop(); else if (st) clear();
       resize();
-      const mine = st = { from, to: { [side]: to }, pics: {}, side, p: 0, axis, shown: false, anim: null, inflight: {} };
+      const mine = st = { from, to: { [side]: to }, pics: {}, side, p: 0, axis, shown: false, anim: null };
       const t0 = performance.now();
       let slid = false;
       const go = () => { if (!slid) { slid = true; slide(); } };
       mine.onShown = () => {
         stats.coverMs = Math.round(performance.now() - t0);
         stats.worstCoverMs = Math.max(stats.worstCoverMs, stats.coverMs);
-        mine.anim = { t0: performance.now(), ms: Math.max(ms + 40, MS), p0: 0, p1: 1 };
+        mine.anim = { t0: performance.now(), ms: Math.max(ms + 40, MS), p0: 0, p1: 1, done };
         go();
       };
       // waiting on two pictures: if they take longer than a few frames, slide the plain way instead
-      setTimeout(() => { if (mine === st && !mine.shown) { stats.slid++; clear(); go(); } }, 140);
+      setTimeout(() => { if (mine === st && !mine.shown) { stats.slid++; clear(); go(); done?.(); } }, 140);
       for (const [key, s] of [['from', from], [String(side), to]]) picture(s).then(pic => {
         if (mine !== st) { pic.close?.(); return; }
         mine.pics[key] = pic;
