@@ -9,16 +9,17 @@
 // runs, the toys that are playing are re-grabbed every frame, so the picture keeps moving under the effect.
 // A toy that hasn't drawn yet shows its poster, or the bench with the mark.
 //
-//   ?fx=ink | wormhole | turbulence | caustics | gravity | ripple | chevron | pixels | logo | off
+//   ?fx=ink | lens | focus | reeded | wormhole | turbulence | caustics | gravity | ripple | chevron | pixels | logo | off
 //                                                pick the effect (f cycles them; ?stats shows which)
 import { logoPath2D } from '../labs/shared/logo.js';
 
-export const EFFECTS = ['ink', 'wormhole', 'turbulence', 'caustics', 'gravity', 'ripple', 'chevron', 'pixels', 'logo'];
+export const EFFECTS = ['ink', 'lens', 'focus', 'reeded', 'wormhole', 'turbulence', 'caustics', 'gravity', 'ripple', 'chevron', 'pixels', 'logo'];
 
 // Each effect: how long a full transition from rest takes, and a GLSL body that sets `col` from
 //   uv (0..1, y down)  p (progress 0..1)  s (0 where the outgoing toy leaves, 1 where the incoming enters)
 //   q (across the swipe, -0.5..0.5)  dir (unit, the way the content travels, in uv)  asp (uv → square units)
 //   A(uv) / B(uv) (samplers)  Ac(uv, o) / Bc(uv, o) (with red and blue split by o)  uTime (seconds)
+//   blur(uFrom | uTo, uv, radius) (a soft disc, radius in screen heights; bright spots bloom into bokeh)
 const BODIES = {
   // ink: the incoming toy bleeds in along a noisy front from the side it enters, both pictures smeared by
   // the same noise, with a dark rim of ink on the front
@@ -33,6 +34,51 @@ const BODIES = {
     col = mix(a, b, m);
     float rim = smoothstep(0.09, 0.0, abs(t - f)) * (1.0 - smoothstep(0.85, 1.0, p));
     col.rgb *= 1.0 - rim * 0.85;` },
+
+  // lens: a glass magnifier slides in from the entering side with the incoming toy blown up inside it, then
+  // grows to fill the screen while the magnification relaxes; rim shadow, fringing, a specular glint
+  lens: { ms: 900, glsl: `
+    float k = 1.0 - smoothstep(0.8, 1.0, p);          // the glass itself fades out at the end
+    vec2 c = vec2(0.5) - dir * 0.7 * (1.0 - smoothstep(0.0, 0.6, p));
+    float R = mix(0.24, 1.35, smoothstep(0.3, 1.0, p));
+    vec2 d = (uv - c) * asp;
+    float r = length(d), x = r / R;
+    float h = sqrt(max(1.0 - x * x, 0.0));           // the bulge of the glass
+    float mag = mix(2.4, 1.0, smoothstep(0.35, 1.0, p));
+    vec2 ub = c + d / mix(1.0, mag, h) / asp;
+    vec2 ab = d / asp * 0.05 * (1.0 - h) * k;
+    vec4 b = Bc(ub, ab);
+    vec4 a = A(uv) * (1.0 - 0.45 * k * exp(-max(x - 1.0, 0.0) * R * 14.0));   // its shadow on the outgoing toy
+    col = x < 1.0 ? b : a;
+    col.rgb *= 1.0 - 0.5 * k * smoothstep(0.82, 1.0, x) * step(x, 1.0);       // darker toward the rim
+    col.rgb += k * exp(-abs(x - 1.0) * R * 260.0) * 0.6;                     // the rim catching light
+    col.rgb += k * h * exp(-dot(d / R - vec2(-0.35, -0.4), d / R - vec2(-0.35, -0.4)) * 28.0) * 0.45;` },
+
+  // focus: a rack focus from one toy to the other: the outgoing toy goes soft (its highlights bloom into
+  // bokeh) as the incoming one sharpens out of a blur, both breathing slightly as focus shifts
+  focus: { ms: 900, glsl: `
+    float e = p * p * (3.0 - 2.0 * p);
+    float ra = smoothstep(0.0, 0.6, p) * 0.04;
+    float rb = (1.0 - smoothstep(0.4, 1.0, p)) * 0.04;
+    vec2 za = (uv - 0.5) / (1.0 + 0.05 * e) + 0.5;
+    vec2 zb = (uv - 0.5) / (1.0 - 0.05 * (1.0 - e)) + 0.5;
+    float m = smoothstep(0.3, 0.7, p + (s - 0.5) * 0.25);
+    col = mix(m < 1.0 ? blur(uFrom, za, ra) : vec4(0.0), m > 0.0 ? blur(uTo, zb, rb) : vec4(0.0), m);` },
+
+  // reeded: a pane of fluted glass slides across the swipe; each flute bends and frosts a strip of what's
+  // behind it, and the toy behind the pane changes as it passes
+  reeded: { ms: 950, glsl: `
+    float w = 0.5;
+    float f = mix(1.0 + w * 0.5 + 0.03, -w * 0.5 - 0.03, p);   // the pane's middle, along the swipe
+    float lx = fract(s * 28.0) - 0.5;                          // across one flute
+    vec2 off = dir * lx * 0.07;
+    vec2 ab = dir * 0.006;
+    float t = clamp((s - (f - w * 0.5)) / w, 0.0, 1.0);
+    vec4 glass = mix(blur(uFrom, uv - off, 0.006), blur(uTo, uv - off, 0.006), smoothstep(0.35, 0.65, t));
+    glass.rgb = glass.rgb * (0.85 + 0.15 * cos(lx * 6.2832)) + pow(1.0 - abs(lx) * 2.0, 10.0) * 0.18;
+    float inPane = step(abs(s - f), w * 0.5);
+    col = inPane > 0.0 ? glass : (s > f ? B(uv) : A(uv));
+    col.rgb += exp(-abs(abs(s - f) - w * 0.5) * 900.0) * 0.5;` },
 
   // wormhole: a throat opens near the middle and swallows the screen; space outside falls toward it and spins,
   // the incoming toy unwinds out of it, and the event horizon burns blue
@@ -181,6 +227,19 @@ vec4 A(vec2 uv) { return texture2D(uFrom, clamp(uv, 0.0, 1.0)); }
 vec4 B(vec2 uv) { return texture2D(uTo, clamp(uv, 0.0, 1.0)); }
 vec4 Ac(vec2 uv, vec2 o) { return vec4(A(uv + o).r, A(uv).g, A(uv - o).b, 1.0); }
 vec4 Bc(vec2 uv, vec2 o) { return vec4(B(uv + o).r, B(uv).g, B(uv - o).b, 1.0); }
+vec4 blur(sampler2D t, vec2 uv, float rad) {
+  if (rad < 0.0005) return texture2D(t, clamp(uv, 0.0, 1.0));
+  vec4 acc = vec4(0.0); float wsum = 0.0;
+  float spin = hash(gl_FragCoord.xy) * 6.2832;        // a different disc per pixel hides the sample pattern
+  for (int i = 0; i < 16; i++) {
+    float fi = float(i);
+    float a = fi * 2.39996 + spin, r = sqrt((fi + 0.5) / 16.0) * rad;
+    vec4 c = texture2D(t, clamp(uv + vec2(cos(a) / uAspect, sin(a)) * r, 0.0, 1.0));
+    float w = 1.0 + 6.0 * pow(dot(c.rgb, vec3(0.3, 0.59, 0.11)), 4.0);
+    acc += c * w; wsum += w;
+  }
+  return acc / wsum;
+}
 void main() {
   vec2 uv = vec2(gl_FragCoord.x / uRes.x, 1.0 - gl_FragCoord.y / uRes.y);
   vec2 dir = uDir;
