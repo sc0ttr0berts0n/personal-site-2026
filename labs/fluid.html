@@ -81,7 +81,11 @@ const NMODES = 6;
 // ---- bake a signed distance field per chevron (exact distance to the polygon) ----
 const N = 512, DOM = 1.2;          // texture covers ±0.6 logo units
 const polys = logoPolygons({ curveSegments: 12 });
+// It runs on every load, so it skips work without changing a bit of the result: each 8×8 block of texels only
+// measures the edges that can be nearest to some texel in it, and inside/outside comes from one sorted list of
+// edge crossings per row instead of a crossing test per texel and edge.
 const sdf = new Float32Array(N * N * 4).fill(1);
+const BLK = 8, HD = (BLK / 2) * Math.SQRT2 * DOM / N;   // block size in texels, its half-diagonal in logo units
 polys.forEach((poly, pi) => {
   const m = poly.length;
   const ax = new Float64Array(m), ay = new Float64Array(m), ex = new Float64Array(m), ey = new Float64Array(m), il = new Float64Array(m);
@@ -89,20 +93,41 @@ polys.forEach((poly, pi) => {
     const a = poly[e], b = poly[(e + 1) % m];
     ax[e] = a[0]; ay[e] = a[1]; ex[e] = b[0] - a[0]; ey[e] = b[1] - a[1]; il[e] = 1 / (ex[e] * ex[e] + ey[e] * ey[e]);
   }
+  const segD2 = (x, y, e) => {
+    const px = x - ax[e], py = y - ay[e];
+    let t = (px * ex[e] + py * ey[e]) * il[e];
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    const dx = px - ex[e] * t, dy = py - ey[e] * t;
+    return dx * dx + dy * dy;
+  };
+  // distance: the nearest edge to any texel in a block lies within (nearest to the block centre) + 2 half-diagonals of the centre
+  const dc = new Float64Array(m), cand = new Int32Array(m);
+  for (let bj = 0; bj < N; bj += BLK) for (let bi = 0; bi < N; bi += BLK) {
+    const cx = ((bi + BLK / 2) / N - 0.5) * DOM, cy = ((bj + BLK / 2) / N - 0.5) * DOM;
+    let dmin = 1e9, nc = 0;
+    for (let e = 0; e < m; e++) { dc[e] = Math.sqrt(segD2(cx, cy, e)); if (dc[e] < dmin) dmin = dc[e]; }
+    for (let e = 0; e < m; e++) if (dc[e] <= dmin + 2 * HD + 1e-9) cand[nc++] = e;
+    for (let j = bj; j < bj + BLK; j++) {
+      const y = ((j + 0.5) / N - 0.5) * DOM;
+      for (let i = bi; i < bi + BLK; i++) {
+        const x = ((i + 0.5) / N - 0.5) * DOM;
+        let best = 1e9;
+        for (let k = 0; k < nc; k++) { const d2 = segD2(x, y, cand[k]); if (d2 < best) best = d2; }
+        sdf[(j * N + i) * 4 + pi] = Math.sqrt(best);
+      }
+    }
+  }
+  // sign: a texel is inside when an odd number of the row's edge crossings lie to its right
+  const xs = new Float64Array(m);
   for (let j = 0; j < N; j++) {
     const y = ((j + 0.5) / N - 0.5) * DOM;
-    for (let i = 0; i < N; i++) {
+    let n = 0;
+    for (let e = 0; e < m; e++) if ((ay[e] > y) !== (ay[e] + ey[e] > y)) xs[n++] = ax[e] + ex[e] * (y - ay[e]) / ey[e];
+    const row = xs.subarray(0, n).sort();
+    for (let i = 0, k = 0; i < N; i++) {
       const x = ((i + 0.5) / N - 0.5) * DOM;
-      let best = 1e9, inside = false;
-      for (let e = 0; e < m; e++) {
-        const px = x - ax[e], py = y - ay[e];
-        let t = (px * ex[e] + py * ey[e]) * il[e];
-        t = t < 0 ? 0 : t > 1 ? 1 : t;
-        const dx = px - ex[e] * t, dy = py - ey[e] * t, d2 = dx * dx + dy * dy;
-        if (d2 < best) best = d2;
-        if ((ay[e] > y) !== (ay[e] + ey[e] > y) && x < ax[e] + ex[e] * (y - ay[e]) / ey[e]) inside = !inside;
-      }
-      sdf[(j * N + i) * 4 + pi] = inside ? -Math.sqrt(best) : Math.sqrt(best);
+      while (k < n && !(x < row[k])) k++;
+      if ((n - k) & 1) sdf[(j * N + i) * 4 + pi] *= -1;
     }
   }
 });
