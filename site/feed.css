@@ -102,17 +102,38 @@ html[data-axis="y"] .cues { display: block; position: absolute; inset: 0; z-inde
 .guiding .slot { opacity: 1; }
 .guiding .cue, .guiding .ring, .guiding .slot { transition: opacity .12s, border-color .12s, filter .12s, box-shadow .15s; }   /* following: no easing */
 .guiding .ring { opacity: .5; }
-.guiding.armed .ring { opacity: 1; box-shadow: 0 0 10px rgb(244 244 246 / .55); }
-/* Loading pies beside the chevrons (feed.js paintPies): a ring while the toy that way waits its turn, filling while
-   it loads, gone once it has drawn. Two half-discs turning in two half-windows: transforms only, so the compositor
+/* reached: the ring flares with the ripple's front (transition.js glow, GLOW_MS) and fades, leaving the chevron */
+.guiding.armed .ring { opacity: 0; animation: flare .6s linear both; }
+.guiding.armed .slot { opacity: 0; transition: opacity .6s; }
+/* pulled back short of it again: the ring and the slot fade back in */
+.guiding:not(.armed) :is(.ring, .slot) { transition: opacity .35s ease-out; }
+@keyframes flare {
+  0% { opacity: .5; box-shadow: 0 0 0 rgb(244 244 246 / 0); }
+  20% { opacity: 1; box-shadow: 0 0 16px rgb(244 244 246 / .8), inset 0 0 6px rgb(244 244 246 / .5); }
+  100% { opacity: 0; box-shadow: 0 0 24px rgb(244 244 246 / 0); }
+}
+/* while the toy a chevron leads to is loading: a nudge the way it points, two or three chevrons long, and a
+   gentle settle, every couple of seconds; translate only, so it carries on through a stall */
+.cue.nudge { animation: nudge 2.4s .5s infinite both; }
+.cue.lo { --nudge: 24px; }
+.cue.hi { --nudge: -24px; }
+@keyframes nudge {
+  0% { translate: 0 0; animation-timing-function: cubic-bezier(.3, 0, .2, 1); }
+  16% { translate: 0 var(--nudge); animation-timing-function: cubic-bezier(.45, 0, .25, 1); }
+  58%, 100% { translate: 0 0; }
+}
+.swiping .cue.nudge { animation: none; }
+/* Loading pies on the far side of the chevrons, above the top one and below the bottom one (feed.js paintPies):
+   a ring while the toy that way waits its turn, filling while it loads, gone once it has drawn. Half a second late,
+   so a toy that loads quickly never blips one. Two half-discs turning in two half-windows: transforms only, so the compositor
    keeps them going while a toy starting up holds the main thread. --eta: how long the fill takes; --t0: time
    already spent loading. Out of the way during a swipe. */
-.cues .pie { position: absolute; left: calc(50% + 16px); width: 11px; height: 11px; margin-top: -1px; border: 1px solid var(--dim);
+.cues .pie { position: absolute; left: 50%; width: 11px; height: 11px; margin-left: -5.5px; border: 1px solid var(--dim);
   border-radius: 50%; opacity: 0; transition: opacity .4s; }
-.cues .pie.lo { top: calc(var(--edge-y) - 18px); }
-.cues .pie.hi { top: calc(var(--cap-top, calc(100% - var(--edge-y))) + 30px); }
-.cues .pie.queued { opacity: .35; }
-.cues .pie.loading { opacity: .6; }
+.cues .pie.lo { top: calc(var(--edge-y) - 18px - 18px); }
+.cues .pie.hi { top: calc(var(--cap-top, calc(100% - var(--edge-y))) + 30px + 17px); }
+.cues .pie.queued { opacity: .35; transition-delay: .5s; }
+.cues .pie.loading { opacity: .6; transition-delay: .5s; }
 .swiping .pie { opacity: 0 !important; transition-duration: .12s; }
 .pie b { position: absolute; top: 1px; bottom: 1px; width: calc(50% - 1px); overflow: hidden; }
 .pie b:first-child { left: 50%; }
@@ -252,6 +273,7 @@ dialog.open::backdrop { opacity: 1; }
 @media (prefers-reduced-motion: reduce) {
   .slide.anim, .sheet, .overview, dialog::backdrop, .toyhint, .edge::before, .edge::after, .cue, .cues .ring, .cues .slot { transition: none; }
   .loader svg { animation: none; }
+  .cue.nudge { animation: none; }
   .wait { animation: breathe 1.6s ease-in-out infinite; }
   .slide.entering { animation-duration: .12s; }
 }

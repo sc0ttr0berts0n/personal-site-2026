@@ -31,7 +31,7 @@ precision mediump float;
 #endif
 uniform sampler2D uFrom, uTo;
 uniform vec2 uRes, uDir;
-uniform float uP, uAspect, uReveal, uFade, uGrid, uLine;
+uniform float uP, uAspect, uReveal, uFade, uGrid, uLine, uGlow;
 uniform vec4 uBox;
 uniform vec3 uBg, uGridColor;
 vec4 bench(vec2 uv) {
@@ -73,7 +73,8 @@ void main() {
     bubble.rgb = bubble.rgb * 1.1 + 0.035;
     col = mix(bubble, Bc(uv + off + dir * 0.07 * (1.0 - uP), ab), uReveal);
   }
-  col.rgb += pow(max(wave, 0.0), 3.0) * 0.5;
+  // the front's crest catches the light; uGlow (a drag reaching its commit point) flares it and haloes the front
+  col.rgb += pow(max(wave, 0.0), 3.0) * (0.5 + 1.5 * uGlow) + exp(-abs(x) * 22.0) * 0.16 * uGlow;
   gl_FragColor = vec4(col.rgb, 1.0);
 }`;
 
@@ -108,7 +109,7 @@ export function createTransitions(host) {
     gl.bindAttribLocation(pr, 0, 'aPos');
     gl.linkProgram(pr);
     const u = {};
-    for (const k of ['uFrom', 'uTo', 'uRes', 'uDir', 'uP', 'uAspect', 'uReveal', 'uFade', 'uGrid', 'uLine', 'uBox', 'uBg', 'uGridColor']) u[k] = gl.getUniformLocation(pr, k);
+    for (const k of ['uFrom', 'uTo', 'uRes', 'uDir', 'uP', 'uAspect', 'uReveal', 'uFade', 'uGrid', 'uLine', 'uBox', 'uBg', 'uGridColor', 'uGlow']) u[k] = gl.getUniformLocation(pr, k);
     return (prog = { pr, u });
   }
   const texture = () => {
@@ -237,11 +238,19 @@ export function createTransitions(host) {
     gl.uniform1f(pr.u.uP, Math.max(0, Math.min(1, st.p)));
     gl.uniform1f(pr.u.uAspect, W / H);
     gl.uniform1f(pr.u.uReveal, st.reveal ?? 1);
+    gl.uniform1f(pr.u.uGlow, glowAt(performance.now()));
     gl.uniform4f(pr.u.uBox, 0, box.top / host.clientHeight, 1, box.h / host.clientHeight);
     gl.uniform1f(pr.u.uFade, box.fade);
     gl.uniform3f(pr.u.uBg, ...bench.bg); gl.uniform3f(pr.u.uGridColor, ...bench.grid);
     gl.uniform1f(pr.u.uGrid, bench.size * dpr); gl.uniform1f(pr.u.uLine, Math.max(1, Math.round(dpr)));
     gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+
+  // a flare that rises fast and dies away over GLOW_MS (feed.css .ring's flare keeps time with it)
+  const GLOW_MS = 600;
+  function glowAt(now) {
+    const k = st?.glowT ? (now - st.glowT) / GLOW_MS : 1;
+    return k >= 1 ? 0 : k < 0.2 ? k / 0.2 : Math.pow(1 - (k - 0.2) / 0.8, 2);
   }
 
   // the 'to' texture holds whichever neighbour the drag is heading for
@@ -330,6 +339,8 @@ export function createTransitions(host) {
       if (st.shown) draw();
       else show();
     },
+    // the drag has reached its commit point: flare the front (drawn on the next frames)
+    glow() { if (st) st.glowT = performance.now(); },
     // the drag let go short: run the ripple back to 0, then hide and call done()
     release(ms = 300, done) {
       if (!st) return done?.();

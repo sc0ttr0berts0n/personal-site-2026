@@ -5,7 +5,8 @@
   "scripts": {
     "sync": "node scripts/sync-labs.mjs",
     "serve": "node scripts/serve.mjs 8123",
-    "posters": "node scripts/posters.mjs"
+    "posters": "node scripts/posters.mjs",
+    "load-times": "node scripts/load-times.mjs"
   },
   "devDependencies": {
     "puppeteer-core": "^24.43.1"

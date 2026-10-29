@@ -12,6 +12,7 @@ import { LABS } from '../labs/manifest.js';
 import { ORDER, START, ARTIST, NO_PRELOAD, TOUCH } from './config.js';
 import { logoSVG } from '../labs/shared/logo.js';
 import { createTransitions } from './transition.js';
+import { LOAD_MS } from './load-times.js';
 
 const bySlug = new Map(LABS.map(l => [l.slug, l]));
 const toys = [...ORDER.filter(s => bySlug.has(s)), ...LABS.map(l => l.slug).filter(s => !ORDER.includes(s))].map(s => bySlug.get(s));
@@ -60,22 +61,24 @@ const [slot, cueLo, cueHi, ring, pieLo, pieHi] = cues.children;
 const swiping = on => feed.classList.toggle('swiping', on);
 // While a drag is on, the chevron it pulls from rides just ahead of the finger, and a ring waits where the drag
 // counts: letting go there moves on (EASY of the screen), or, for a touched toy, getting there does (HARD). Reach
-// it and the chevron sits in the ring, and the two carry on with the finger; pull back short and the chevron leaves.
-// A faint glass slot runs from the chevron to the ring, like a slide-to-unlock track: only the way still to go.
+// it and the ring flares with the ripple's front (fx.glow) and fades, and the chevron carries on with the finger;
+// pull back short and the ring is back, waiting. A faint glass slot runs from the chevron to the ring, like a
+// slide-to-unlock track: only the way still to go. All of it on the screen's centre line, wherever the finger is.
 const LEAD = 84;      // px from the finger to the chevron, clear of a thumb
 function guide(d, e) {
   if (d.axis !== 'y') return;
-  const r = feed.getBoundingClientRect(), x = e.clientX - r.left;
+  const r = feed.getBoundingClientRect();
   const s = d.dx < 0 ? -1 : 1;                       // -1: pulling up, toward the next toy
   const T = feed.clientHeight * (d.hard ? HARD : EASY);
   const armed = Math.abs(d.dx) >= T;
   const cy = d.x0 + d.dx - r.top + s * LEAD;         // the chevron's centre
   const ry = armed ? cy : d.x0 - r.top + s * (T + LEAD);
   const [on, off] = s < 0 ? [cueHi, cueLo] : [cueLo, cueHi];
-  on.style.cssText = `top: ${cy - 5}px; left: ${x}px`;
+  on.style.cssText = `top: ${cy - 5}px`;
   off.style.cssText = '';
-  ring.style.cssText = `top: ${ry - 11}px; left: ${x}px`;
-  slot.style.cssText = `top: ${Math.min(cy, ry) - 15}px; height: ${Math.abs(ry - cy) + 30}px; left: ${x}px`;
+  ring.style.cssText = `top: ${ry - 11}px`;
+  slot.style.cssText = `top: ${Math.min(cy, ry) - 15}px; height: ${Math.abs(ry - cy) + 30}px`;
+  if (armed && !feed.classList.contains('armed')) fx?.glow();
   feed.classList.add('guiding');
   feed.classList.toggle('armed', armed);
 }
@@ -83,15 +86,30 @@ function unguide() {
   for (const el of [slot, cueLo, cueHi, ring]) el.style.cssText = '';
   feed.classList.remove('guiding', 'armed');
 }
-// Beside each chevron, a small pie fills while the toy that way loads, and fades once it has drawn, so a swipe
+// Past each chevron (above the top one, below the bottom one), a small pie fills while the toy that way loads, and fades once it has drawn, so a swipe
 // there lands on a live toy. An empty ring: it's waiting its turn. The pie turns on the compositor (transforms
-// only), so it keeps going while a toy starting up holds the main thread. Its pace is that toy's last load here.
+// only), so it keeps going while a toy starting up holds the main thread.
+// Its pace is a guess at the load: that toy's last load on this device, or else its time in LOAD_MS (each toy
+// timed cold, by scripts/load-times.mjs) scaled by how this device has done against that table on the toys it has
+// loaded (the median ratio), so one slow or quick toy doesn't throw the rest. Loads are kept across visits.
 const LOAD_GUESS = 2500;
-function eta(slug) { try { return +localStorage.getItem('feed-load:' + slug) || LOAD_GUESS; } catch (e) { return LOAD_GUESS; } }
+let seenLoads = {};
+try { seenLoads = JSON.parse(localStorage.getItem('feed-loads')) || {}; } catch (e) {}
+function sawLoad(slug, ms) {
+  seenLoads[slug] = Math.round(ms);
+  try { localStorage.setItem('feed-loads', JSON.stringify(seenLoads)); } catch (e) {}
+}
+function eta(slug) {
+  if (seenLoads[slug]) return seenLoads[slug];
+  const r = Object.keys(seenLoads).filter(k => LOAD_MS[k]).map(k => seenLoads[k] / LOAD_MS[k]).sort((a, b) => a - b);
+  const pace = r.length ? r[(r.length - 1) >> 1] : 1;
+  return (LOAD_MS[slug] || LOAD_GUESS) * pace;
+}
 function paintPies() {
-  for (const [pie, d] of [[pieHi, 1], [pieLo, -1]]) {
+  for (const [pie, cue, d] of [[pieHi, cueHi, 1], [pieLo, cueLo, -1]]) {
     const s = solo ? null : slides.get(toys[wrap(cur + d)].slug);
     const state = !s || s.ready ? '' : s.iframe ? 'loading' : 'queued';
+    cue.classList.toggle('nudge', !!state);   // its chevron nudges the way it points, now and then, until it's ready
     const key = state && `${s.toy.slug} ${state} ${s.born}`;
     if (pie.dataset.key === key) continue;
     pie.dataset.key = key;
@@ -362,7 +380,7 @@ addEventListener('message', e => {
     s.ready = true; s.wantLive = false; s.el.classList.add('ready'); warmed.add(s.toy.slug);
     if (s.toy === toys[cur]) { setLive(); showHint(s); }
     waiting(); paintPies();
-    try { localStorage.setItem('feed-load:' + s.toy.slug, Math.round(now - s.born)); } catch (e) {}
+    sawLoad(s.toy.slug, now - s.born);
     metrics.loads.push({ slug: s.toy.slug, ms: Math.round(now - s.born), asNeighbour: !s.playing && !s.swipeAt });
     if (s.swipeAt) { metrics.swipes.push({ slug: s.toy.slug, msToLive: Math.round(now - s.swipeAt), wasPreloaded: false }); s.swipeAt = 0; }
     scheduleNeighbours();   // the toy on screen, or a neighbour: either way the next one in line can start
