@@ -9,14 +9,16 @@
 // runs, the toys that are playing are re-grabbed every frame, so the picture keeps moving under the effect.
 // A toy that hasn't drawn yet shows its poster, or the bench with the mark.
 //
-//   ?fx=ink | chevron | pixels | logo | off      pick the effect (f cycles them; ?stats shows which)
+//   ?fx=ink | wormhole | turbulence | caustics | gravity | ripple | chevron | pixels | logo | off
+//                                                pick the effect (f cycles them; ?stats shows which)
 import { logoPath2D } from '../labs/shared/logo.js';
 
-export const EFFECTS = ['ink', 'chevron', 'pixels', 'logo'];
+export const EFFECTS = ['ink', 'wormhole', 'turbulence', 'caustics', 'gravity', 'ripple', 'chevron', 'pixels', 'logo'];
 
 // Each effect: how long a full transition from rest takes, and a GLSL body that sets `col` from
 //   uv (0..1, y down)  p (progress 0..1)  s (0 where the outgoing toy leaves, 1 where the incoming enters)
-//   q (across the swipe, -0.5..0.5)  dir (unit, the way the content travels, in uv)  A(uv) / B(uv) (samplers)
+//   q (across the swipe, -0.5..0.5)  dir (unit, the way the content travels, in uv)  asp (uv → square units)
+//   A(uv) / B(uv) (samplers)  Ac(uv, o) / Bc(uv, o) (with red and blue split by o)  uTime (seconds)
 const BODIES = {
   // ink: the incoming toy bleeds in along a noisy front from the side it enters, both pictures smeared by
   // the same noise, with a dark rim of ink on the front
@@ -31,6 +33,92 @@ const BODIES = {
     col = mix(a, b, m);
     float rim = smoothstep(0.09, 0.0, abs(t - f)) * (1.0 - smoothstep(0.85, 1.0, p));
     col.rgb *= 1.0 - rim * 0.85;` },
+
+  // wormhole: a throat opens near the middle and swallows the screen; space outside falls toward it and spins,
+  // the incoming toy unwinds out of it, and the event horizon burns blue
+  wormhole: { ms: 900, glsl: `
+    float e = p * p * (3.0 - 2.0 * p);
+    vec2 c = vec2(0.5) - dir * 0.3 * (1.0 - e);
+    vec2 d = (uv - c) * asp;
+    float r = length(d), ang = atan(d.y, d.x);
+    float R = 1.5 * pow(e, 1.7);                      // the throat's radius
+    float edge = r - R;
+    float rs = sqrt(r * r + R * R * 0.9);             // outside: pulled in from further out
+    float spin = 2.6 * e * exp(-max(edge, 0.0) * 2.5);
+    vec2 ua = c + vec2(cos(ang - spin), sin(ang - spin)) * rs / asp;
+    vec2 ab = normalize(d + 1e-4) / asp * 0.014 * e;
+    vec4 a = Ac(ua, ab) * mix(0.2, 1.0, smoothstep(0.0, 0.35, edge));
+    float rho = r / max(R, 1e-3);                     // inside: unwinding, and zooming out to rest
+    float un = 3.0 * (1.0 - e) * (1.0 - rho);
+    vec2 ub = c + vec2(cos(ang + un), sin(ang + un)) * r * mix(0.35, 1.0, e) / asp;
+    col = r < R ? B(ub) : a;
+    float rim = exp(-abs(edge) * 38.0) * (1.0 - smoothstep(0.75, 1.0, p));
+    col.rgb += vec3(0.55, 0.75, 1.0) * rim * 1.4;` },
+
+  // turbulence: a domain-warped noise field churns both toys; the incoming one boils up through it from the
+  // side it enters, with a hot edge where they meet
+  turbulence: { ms: 800, glsl: `
+    vec2 P = uv * asp * 2.2;
+    vec2 w1 = vec2(fbm(P + vec2(0.0, uTime * 0.15)), fbm(P + vec2(5.2, 1.3) - uTime * 0.12));
+    vec2 w2 = vec2(fbm(P + 3.5 * w1 + vec2(1.7, 9.2)), fbm(P + 3.5 * w1 + vec2(8.3, 2.8)));
+    float n = fbm(P + 3.0 * w2);
+    float amp = sin(3.14159 * p);
+    vec2 disp = (w2 - 0.5) * 0.45 * amp + dir * amp * 0.04;
+    float t = s * 0.5 + n * 0.5;
+    float f = 1.05 - p * 1.6;
+    float m = smoothstep(f - 0.03, f + 0.03, t);
+    vec2 ab = (w1 - 0.5) * 0.04 * amp;
+    col = mix(Ac(uv + disp, ab), Bc(uv - disp * 0.8, ab), m);
+    col.rgb += vec3(1.0, 0.55, 0.25) * exp(-abs(t - f) * 30.0) * amp;` },
+
+  // caustics: a wall of water rolls across from the entering side, refracting both toys and throwing
+  // rippling caustic light; the incoming toy is what's left when it has passed
+  caustics: { ms: 850, glsl: `
+    vec2 P = uv * asp * 5.0;
+    float T = uTime * 0.6 + p * 3.0;
+    vec2 w = vec2(noise(P * 0.6 + T * 0.3), noise(P * 0.6 + 7.1 - T * 0.3));
+    float r1 = 1.0 - abs(noise(P + w * 2.5 + T * 0.5) * 2.0 - 1.0);
+    float r2 = 1.0 - abs(noise(P * 1.6 - w * 2.5 - T * 0.4 + 3.3) * 2.0 - 1.0);
+    float caus = pow(r1, 10.0) + pow(r2, 10.0);
+    float f = 1.25 - p * 1.5;
+    float wet = (exp(-pow((s - f) * 5.0, 2.0)) + 0.12 * sin(3.14159 * p)) * smoothstep(0.0, 0.08, p) * (1.0 - smoothstep(0.9, 1.0, p));
+    vec2 refr = (w - 0.5) * 0.09 * wet;
+    float m = smoothstep(f - 0.04, f + 0.04, s + (w.x - 0.5) * 0.15);
+    col = mix(A(uv + refr), B(uv - refr), m);
+    col.rgb += vec3(0.7, 0.95, 1.0) * caus * wet * 0.9;` },
+
+  // gravity: a black hole crosses the screen along the swipe, bending the light around it into an Einstein
+  // ring; space it has passed through belongs to the incoming toy
+  gravity: { ms: 950, glsl: `
+    vec2 c = vec2(0.5) - dir * mix(0.85, -0.85, p);
+    vec2 d = (uv - c) * asp;
+    float r = length(d);
+    float E = 0.07 + 0.17 * sin(3.14159 * p);         // Einstein radius
+    vec2 bend = d / (r * r + 0.002) * E * E / asp;
+    float shimmer = (noise(uv * asp * 18.0 + uTime * 2.0) - 0.5) * 0.02;
+    vec2 src = uv - bend + shimmer * dir;
+    float behind = dot((src - c) * asp, -dir);
+    float m = smoothstep(-0.015, 0.015, behind + (noise(vec2(q * 9.0, uTime)) - 0.5) * 0.04);
+    vec2 ab = bend * 0.08;
+    col = mix(Ac(src, ab), Bc(src, ab), m);
+    col.rgb *= smoothstep(E * 0.45, E * 0.75, r);     // the shadow
+    col.rgb += vec3(1.0, 0.8, 0.5) * exp(-abs(r - E) * 55.0) * 1.2;` },
+
+  // ripple: a shockwave in spacetime rolls out from beyond the entering edge; the wavefront refracts and
+  // splits the light, and the incoming toy is inside it
+  ripple: { ms: 800, glsl: `
+    vec2 o = vec2(0.5) - dir * 0.75;
+    vec2 d = (uv - o) * asp;
+    float r = length(d);
+    vec2 far = (abs(dir) * 1.25 + (1.0 - abs(dir)) * 0.5) * asp;
+    float R = mix(-0.1, length(far) + 0.15, p);
+    float x = r - R;
+    float wave = sin(x * 70.0) * exp(-abs(x) * 14.0);
+    vec2 nrm = d / max(r, 1e-3) / asp;
+    vec2 off = nrm * wave * 0.035;
+    vec2 ab = nrm * 0.012 * exp(-abs(x) * 8.0);
+    col = x < 0.0 ? Bc(uv + off, ab) : Ac(uv + off, ab);
+    col.rgb += pow(max(wave, 0.0), 3.0) * 0.5;` },
 
   // chevron: the mark's chevron, pointing the way the swipe goes, sweeps across as a band of ink with a
   // trailing hairline; the toys drift with it
@@ -74,10 +162,14 @@ const BODIES = {
 };
 
 const VERT = `attribute vec2 aPos; void main() { gl_Position = vec4(aPos, 0.0, 1.0); }`;
-const frag = body => `precision mediump float;
+const frag = body => `#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
 uniform sampler2D uFrom, uTo, uLogo;
 uniform vec2 uRes, uDir;
-uniform float uP, uAspect, uAspectAlong, uDpr;
+uniform float uP, uAspect, uAspectAlong, uDpr, uTime;
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 float noise(vec2 p) {
   vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
@@ -87,12 +179,15 @@ float fbm(vec2 p) { float v = 0.0, a = 0.5; for (int i = 0; i < 4; i++) { v += a
 // snapshots are uploaded top row first, so uv (y down) samples them as is; past the edge repeats the edge
 vec4 A(vec2 uv) { return texture2D(uFrom, clamp(uv, 0.0, 1.0)); }
 vec4 B(vec2 uv) { return texture2D(uTo, clamp(uv, 0.0, 1.0)); }
+vec4 Ac(vec2 uv, vec2 o) { return vec4(A(uv + o).r, A(uv).g, A(uv - o).b, 1.0); }
+vec4 Bc(vec2 uv, vec2 o) { return vec4(B(uv + o).r, B(uv).g, B(uv - o).b, 1.0); }
 void main() {
   vec2 uv = vec2(gl_FragCoord.x / uRes.x, 1.0 - gl_FragCoord.y / uRes.y);
   vec2 dir = uDir;
   float p = uP;
   float s = dot(uv - 0.5, -dir) + 0.5;
   float q = dot(uv - 0.5, vec2(-dir.y, dir.x));
+  vec2 asp = vec2(uAspect, 1.0);
   vec4 col;
   ${body}
   gl_FragColor = vec4(col.rgb, 1.0);
@@ -129,7 +224,7 @@ export function createTransitions(host, { effect = 'ink' } = {}) {
     gl.bindAttribLocation(pr, 0, 'aPos');
     gl.linkProgram(pr);
     const u = {};
-    for (const k of ['uFrom', 'uTo', 'uLogo', 'uRes', 'uDir', 'uP', 'uAspect', 'uAspectAlong', 'uDpr']) u[k] = gl.getUniformLocation(pr, k);
+    for (const k of ['uFrom', 'uTo', 'uLogo', 'uRes', 'uDir', 'uP', 'uAspect', 'uAspectAlong', 'uDpr', 'uTime']) u[k] = gl.getUniformLocation(pr, k);
     return (programs[name] = { pr, u });
   }
   const texture = () => {
@@ -256,6 +351,7 @@ export function createTransitions(host, { effect = 'ink' } = {}) {
     gl.uniform1f(pr.u.uAspect, W / H);
     gl.uniform1f(pr.u.uAspectAlong, st.axis === 'y' ? H / W : W / H);
     gl.uniform1f(pr.u.uDpr, dpr);
+    gl.uniform1f(pr.u.uTime, performance.now() / 1000 % 600);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 
@@ -337,7 +433,8 @@ export function createTransitions(host, { effect = 'ink' } = {}) {
 
   return {
     get effect() { return effect; },
-    set effect(name) { if (BODIES[name]) effect = name; },
+    // switching compiles the new shader now, not on the next move
+    set effect(name) { if (BODIES[name]) { effect = name; program(name); } },
     stats,
     // warm the effect's shader before the first swipe needs it
     prepare() { resize(); program(effect); },
