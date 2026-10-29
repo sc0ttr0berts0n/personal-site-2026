@@ -27,7 +27,7 @@ precision mediump float;
 #endif
 uniform sampler2D uFrom, uTo;
 uniform vec2 uRes, uDir;
-uniform float uP, uAspect;
+uniform float uP, uAspect, uReveal;
 vec4 A(vec2 uv) { return texture2D(uFrom, clamp(uv, 0.0, 1.0)); }
 vec4 B(vec2 uv) { return texture2D(uTo, clamp(uv, 0.0, 1.0)); }
 // with red and blue pulled apart by o
@@ -49,7 +49,14 @@ void main() {
   vec2 off = nrm * wave * 0.035;
   vec2 ab = nrm * 0.012 * exp(-abs(x) * 8.0);
   // both toys drift the way the swipe goes, a little, like the slide they replace
-  vec4 col = x < 0.0 ? Bc(uv + off + dir * 0.07 * (1.0 - uP), ab) : Ac(uv + off - dir * 0.07 * uP, ab);
+  vec4 a = Ac(uv + off - dir * 0.07 * uP, ab);
+  vec4 col = a;
+  if (x < 0.0) {
+    // inside: the incoming toy, or, until a long pull has committed (uReveal 0), a bubble of the outgoing one
+    vec4 bubble = Ac(uv + off - dir * 0.07 * uP - nrm * 0.06 * smoothstep(0.0, -0.35, x), ab * 2.5);
+    bubble.rgb = bubble.rgb * 1.1 + 0.035;
+    col = mix(bubble, Bc(uv + off + dir * 0.07 * (1.0 - uP), ab), uReveal);
+  }
   col.rgb += pow(max(wave, 0.0), 3.0) * 0.5;
   gl_FragColor = vec4(col.rgb, 1.0);
 }`;
@@ -85,7 +92,7 @@ export function createTransitions(host) {
     gl.bindAttribLocation(pr, 0, 'aPos');
     gl.linkProgram(pr);
     const u = {};
-    for (const k of ['uFrom', 'uTo', 'uRes', 'uDir', 'uP', 'uAspect']) u[k] = gl.getUniformLocation(pr, k);
+    for (const k of ['uFrom', 'uTo', 'uRes', 'uDir', 'uP', 'uAspect', 'uReveal']) u[k] = gl.getUniformLocation(pr, k);
     return (prog = { pr, u });
   }
   const texture = () => {
@@ -200,6 +207,7 @@ export function createTransitions(host) {
     gl.uniform2f(pr.u.uDir, ...dirVec(side, st.axis));
     gl.uniform1f(pr.u.uP, Math.max(0, Math.min(1, st.p)));
     gl.uniform1f(pr.u.uAspect, W / H);
+    gl.uniform1f(pr.u.uReveal, st.reveal ?? 1);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 
@@ -231,6 +239,7 @@ export function createTransitions(host) {
       if (a) {
         const k = Math.min(1, (now - a.t0) / a.ms);
         st.p = a.p0 + (a.p1 - a.p0) * ease(k);
+        if (a.reveal) st.reveal = Math.min(1, (now - a.t0) / 160);   // the bubble gives way to the next toy
         if (k >= 1) { draw(); return finish(); }
       }
       timed(draw)();
@@ -264,11 +273,13 @@ export function createTransitions(host) {
     // compile the shader before the first swipe needs it
     prepare() { resize(); program(); },
 
-    // a drag started on `from`, with its neighbours prev/next (slides, any may be missing)
-    hold(from, prev, next, axis = 'x') {
+    // a drag started on `from`, with its neighbours prev/next (slides, any may be missing). hard: the toy has been
+    // touched, so the drag only grows a bubble of `from` (a third of the way across at the commit point) and
+    // the next toy is revealed when the feed commits
+    hold(from, prev, next, axis = 'x', hard = false) {
       if (st) finish();
       resize();
-      st = { from, to: { 1: next, '-1': prev }, pics: {}, side: 0, p: 0, axis, shown: false, anim: null };
+      st = { from, to: { 1: next, '-1': prev }, pics: {}, side: 0, p: 0, axis, shown: false, anim: null, hard, reveal: hard ? 0 : 1 };
       const mine = st;
       const load = (key, slide) => picture(slide).then(pic => {
         if (mine !== st) { pic.close?.(); return; }
@@ -282,7 +293,7 @@ export function createTransitions(host) {
       if (!st || st.anim) return;
       const side = frac < 0 ? 1 : frac > 0 ? -1 : st.side;
       useSide(side);
-      st.p = Math.min(1, Math.abs(frac));
+      st.p = Math.min(1, Math.abs(frac)) * (st.hard ? 0.6 : 1);
       if (st.shown) draw();
       else show();
     },
@@ -295,13 +306,13 @@ export function createTransitions(host) {
 
     // a move to `to` (side ±1) is starting. Calls slide() once the overlay covers the slides (or right away
     // if it can't), so the feed's own slide runs underneath, and done() once the overlay has lifted off the
-    // incoming toy (or when it gives up and slides plainly). Not called if another move or stop() takes over.
+    // incoming toy, or done(true) when it gives up and slides plainly. Not called if another move or stop() takes over.
     cover(from, to, side, ms, slide, axis = 'x', done) {
       const dragged = st && !st.anim && st.to[side] === to && st.from === from;
       if (dragged && st.shown) {
         useSide(side);
         const dur = Math.max(ms + 40, MS * (1 - st.p));
-        st.anim = { t0: performance.now(), ms: dur, p0: st.p, p1: 1, done };
+        st.anim = { t0: performance.now(), ms: dur, p0: st.p, p1: 1, done, reveal: st.reveal < 1 };
         slide();
         return true;
       }
@@ -319,7 +330,7 @@ export function createTransitions(host) {
         go();
       };
       // waiting on two pictures: if they take longer than a few frames, slide the plain way instead
-      setTimeout(() => { if (mine === st && !mine.shown) { stats.slid++; clear(); go(); done?.(); } }, 140);
+      setTimeout(() => { if (mine === st && !mine.shown) { stats.slid++; clear(); go(); done?.(true); } }, 140);
       for (const [key, s] of [['from', from], [String(side), to]]) picture(s).then(pic => {
         if (mine !== st) { pic.close?.(); return; }
         mine.pics[key] = pic;

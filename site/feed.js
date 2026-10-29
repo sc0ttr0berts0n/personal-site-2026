@@ -180,7 +180,7 @@ let snapTimer = 0;
 // held: the ripple is covering the move and starts the toy itself when it lifts
 function becameCurrent(s, t0, held = false) {
   for (const o of slides.values()) if (o !== s) pause(o);
-  s.peeked = false;
+  s.peeked = false; s.touched = false;
   if (!s.playing) { if (!held) play(s); s.swipeAt = t0; }
   clearTimeout(snapTimer);
   snapTimer = setTimeout(() => send(s, 'snap', { width: 540 }), 2600);
@@ -197,13 +197,15 @@ function go(dir, { ms = 420, t0 = performance.now() } = {}) {
   for (const o of slides.values()) o.offset = rel(indexOf(o.toy.slug));
   // with a GL transition the slide runs underneath it, once the overlay is up
   const slide = () => { animate(true, ms); placeAll(); };
-  // the ripple plays over stills: the incoming toy stays paused until it lifts, so it carries on from its picture
-  const held = !!fx?.cover(from, s, dir, ms, slide, axis(), playCurrent);
+  // the ripple plays over stills: the incoming toy stays paused until it lifts, so it carries on from its picture.
+  // Loading and disposing neighbours waits for it too: they share this main thread and would stall it mid-ripple.
+  const held = !!fx?.cover(from, s, dir, ms, slide, axis(), slid => { playCurrent(); settle(slid ? ms : 0); });
   if (!held) slide();
   if (calm) { s.el.classList.remove('entering'); void s.el.offsetWidth; s.el.classList.add('entering'); }
   becameCurrent(s, t0, held);
   writeHash();
-  settle(calm ? 160 : ms);
+  if (held) { clearTimeout(settleTimer); clearTimeout(neighbourTimer); }
+  else settle(calm ? 160 : ms);
 }
 
 // Jump anywhere (overview, URL). Neighbours slide; anything further cuts with a short fade over the old toy.
@@ -261,11 +263,18 @@ function renderStats(slug) {
 const dialogOpen = () => !!document.querySelector('dialog[open]');
 let drag = null;
 const SLOP = 8;
+// Two tiers of swiping. Until someone touches the toy on screen, a swipe moves on easily (18% of the screen, or a
+// flick). Once they have touched it (a tap, or a stroke that isn't a swipe; live touching will call touchedCurrent
+// too), leaving takes a long pull: a bubble of the toy itself forms at the entering edge and only breaks through
+// to the next toy at HARD of the screen; let go before that and it shrinks back out. Reset on every visit.
+const HARD = 0.45;
+const touchedCurrent = () => { const c = slides.get(toys[cur].slug); if (c) c.touched = true; };
 feed.addEventListener('pointerdown', e => {
   if (e.button !== 0 || dialogOpen()) return;
   // positions are along the swipe axis (x0, dx) and across it (y0); the axis is fixed for the life of a drag
   const a = axis();
-  drag = { id: e.pointerId, axis: a, x0: along(e, a), y0: across(e, a), dx: 0, active: false, samples: [[e.timeStamp, along(e, a)]] };
+  drag = { id: e.pointerId, axis: a, x0: along(e, a), y0: across(e, a), dx: 0, active: false, samples: [[e.timeStamp, along(e, a)]],
+    onToy: !e.target.closest('.caption, a, button') };
 });
 feed.addEventListener('pointermove', e => {
   if (!drag || e.pointerId !== drag.id) return;
@@ -275,6 +284,7 @@ feed.addEventListener('pointermove', e => {
       drag.active = true;
       // pick up from where the slides are now: mid-slide after a quick second swipe, at rest otherwise
       const c = slides.get(toys[cur].slug);
+      drag.hard = !!c?.touched;
       const m = c && !c.pinned ? new DOMMatrix(getComputedStyle(c.el).transform) : null;
       const at = m ? (a === 'y' ? m.m42 : m.m41) : 0;
       drag.x0 = along(e, a) - at;               // no jump at the slop either
@@ -284,16 +294,28 @@ feed.addEventListener('pointermove', e => {
       placeAll(at);
       // a neighbour that isn't mounted yet (fast swiping) gets mounted now, frozen
       loadNeighbours();
-      fx?.hold(c, slides.get(toys[wrap(cur - 1)].slug), slides.get(toys[wrap(cur + 1)].slug), a);
+      fx?.hold(c, slides.get(toys[wrap(cur - 1)].slug), slides.get(toys[wrap(cur + 1)].slug), a, drag.hard);
       if (fx && c) pause(c);   // under the ripple everything is a still until it lifts
-    } else if (Math.abs(dy) > 16) drag = null;
+    } else if (Math.abs(dy) > 16) { if (drag.onToy) touchedCurrent(); drag = null; }
     return;
   }
   drag.dx = along(e, a) - drag.x0;
   drag.samples.push([e.timeStamp, along(e, a)]);
   while (drag.samples.length > 2 && e.timeStamp - drag.samples[0][0] > 90) drag.samples.shift();
+  const L = a === 'y' ? feed.clientHeight : feed.clientWidth;
+  if (drag.hard) {
+    // the next toy doesn't show until the pull breaks through: just the bubble (or, without the ripple, a stiff band)
+    placeAll(fx ? 0 : drag.dx * 0.3);
+    fx?.drag(drag.dx / L);
+    if (Math.abs(drag.dx) > L * HARD) {
+      const d = drag; drag = null;
+      suppressClickUntil = performance.now() + 80;
+      go(d.dx < 0 ? 1 : -1, { ms: 420 });
+    }
+    return;
+  }
   placeAll(drag.dx);
-  fx?.drag(drag.dx / (a === 'y' ? feed.clientHeight : feed.clientWidth));
+  fx?.drag(drag.dx / L);
   // the toy coming into view is live as soon as any of it shows (unless the ripple is showing stills); the one
   // on the other side rests
   if (drag.dx) for (const s of slides.values()) {
@@ -304,14 +326,15 @@ feed.addEventListener('pointermove', e => {
 function endDrag(e, cancelled) {
   if (!drag || e.pointerId !== drag.id) return;
   const d = drag; drag = null;
-  if (!d.active) return;
+  if (!d.active) { if (d.onToy && !cancelled) touchedCurrent(); return; }   // a tap on the toy
   suppressClickUntil = performance.now() + 80;
   const W = d.axis === 'y' ? feed.clientHeight : feed.clientWidth;
   const [ta, xa] = d.samples[0], [tb, xb] = d.samples.at(-1);
   // px/ms over the last ~90 ms of movement; a finger that stopped before lifting has no flick left
   const v = tb > ta && e.timeStamp - tb < 80 ? (xb - xa) / (tb - ta) : 0;
   const flick = Math.abs(v) > 0.35 && Math.sign(v) === Math.sign(d.dx);
-  if (!cancelled && (Math.abs(d.dx) > W * 0.18 || flick)) {
+  // (a hard-tier pull commits as it crosses HARD, in pointermove; letting go is always a spring-back)
+  if (!cancelled && !d.hard && (Math.abs(d.dx) > W * 0.18 || flick)) {
     const remaining = W - Math.abs(d.dx);
     const ms = Math.round(Math.max(200, Math.min(420, flick ? remaining / Math.abs(v) * 1.6 : 420)));
     go(d.dx < 0 ? 1 : -1, { ms, t0: performance.now() });
@@ -330,7 +353,7 @@ feed.addEventListener('pointercancel', e => endDrag(e, true));
 // rotating a phone swaps the axis: a drag in flight is dropped (as if cancelled) and the slides cut to rest on the new axis
 verticalMQ.addEventListener('change', () => {
   document.documentElement.dataset.axis = axis();
-  if (fx) { fx.stop(); playCurrent(); }
+  if (fx) { fx.stop(); playCurrent(); settle(0); }
   if (drag?.active) endDrag({ pointerId: drag.id, timeStamp: performance.now() }, true);
   drag = null;
   animate(false); placeAll(0);
