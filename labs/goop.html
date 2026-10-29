@@ -562,6 +562,10 @@ uniform int uDbg;
 uniform vec3 uBody, uKey, uFill, uRim, uMarkC;
 uniform int uMark;                     // the solid under the oil: 0 black, 1 neon glow, 2 lacquer
 out vec4 fragColor;
+// Loops run to a uniform count, never "to a constant, then break": on Windows (ANGLE → D3D) a constant bound lets the
+// compiler unroll and inline the whole ray-marcher, and the first compile took ~32 s instead of ~10 s. ZERO is 0 the
+// compiler can't see through, for the loops that do have a fixed count.
+#define ZERO min(uDbg, 0)
 
 float smin(float a, float b, float k) { float h = max(k - abs(a - b), 0.0) / k; return min(a, b) - h * h * k * 0.25; }
 float hash(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
@@ -654,9 +658,9 @@ float blob(vec3 p, vec4 A, vec4 B) {
 }
 float mapBody(vec3 p) {
   float d = logoD(p);
-  for (int i = 0; i < ${MAXB}; i++) { if (i >= uNB) break; d = smin(d, blob(p, uBA[i], uBB[i]), 0.1); }
+  for (int i = 0; i < uNB; i++) { d = smin(d, blob(p, uBA[i], uBB[i]), 0.1); }
   float ds = 1e3;
-  for (int i = 0; i < ${MAXS}; i++) { if (i >= uNS) break; ds = smin(ds, strand(p, uSA[i], uSB[i], uSC[i]), 0.05); }
+  for (int i = 0; i < uNS; i++) { ds = smin(ds, strand(p, uSA[i], uSB[i], uSC[i]), 0.05); }
   return smin(d, ds, 0.13);
 }
 
@@ -665,8 +669,7 @@ float poolH(vec2 q) {
   // long, slow, heavy swell: three wide wave trains, no chop
   float h = uPoolY + uSwell * (sin(q.x * 0.31 + q.y * 0.62 - uTime * 0.36) * 0.6 + sin(-q.x * 0.52 + q.y * 0.4 - uTime * 0.27 + 1.7) * 0.4
           + sin(q.x * 0.9 - q.y * 0.8 - uTime * 0.45 + 0.4) * 0.12);
-  for (int i = 0; i < ${MAXR}; i++) {
-    if (i >= uNR) break;
+  for (int i = 0; i < uNR; i++) {
     vec4 R = uRing[i];
     float a = uTime - R.z;
     vec2 dq = q - R.xy;
@@ -767,13 +770,17 @@ vec3 reveal(vec3 col, vec3 p, vec3 n, vec3 rd, vec3 refl, float ao) {
   col += hue * film * (dot(refl, vec3(0.33)) * 2.5 + 0.06);
   return col;
 }
+// Tetrahedral normals as a loop the compiler can't unroll, so the map is inlined once per normal, not four times.
+vec3 tet(int i) { return vec3(float(((i + 3) >> 1) & 1), float((i >> 1) & 1), float(i & 1)) * 2.0 - 1.0; }
 vec3 normalBody(vec3 p) {
-  const vec2 k = vec2(1, -1); float e = 0.003;
-  return normalize(k.xyy * mapBody(p + k.xyy * e) + k.yyx * mapBody(p + k.yyx * e) + k.yxy * mapBody(p + k.yxy * e) + k.xxx * mapBody(p + k.xxx * e));
+  vec3 n = vec3(0.0);
+  for (int i = ZERO; i < 4; i++) { vec3 k = tet(i); n += k * mapBody(p + k * 0.003); }
+  return normalize(n);
 }
 vec3 normalAll(vec3 p, float e) {
-  const vec2 k = vec2(1, -1);
-  return normalize(k.xyy * mapAll(p + k.xyy * e) + k.yyx * mapAll(p + k.yyx * e) + k.yxy * mapAll(p + k.yxy * e) + k.xxx * mapAll(p + k.xxx * e));
+  vec3 n = vec3(0.0);
+  for (int i = ZERO; i < 4; i++) { vec3 k = tet(i); n += k * mapAll(p + k * e); }
+  return normalize(n);
 }
 // what a mirror-like surface sees in direction R from p: the mark (if the ray finds it) or the room
 vec3 trace2(vec3 p, vec3 R) {
@@ -786,8 +793,7 @@ vec3 trace2(vec3 p, vec3 R) {
   vec2 rb = boxHit(p, R, uBoxMin, uBoxMax);
   if (uRSteps > 0 && rb.x < rb.y && rb.y > 0.0) {
     float t = max(rb.x, 0.04);
-    for (int i = 0; i < 64; i++) {
-      if (i >= uRSteps) break;
+    for (int i = 0; i < uRSteps; i++) {
       vec3 q = p + R * t;
       float d = mapBody(q);
       if (d < 0.004 * (1.0 + t)) {
@@ -824,8 +830,7 @@ void main() {
     t = max(tb.x, 0.0);
     bool exited = false;
     float d = 1.0;
-    for (int i = 0; i < 160; i++) {
-      if (i >= uSteps) break;
+    for (int i = 0; i < uSteps; i++) {
       d = mapAll(ro + rd * t);
       if (d < 0.00035 * t) { hit = true; break; }
       t += d;
@@ -840,7 +845,7 @@ void main() {
     // open pool: march the heightfield alone
     float t0 = (uHMax - ro.y) / rd.y;
     t = resume > 0.0 ? max(t0, resume) : inBox ? max(t0, tb.y) : t0;
-    for (int i = 0; i < 40; i++) {
+    for (int i = ZERO; i < 40; i++) {
       vec3 p = ro + rd * t;
       float d = p.y - poolH(p.xz);
       if (d < 0.0008 * t) break;
