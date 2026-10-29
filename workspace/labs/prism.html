@@ -492,7 +492,10 @@ canvas.addEventListener('pointermove', e => {
   if (!grab) aim = p;
   if (e.pointerType === 'mouse') canvas.style.cursor = grab ? 'grab' : '';
 });
-canvas.addEventListener('pointerleave', e => { if (e.pointerType !== 'touch' && moving === null) aim = null; });
+// a mouse that leaves lets the sweep resume, unless it only went onto the sweep toggle
+canvas.addEventListener('pointerleave', e => {
+  if (e.pointerType !== 'touch' && moving === null && !e.relatedTarget?.closest?.('.sweep-toggle')) aim = null;
+});
 canvas.addEventListener('pointerdown', e => {
   const p = toWorld(e);
   if (onEmitter(p, e)) {
@@ -507,6 +510,39 @@ canvas.addEventListener('pointerdown', e => {
 const stopMoving = e => { if (moving === e.pointerId) { moving = null; if (e.pointerType === 'mouse') canvas.style.cursor = 'grab'; } };
 canvas.addEventListener('pointerup', stopMoving);
 canvas.addEventListener('pointercancel', stopMoving);
+
+// The ambient sweep: aiming pauses it, holding the beam where it was left. A small bubble beside the emitter,
+// drawn in the mark's own hairline style, plays or pauses it.
+let beamA = null;                     // the beam's angle, eased so a resumed sweep glides back rather than jumps
+const sweeping = () => lab.params.sweep && !aim;
+const toggle = document.createElement('div');
+toggle.className = 'sweep-toggle';
+toggle.setAttribute('role', 'button');
+toggle.tabIndex = 0;
+toggle.setAttribute('aria-label', 'Resume the sweep');
+toggle.innerHTML = `<svg viewBox="0 0 22 22" width="22" height="22" aria-hidden="true"><circle cx="11" cy="11" r="10"/>
+  <path class="pause" d="M9 7.5v7M13 7.5v7"/><path class="play" d="M9.25 7.25 14.75 11l-5.5 3.75z"/></svg>`;
+lab.stage.appendChild(toggle);
+document.head.insertAdjacentHTML('beforeend', `<style>
+  .sweep-toggle { position: absolute; left: 0; top: 0; z-index: 1; width: 40px; height: 40px; margin: -20px 0 0 -20px; display: grid; place-items: center;
+    color: var(--ink); opacity: 0; cursor: pointer; touch-action: none; -webkit-tap-highlight-color: transparent; transition: opacity .4s; }
+  .sweep-toggle.shown { opacity: .5; }
+  .sweep-toggle.shown:hover, .sweep-toggle:focus-visible { opacity: .9; outline: none; }
+  .sweep-toggle circle { fill: rgb(0 0 0 / .35); stroke: currentColor; stroke-width: 1; }
+  .sweep-toggle path { fill: none; stroke: currentColor; stroke-width: 1.2; stroke-linejoin: round; stroke-linecap: round; }
+  .sweep-toggle[data-on] .play, .sweep-toggle:not([data-on]) .pause { display: none; }
+</style>`);
+function toggleSweep() {
+  if (sweeping()) {
+    // pause: hold the beam at the angle it has now
+    aim = { x: source.x + Math.cos(beamA) * 4, z: source.z + Math.sin(beamA) * 4 };
+  } else {
+    aim = null;
+    if (!lab.params.sweep) lab.set('sweep', true);
+  }
+}
+toggle.addEventListener('click', toggleSweep);
+toggle.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleSweep(); } });
 
 let hudTick = 0;
 function frame(dt, t) {
@@ -560,11 +596,24 @@ function frame(dt, t) {
   // idle sweep aims across the chevron arms, where the colors split hardest
   const toCenter = Math.atan2(-source.z, -source.x);
   const idleA = toCenter + 0.32 * Math.sin(t * 0.3);
-  const d = aim && Math.hypot(aim.x - source.x, aim.z - source.z) > 0.05
-    ? norm({ x: aim.x - source.x, z: aim.z - source.z })
-    : P.sweep ? { x: Math.cos(idleA), z: Math.sin(idleA) } : norm({ x: -source.x, z: -source.z });
+  const aimed = aim && Math.hypot(aim.x - source.x, aim.z - source.z) > 0.05;
+  const targetA = aimed ? Math.atan2(aim.z - source.z, aim.x - source.x) : P.sweep ? idleA : toCenter;
+  if (beamA === null || aimed) beamA = targetA;
+  else beamA += (Math.atan2(Math.sin(targetA - beamA), Math.cos(targetA - beamA))) * (1 - Math.exp(-dt * 4));
+  const d = { x: Math.cos(beamA), z: Math.sin(beamA) };
   emitter.position.set(source.x, BEAM_Y, source.z);
   emitter.rotation.y = -Math.atan2(d.z, d.x);
+
+  // the toggle sits just under the emitter (over it near the stage's foot), still while the beam moves
+  const ex = sq.w / 2 + source.x / k * camera.zoom, ey = sq.h / 2 + source.z / k * camera.zoom;
+  const tx = Math.max(20, Math.min(sq.w - 20, ex)), ty = ey + 30 > sq.h - 20 ? ey - 30 : Math.max(20, ey + 30);
+  toggle.style.transform = `translate(${tx.toFixed(1)}px, ${ty.toFixed(1)}px)`;
+  toggle.classList.toggle('shown', rt > 1.6);
+  const on = sweeping();
+  if (on !== toggle.hasAttribute('data-on')) {
+    toggle.toggleAttribute('data-on', on);
+    toggle.setAttribute('aria-label', on ? 'Pause the sweep' : 'Resume the sweep');
+  }
 
   stats.tir = 0; stats.rays = 0;
   const segs = [];
