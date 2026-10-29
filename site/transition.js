@@ -40,13 +40,16 @@ void main() {
   vec2 d = (uv - o) * asp;
   float r = length(d);
   vec2 far = (abs(dir) * 1.25 + (1.0 - abs(dir)) * 0.5) * asp;   // to the furthest corner
-  float R = mix(-0.1, length(far) + 0.15, uP);
+  float near = length(abs(dir) * 0.25 * asp);                     // to the entering edge
+  // the front starts just inside the entering edge, so the smallest drag already moves something
+  float R = mix(near + 0.02, length(far) + 0.15, uP);
   float x = r - R;
   float wave = sin(x * 70.0) * exp(-abs(x) * 14.0);
   vec2 nrm = d / max(r, 1e-3) / asp;
   vec2 off = nrm * wave * 0.035;
   vec2 ab = nrm * 0.012 * exp(-abs(x) * 8.0);
-  vec4 col = x < 0.0 ? Bc(uv + off, ab) : Ac(uv + off, ab);
+  // both toys drift the way the swipe goes, a little, like the slide they replace
+  vec4 col = x < 0.0 ? Bc(uv + off + dir * 0.07 * (1.0 - uP), ab) : Ac(uv + off - dir * 0.07 * uP, ab);
   col.rgb += pow(max(wave, 0.0), 3.0) * 0.5;
   gl_FragColor = vec4(col.rgb, 1.0);
 }`;
