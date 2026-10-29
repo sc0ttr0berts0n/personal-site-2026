@@ -45,6 +45,7 @@ let cur = 0;
 const metrics = { loads: [], swipes: [], stats: {} };
 window.feedMetrics = metrics;
 const showStats = new URLSearchParams(location.search).has('stats');
+if (new URLSearchParams(location.search).has('trace')) import('./trace.js');   // a run-through record for a real device
 const solo = new URLSearchParams(location.search).has('solo');   // measuring only: no preloaded neighbours
 
 // ---- the ripple transition over the slides (site/transition.js); ?fx=off, reduced motion or no WebGL keep the CSS slide ----
