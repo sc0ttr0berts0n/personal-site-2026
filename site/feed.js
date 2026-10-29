@@ -60,7 +60,7 @@ const swiping = on => feed.classList.toggle('swiping', on);
 // While a drag is on, the chevron it pulls from rides just ahead of the finger, and a ring waits where the drag
 // counts: letting go there moves on (EASY of the screen), or, for a touched toy, getting there does (HARD). Reach
 // it and the chevron sits in the ring, and the two carry on with the finger; pull back short and the chevron leaves.
-// A faint glass slot runs from where the chevron started to the ring, like a slide-to-unlock track.
+// A faint glass slot runs from the chevron to the ring, like a slide-to-unlock track: only the way still to go.
 const LEAD = 84;      // px from the finger to the chevron, clear of a thumb
 function guide(d, e) {
   if (d.axis !== 'y') return;
@@ -74,8 +74,7 @@ function guide(d, e) {
   on.style.cssText = `top: ${cy - 5}px; left: ${x}px`;
   off.style.cssText = '';
   ring.style.cssText = `top: ${ry - 11}px; left: ${x}px`;
-  const y0 = d.x0 - r.top + s * LEAD;                // where the chevron set off
-  slot.style.cssText = `top: ${Math.min(y0, ry) - 15}px; height: ${Math.abs(ry - y0) + 30}px; left: ${x}px`;
+  slot.style.cssText = `top: ${Math.min(cy, ry) - 15}px; height: ${Math.abs(ry - cy) + 30}px; left: ${x}px`;
   feed.classList.add('guiding');
   feed.classList.toggle('armed', armed);
 }
