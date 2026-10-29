@@ -15,6 +15,8 @@ export const START = 'splat';
 // shares, so a neighbour starting up froze the toy being played with. Measured on an iPhone 15 Pro (?trace),
 // whole-page freezes on start: Vessel 12.5 s (5.7 s again later), Prism 11.4 s (5.7 s), Big Bang 9.9 s (9.8 s),
 // Goop 4.6 s (4.6 s). Every other toy starts in under 0.4 s. Take a toy off once its lab compiles without blocking.
+// PROVISIONAL: those phone numbers came over the LAN dev server (http), where the iPhone ran JS 10-70x slower than
+// over HTTPS (lab-perf's benchmark). Re-measure with ?trace on an HTTPS deploy before trusting this list or START.
 export const NO_PRELOAD = ['fluid', 'prism', 'bigbang', 'goop'];
 
 // What each toy does with a finger in the feed, until the lab says so itself (window.labFeed, see embed/lab-embed.js).

@@ -9,7 +9,10 @@
 //   spinner  the loading spinner over the toy on screen came or went
 //   hidden / shown   the page went to the background and back
 // A Send button posts it all to the dev server (scripts/serve.mjs saves it in traces/), and keeps a copy in
-// localStorage so a page that reloads doesn't lose it.
+// localStorage so a page that reloads doesn't lose it. Where there's no dev server (a deploy, over HTTPS) it hands
+// the trace to the share sheet as a file (or copies it, or downloads it) instead.
+// bench: how fast this page runs plain JS, three rounds of the same loop a second in: a phone with its JIT off
+// (seen over a LAN dev server) runs it 10-70x slower, which makes every other number here look worse.
 const T0 = performance.now(), events = [];
 const now = () => Math.round(performance.now() - T0);
 const log = (type, data) => {
@@ -85,11 +88,35 @@ document.querySelectorAll('.slide iframe').forEach(watchFrame);
 addEventListener('pointerdown', e => log('finger', { down: e.target.closest('.edge, .caption, .nav, button, a')?.className.split(' ')[0] || 'feed' }), true);
 addEventListener('pointerup', () => log('finger', { up: 'feed' }), true);
 
+const bench = [];
+setTimeout(() => {
+  for (let r = 0; r < 3; r++) {
+    const t = performance.now();
+    let x = 0;
+    for (let i = 0; i < 3e6; i++) x = (x + i * 31) % 1000003;
+    bench.push(Math.round(performance.now() - t) + (x < 0 ? 1 : 0));
+  }
+  log('bench', bench);
+}, 1000);
+
 function report() {
   return {
-    at: new Date().toISOString(), ua: navigator.userAgent, screen: [innerWidth, innerHeight, devicePixelRatio],
-    ms: now(), metrics: window.feedMetrics, events
+    at: new Date().toISOString(), ua: navigator.userAgent, origin: location.origin, screen: [innerWidth, innerHeight, devicePixelRatio],
+    bench, ms: now(), metrics: window.feedMetrics, events
   };
+}
+// no dev server to post to: the share sheet (a file), else the clipboard, else a download
+async function handOver(body) {
+  const name = `trace-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+  const file = new File([body], name, { type: 'application/json' });
+  if (navigator.canShare?.({ files: [file] })) {
+    try { await navigator.share({ files: [file], title: name }); return 'shared ✓ ' + name; }
+    catch (e) { if (e.name === 'AbortError') return 'not sent (share cancelled)'; }
+  }
+  try { await navigator.clipboard.writeText(body); return 'copied ✓ (paste it to Claude)'; } catch (e) {}
+  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(file), download: name });
+  a.click();
+  return 'downloaded ✓ ' + name;
 }
 
 // the Send button
@@ -106,8 +133,11 @@ btn.addEventListener('click', async e => {
   note.dataset.hold = 1; note.textContent = 'sending…';
   try {
     const r = await fetch('__trace', { method: 'POST', headers: { 'content-type': 'application/json' }, body });
-    note.textContent = r.ok ? `sent ✓ ${(await r.json()).file}` : `failed (${r.status})`;
-  } catch (err) { note.textContent = 'failed: ' + err.message; }
+    if (!r.ok) throw new Error(r.status);
+    note.textContent = `sent ✓ ${(await r.json()).file}`;
+  } catch (err) {
+    try { note.textContent = await handOver(body); } catch (err2) { note.textContent = 'failed: ' + err2.message; }
+  }
   setTimeout(() => delete note.dataset.hold, 4000);
 });
 btn.addEventListener('pointerdown', e => e.stopPropagation());
