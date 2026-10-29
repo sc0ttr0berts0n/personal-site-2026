@@ -1,6 +1,6 @@
 // Tiny static server for local testing: node scripts/serve.mjs [port]. No caching, correct module MIME types.
 import { createServer } from 'node:http';
-import { readFile, stat } from 'node:fs/promises';
+import { readFile, stat, writeFile, mkdir } from 'node:fs/promises';
 import { join, resolve, extname, dirname, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -13,6 +13,19 @@ const TYPES = {
 };
 
 createServer(async (req, res) => {
+  // ?trace pages (site/trace.js) post their record here; it's saved in traces/ (not committed)
+  if (req.method === 'POST' && new URL(req.url, 'http://x').pathname === '/__trace') {
+    let body = '';
+    req.on('data', c => { body += c; if (body.length > 20e6) req.destroy(); });
+    req.on('end', async () => {
+      const name = `trace-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+      await mkdir(join(ROOT, 'traces'), { recursive: true });
+      await writeFile(join(ROOT, 'traces', name), body);
+      console.log('trace saved: traces/' + name);
+      res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ file: name }));
+    });
+    return;
+  }
   let path = normalize(decodeURIComponent(new URL(req.url, 'http://x').pathname));
   let file = join(ROOT, path);
   if (!file.startsWith(ROOT)) { res.writeHead(403).end(); return; }

@@ -12,6 +12,7 @@ import { LABS } from '../labs/manifest.js';
 import { ORDER, START, ARTIST, NO_PRELOAD, TOUCH } from './config.js';
 import { logoSVG } from '../labs/shared/logo.js';
 import { createTransitions } from './transition.js';
+import { LOAD_MS } from './load-times.js';
 
 const bySlug = new Map(LABS.map(l => [l.slug, l]));
 const toys = [...ORDER.filter(s => bySlug.has(s)), ...LABS.map(l => l.slug).filter(s => !ORDER.includes(s))].map(s => bySlug.get(s));
@@ -34,8 +35,8 @@ const across = (e, a = axis()) => a === 'y' ? e.clientX : e.clientY;
 const feed = $('feed'), slidesEl = $('slides');
 const codes = new Map();          // slug â†’ settings code from the URL
 const slides = new Map();         // slug â†’ slide
-const warmed = new Set();         // toys that have drawn once this visit, so their shaders are compiled
-const heavy = t => NO_PRELOAD.includes(t.slug) && !warmed.has(t.slug);
+// not even after a first visit: on an iPhone a heavy toy's second start froze the page for 5-10 s too
+const heavy = t => NO_PRELOAD.includes(t.slug);
 const touchedToys = new Set();    // toys someone has pressed on this visit, so their hint stops showing
 const finePointer = matchMedia('(hover: hover) and (pointer: fine)').matches;
 let cur = 0;
@@ -44,6 +45,7 @@ let cur = 0;
 const metrics = { loads: [], swipes: [], stats: {} };
 window.feedMetrics = metrics;
 const showStats = new URLSearchParams(location.search).has('stats');
+if (new URLSearchParams(location.search).has('trace')) import('./trace.js');   // a run-through record for a real device
 const solo = new URLSearchParams(location.search).has('solo');   // measuring only: no preloaded neighbours
 
 // ---- the ripple transition over the slides (site/transition.js); ?fx=off, reduced motion or no WebGL keep the CSS slide ----
@@ -53,9 +55,95 @@ const fx = calm || new URLSearchParams(location.search).get('fx') === 'off' ? nu
 // They sit over the ripple, so they stay in sight through a move. (Wide screens have the ‹ › buttons.)
 const cues = document.createElement('div');
 cues.className = 'cues'; cues.setAttribute('aria-hidden', 'true');
-cues.innerHTML = '<i class="cue lo"></i><i class="cue hi"></i>';
+cues.innerHTML = '<i class="slot"></i><i class="cue lo"></i><i class="cue hi"></i><i class="ring"></i>' +
+  '<i class="pie lo"><b></b><b></b></i><i class="pie hi"><b></b><b></b></i>';
 feed.appendChild(cues);
+const [slot, cueLo, cueHi, ring, pieLo, pieHi] = cues.children;
 const swiping = on => feed.classList.toggle('swiping', on);
+// While a drag is on, the chevron it pulls from rides just ahead of the finger, and a ring waits where the drag
+// counts: letting go there moves on (EASY of the screen), or, for a touched toy, getting there does (HARD). Reach
+// it and the ring flares with the ripple's front (fx.glow) and fades, and the chevron carries on with the finger;
+// pull back short and the ring is back, waiting. A faint glass slot runs from the chevron to the ring, like a
+// slide-to-unlock track: only the way still to go. All of it on the screen's centre line, wherever the finger is.
+const LEAD = 84;      // px from the finger to the chevron, clear of a thumb
+function guide(d, e) {
+  if (d.axis !== 'y') return;
+  const r = feed.getBoundingClientRect();
+  const s = d.dx < 0 ? -1 : 1;                       // -1: pulling up, toward the next toy
+  const T = feed.clientHeight * (d.hard ? HARD : EASY);
+  const armed = Math.abs(d.dx) >= T;
+  const cy = d.x0 + d.dx - r.top + s * LEAD;         // the chevron's centre
+  const ry = armed ? cy : d.x0 - r.top + s * (T + LEAD);
+  const [on, off] = s < 0 ? [cueHi, cueLo] : [cueLo, cueHi];
+  on.style.cssText = `top: ${cy - 5}px`;
+  off.style.cssText = '';
+  ring.style.cssText = `top: ${ry - 11}px`;
+  slot.style.cssText = `top: ${Math.min(cy, ry) - 15}px; height: ${Math.abs(ry - cy) + 30}px`;
+  if (armed && !feed.classList.contains('armed')) fx?.glow();
+  feed.classList.add('guiding');
+  feed.classList.toggle('armed', armed);
+}
+function unguide() {
+  for (const el of [slot, cueLo, cueHi, ring]) el.style.cssText = '';
+  feed.classList.remove('guiding', 'armed');
+}
+// Past each chevron (above the top one, below the bottom one), a small pie fills while the toy that way loads, and fades once it has drawn, so a swipe
+// there lands on a live toy. An empty ring: it's waiting its turn. The pie turns on the compositor (transforms
+// only), so it keeps going while a toy starting up holds the main thread.
+// Its pace is a guess at the load: that toy's last load on this device, or else its time in LOAD_MS (each toy
+// timed cold, by scripts/load-times.mjs) scaled by how this device has done against that table on the toys it has
+// loaded (the median ratio), so one slow or quick toy doesn't throw the rest. Loads are kept across visits.
+const LOAD_GUESS = 2500;
+let seenLoads = {};
+try { seenLoads = JSON.parse(localStorage.getItem('feed-loads')) || {}; } catch (e) {}
+function sawLoad(slug, ms) {
+  seenLoads[slug] = Math.round(ms);
+  try { localStorage.setItem('feed-loads', JSON.stringify(seenLoads)); } catch (e) {}
+}
+function eta(slug) {
+  if (seenLoads[slug]) return seenLoads[slug];
+  const r = Object.keys(seenLoads).filter(k => LOAD_MS[k]).map(k => seenLoads[k] / LOAD_MS[k]).sort((a, b) => a - b);
+  const pace = r.length ? r[(r.length - 1) >> 1] : 1;
+  return (LOAD_MS[slug] || LOAD_GUESS) * pace;
+}
+function paintPies() {
+  for (const [pie, cue, d] of [[pieHi, cueHi, 1], [pieLo, cueLo, -1]]) {
+    const s = solo ? null : slides.get(toys[wrap(cur + d)].slug);
+    // a heavy toy waits to load until it's on screen, where the spinner and pie say so: nothing to wait for here
+    const state = !s || s.ready ? '' : s.iframe ? 'loading' : heavy(s.toy) ? '' : 'queued';
+    cue.classList.toggle('nudge', !!state);   // its chevron nudges the way it points, now and then, until it's ready
+    fillPie(pie, s, state);
+  }
+}
+// state: 'loading' (fills over the guess, from when s's frame was made), 'queued' (an empty ring) or '' (hidden).
+// A toy that loads sooner than the guess doesn't leave its pie part-filled: the fill runs out to full in FINISH,
+// then the pie fades (unless it hadn't shown yet). One that takes longer sits full until it's done.
+const FINISH = 220;
+function fillPie(pie, s, state) {
+  const key = state && `${s.toy.slug} ${state} ${s.born}`;
+  if (pie.dataset.key === key) return;
+  pie.dataset.key = key;
+  clearTimeout(pie.finishTimer);
+  const t = performance.now(), left = pie.etaMs - (t - pie.bornAt);
+  // full, it fades ('done' holds it full); a pie that never showed just goes
+  const done = () => { pie.classList.remove('loading', 'queued', 'finishing'); pie.classList.add('done'); };
+  if (!state && pie.classList.contains('loading') && t - pie.addedAt > 500) {
+    const runs = left > FINISH && pie.getAnimations?.({ subtree: true }) || [];
+    if (runs.length) {
+      for (const a of runs) a.updatePlaybackRate ? a.updatePlaybackRate(left / FINISH) : (a.playbackRate = left / FINISH);
+      pie.classList.add('finishing');
+      pie.finishTimer = setTimeout(done, FINISH + 40);
+    } else done();
+    return;
+  }
+  pie.classList.remove('loading', 'queued', 'finishing', 'done');
+  if (!state) return;
+  pie.etaMs = Math.round(eta(s.toy.slug) * 1.2); pie.bornAt = s.born; pie.addedAt = t;
+  pie.style.setProperty('--eta', `${pie.etaMs}ms`);
+  pie.style.setProperty('--t0', `${Math.round(t - s.born)}ms`);
+  void pie.offsetWidth;   // restart the fill
+  pie.classList.add(state);
+}
 function placeCues() {
   const cap = slides.get(toys[cur].slug)?.el.querySelector('.caption');
   if (cap) feed.style.setProperty('--cap-top', `${cap.offsetTop}px`);
@@ -113,6 +201,7 @@ function makeSlide(t, play, defer = false) {
     <div class="stage">
       <img class="poster" alt="" hidden>
       <div class="loader" aria-hidden="true">${logoSVG({ size: 56 })}</div>
+      <i class="wait" aria-hidden="true"></i><i class="pie" aria-hidden="true"><b></b><b></b></i>
       <div class="edge lo" aria-hidden="true"></div><div class="edge hi" aria-hidden="true"></div>
       <span class="toyhint" aria-hidden="true"></span>
     </div>
@@ -146,6 +235,7 @@ function mount(s) {
   s.born = performance.now();
   s.el.querySelector('.stage').appendChild(f);
   s.iframe = f;
+  waiting(); paintPies();   // the pies start filling now, before a heavy start-up can hold the main thread
 }
 
 // reload a resting neighbour from scratch; it comes back frozen on its first frame, like any preload
@@ -165,39 +255,83 @@ function dispose(s) {
 
 const send = (s, feedMsg, extra) => s?.iframe?.contentWindow?.postMessage({ feed: feedMsg, ...extra }, location.origin);
 const playCurrent = () => { const c = slides.get(toys[cur].slug); if (c) play(c); };
-function play(s) { if (!s.playing) { s.playing = true; s.playAt = performance.now(); send(s, 'play'); } }
-function pause(s) { if (s.playing) { s.playing = false; send(s, 'pause'); } }
+function play(s) { if (!s.playing) { s.playing = true; s.playAt = performance.now(); s.wantLive = true; send(s, 'play'); waiting(); } }
+function pause(s) { if (s.playing) { s.playing = false; s.wantLive = false; send(s, 'pause'); } }
+// A spinner over the toy on screen while it hasn't drawn, or has been told to play and hasn't moved yet
+// (feed.css shows it only after a moment, so a quick start never flashes it). It spins on the compositor too.
+// While it hasn't drawn (loading, compiling its shaders) a pie inside the spinner fills over the guess at its load,
+// like the ones by the chevrons: Goop's twenty-odd seconds read as a wait with an end, not a hang.
+function waiting() {
+  const c = slides.get(toys[cur].slug);
+  for (const s of slides.values()) {
+    const on = s === c;
+    s.el.classList.toggle('waiting', on && (!s.ready || !!s.wantLive));
+    fillPie(s.el.querySelector('.stage .pie'), s, on && !s.ready ? (s.iframe ? 'loading' : 'queued') : '');
+  }
+}
 
+// At rest, the neighbours are parked: on screen, under the toy on screen (.parked), not beside it. Safari barely
+// runs animation frames in an iframe outside the viewport, so a neighbour waiting beside the screen didn't draw
+// its first frame (a phone trace: not until a swipe brought it into view, or ~20 s). Any move unparks them first,
+// back to their places beside the screen, with no transition; they park again once it has settled.
+let parked = true;
 function place(s, dx = 0) {
-  const d = `calc(${s.offset * 100}% + ${dx}px)`;
+  const park = parked && !!s.offset && !s.pinned;
+  s.el.classList.toggle('parked', park);
+  const d = park ? '0px' : `calc(${s.offset * 100}% + ${dx}px)`;
   s.el.style.transform = s.pinned ? 'none' : axis() === 'y' ? `translate3d(0, ${d}, 0)` : `translate3d(${d}, 0, 0)`;
 }
 function placeAll(dx = 0) { for (const s of slides.values()) place(s, dx); }
+function unpark() {
+  if (!parked) return;
+  parked = false;
+  animate(false);
+  placeAll();
+  for (const s of slides.values()) s.el.getBoundingClientRect();   // there now, so a slide that follows starts from there
+}
+function park() {
+  if (parked || drag?.active) return;
+  parked = true;
+  placeAll();
+}
 function animate(on, ms) {
   for (const s of slides.values()) s.el.classList.toggle('anim', on && !calm);
   if (ms) document.documentElement.style.setProperty('--slide-ms', ms + 'ms');
 }
 
-// Neighbours load once the current toy has drawn, so they never compete with it for the first frame.
-// Until it has, they get their slide (still or loader) and no frame: a toy still compiling its shaders (Goop takes
-// many seconds) holds the GPU, and a neighbour starting up behind it would wait on it with the page's main thread,
-// which every toy shares, so the feed froze and couldn't be swiped. They load when it draws ('ready').
+// Neighbours load one at a time, and only once the toy on screen has drawn: the next toy first, then the one
+// before, each after the last has drawn. Until its turn a neighbour has its slide (still or loader) and no frame.
+// Every toy shares the page's main thread, and starting one up holds it for a second or more on a phone (a toy
+// still compiling its shaders, like Goop, holds the GPU for many seconds), so two starting together, or one behind
+// the toy on screen, froze the feed and the toy you're playing with. One at a time leaves gaps between the stalls.
 let neighbourTimer = 0;
+const STUCK = 8000;   // a neighbour that hasn't drawn in this long stops holding up the next
+// Nor does one start while someone is using the toy on screen: the stall would land under their finger. Touch
+// on the feed and in the toys (the embed's 'active') counts; neighbours wait for QUIET of none.
+const QUIET = 1500;
+let activeAt = -Infinity;
+const busyNow = () => { activeAt = performance.now(); };
 function loadNeighbours() {
   clearTimeout(neighbourTimer);
   if (solo) return;
-  const wait = !slides.get(toys[cur].slug)?.ready;
+  const idle = performance.now() - activeAt;
+  if (idle < QUIET) { neighbourTimer = setTimeout(loadNeighbours, QUIET - idle + 50); return; }
+  let busy = !slides.get(toys[cur].slug)?.ready;
   for (const d of [1, -1]) {
-    const t = toys[wrap(cur + d)], s = slides.get(t.slug);
+    const t = toys[wrap(cur + d)];
+    let s = slides.get(t.slug);
     // a heavy toy still gets its slide (poster or loader), just no frame until someone stops on it
-    if (!s) { const n = makeSlide(t, false, heavy(t) || wait); n.offset = d; place(n); }
-    else if (!s.iframe && !heavy(t) && !wait) mount(s);
+    if (!s) { s = makeSlide(t, false, true); s.offset = d; place(s); }
+    if (!s.iframe && !heavy(t) && !busy) mount(s);
+    if (s.iframe && !s.ready && performance.now() - s.born < STUCK) busy = true;
   }
+  paintPies();
+  if (busy) neighbourTimer = setTimeout(loadNeighbours, 2000);   // in case a 'ready' never comes
 }
 function scheduleNeighbours() {
   clearTimeout(neighbourTimer);
   const c = slides.get(toys[cur].slug);
-  if (c?.ready) neighbourTimer = setTimeout(loadNeighbours, settling ? 460 : 60);
+  if (c?.ready) neighbourTimer = setTimeout(loadNeighbours, settling ? 460 : 300);
   else neighbourTimer = setTimeout(loadNeighbours, 1500);
 }
 
@@ -212,6 +346,7 @@ function settle(ms) {
     if (c && !c.iframe) mount(c);
     for (const s of [...slides.values()]) if (s.pinned || Math.abs(rel(indexOf(s.toy.slug))) > 1) dispose(s);
     animate(false);
+    park();
     scheduleNeighbours();
   }, ms + 40);
 }
@@ -222,6 +357,7 @@ function becameCurrent(s, t0, held = false) {
   for (const o of slides.values()) if (o !== s) pause(o);
   s.peeked = false; s.touched = false;
   if (!s.playing) { if (!held) play(s); s.swipeAt = t0; }
+  waiting(); paintPies();
   clearTimeout(snapTimer);
   snapTimer = setTimeout(() => send(s, 'snap', { width: 540 }), 2600);
   updateCurrentTile();
@@ -249,6 +385,7 @@ function showHint(s) {
 
 // Move by one toy (dir Â±1). ms: slide duration, shorter after a fast flick.
 function go(dir, { ms = 420, t0 = performance.now() } = {}) {
+  unpark();
   const from = slides.get(toys[cur].slug);
   cur = wrap(cur + dir);
   const t = toys[cur];
@@ -271,6 +408,7 @@ function go(dir, { ms = 420, t0 = performance.now() } = {}) {
 // Jump anywhere (overview, URL). Neighbours slide; anything further cuts with a short fade over the old toy.
 function jump(i) {
   if (i === cur) return;
+  unpark();
   const d = rel(i);
   if (Math.abs(d) === 1) return go(d);
   const old = slides.get(toys[cur].slug);
@@ -298,19 +436,22 @@ addEventListener('message', e => {
     // the lab's own word on what it does with a finger beats the feed's table
     if (m.touch) s.touch = m.touch;
     if (m.hint) s.hint = m.hint;
-    s.ready = true; s.el.classList.add('ready'); warmed.add(s.toy.slug);
+    s.ready = true; s.wantLive = false; s.el.classList.add('ready');
     if (s.toy === toys[cur]) { setLive(); showHint(s); }
+    waiting(); paintPies();
+    sawLoad(s.toy.slug, now - s.born);
     metrics.loads.push({ slug: s.toy.slug, ms: Math.round(now - s.born), asNeighbour: !s.playing && !s.swipeAt });
     if (s.swipeAt) { metrics.swipes.push({ slug: s.toy.slug, msToLive: Math.round(now - s.swipeAt), wasPreloaded: false }); s.swipeAt = 0; }
-    if (s.toy === toys[cur]) scheduleNeighbours();
-  } else if (m.feed === 'live' && s.swipeAt) {
-    metrics.swipes.push({ slug: s.toy.slug, msToLive: Math.round(now - s.swipeAt), wasPreloaded: s.ready });
-    s.swipeAt = 0;
+    scheduleNeighbours();   // the toy on screen, or a neighbour: either way the next one in line can start
+  } else if (m.feed === 'live') {
+    s.wantLive = false; waiting();
+    if (s.swipeAt) { metrics.swipes.push({ slug: s.toy.slug, msToLive: Math.round(now - s.swipeAt), wasPreloaded: s.ready }); s.swipeAt = 0; }
   } else if (m.feed === 'stats') {
     metrics.stats[s.toy.slug] = { fps: +m.fps.toFixed(1), cbMs: +m.cbMs.toFixed(2), worstMs: Math.round(m.worstMs) };
     if (showStats && s.toy === toys[cur]) renderStats(s.toy.slug);
   } else if (m.feed === 'frozen') fx?.keep(s);
   else if (m.feed === 'snap' && m.url) savePoster(s.toy.slug, m.url);
+  else if (m.feed === 'active') busyNow();
   else if (m.feed === 'touched') { if (s.toy === toys[cur]) s.touched = true; touchedToys.add(s.toy.slug); clearTimeout(s.hintTimer); s.el.classList.remove('hinting'); }
   // a toy under the pointer gets the wheel, and one that was pressed keeps the focus (even once swiped away),
   // so they pass the feed's own back up
@@ -341,9 +482,11 @@ const SLOP = 8;
 // stray stroke on a slide the feed handles), leaving takes a long pull, from the edge zones too: a bubble of the toy
 // itself forms at the entering edge and only breaks through to the next toy at HARD of the screen; let go before
 // that and it shrinks back out. Reset on every visit.
-const HARD = 0.45;
+const HARD = 0.45, EASY = 0.18;
 const touchedCurrent = () => { const c = slides.get(toys[cur].slug); if (c) c.touched = true; };
-const clearCue = () => { cue?.classList.remove('pressed'); cue = null; swiping(false); };
+const clearCue = () => { cue?.classList.remove('pressed'); cue = null; swiping(false); unguide(); };
+feed.addEventListener('pointerdown', busyNow, true);
+feed.addEventListener('pointermove', e => { if (e.buttons || e.pointerType === 'touch') busyNow(); }, true);
 feed.addEventListener('pointerdown', e => {
   if (e.button !== 0 || dialogOpen()) return;
   // positions are along the swipe axis (x0, dx) and across it (y0); the axis is fixed for the life of a drag
@@ -372,6 +515,7 @@ feed.addEventListener('pointermove', e => {
       drag.x0 = along(e, a) - at;               // no jump at the slop either
       feed.setPointerCapture(e.pointerId);
       clearTimeout(settleTimer); clearTimeout(neighbourTimer);
+      unpark();
       animate(false);
       placeAll(at);
       // a neighbour that isn't mounted yet (fast swiping) gets mounted now, frozen
@@ -382,7 +526,7 @@ feed.addEventListener('pointermove', e => {
     return;
   }
   drag.dx = along(e, a) - drag.x0;
-  feed.dataset.swipe = drag.dx < 0 ? 'on' : 'back';
+  guide(drag, e);
   drag.samples.push([e.timeStamp, along(e, a)]);
   while (drag.samples.length > 2 && e.timeStamp - drag.samples[0][0] > 90) drag.samples.shift();
   const L = a === 'y' ? feed.clientHeight : feed.clientWidth;
@@ -417,7 +561,7 @@ function endDrag(e, cancelled) {
   const v = tb > ta && e.timeStamp - tb < 80 ? (xb - xa) / (tb - ta) : 0;
   const flick = Math.abs(v) > 0.35 && Math.sign(v) === Math.sign(d.dx);
   // (a hard-tier pull commits as it crosses HARD, in pointermove; letting go is always a spring-back)
-  if (!cancelled && !d.hard && (Math.abs(d.dx) > W * 0.18 || flick)) {
+  if (!cancelled && !d.hard && (Math.abs(d.dx) > W * EASY || flick)) {
     const remaining = W - Math.abs(d.dx);
     const ms = Math.round(Math.max(200, Math.min(420, flick ? remaining / Math.abs(v) * 1.6 : 420)));
     go(d.dx < 0 ? 1 : -1, { ms, t0: performance.now() });
@@ -656,4 +800,5 @@ snapTimer = setTimeout(() => send(first, 'snap', { width: 540 }), 2600);
 prefetchAround();
 placeCues();
 setLive();
+waiting();
 scheduleNeighbours();

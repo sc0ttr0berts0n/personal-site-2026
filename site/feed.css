@@ -38,6 +38,7 @@ button { font: inherit; color: inherit; }
 .slide { position: absolute; inset: 0; will-change: transform; backface-visibility: hidden; contain: strict; background: var(--bg); }
 .slide.anim { transition: transform var(--slide-ms) var(--ease); }
 .slide.pinned { z-index: 0; }
+.slide.parked { z-index: -1; }   /* a resting neighbour, under the toy on screen (feed.js park()) */
 .slide.entering { z-index: 2; animation: enter .22s ease-out both; }
 @keyframes enter { from { opacity: 0; } }
 .slide .stage { position: absolute; inset: 0; overflow: hidden;
@@ -83,17 +84,68 @@ html[data-axis="y"] .edge.hi::after { background: linear-gradient(to top, rgb(24
 html[data-axis="y"] .edge.lo { align-items: end; padding-bottom: 10px; }
 html[data-axis="y"] .toyhint { top: calc(var(--edge-y) + 14px); }
 
-/* Swipe cues (feed.js): drawn like the labs' corner brackets (1px, dim, .55) until a swipe starts, then lit,
-   and the one the swipe heads away from leans into it. Over the ripple (z 3). Tall screens only. */
+/* Swipe cues (feed.js): drawn like the labs' corner brackets (1px, dim, .55) until a swipe starts, then lit.
+   During a drag the one it pulls from follows the finger and a ring marks where the drag counts (see guide());
+   letting go eases them home. Over the ripple (z 3). Tall screens only. */
 .cues { display: none; }
 html[data-axis="y"] .cues { display: block; position: absolute; inset: 0; z-index: 4; pointer-events: none; }
 .cue { position: absolute; left: 50%; width: 10px; height: 10px; margin-left: -5px; border: solid var(--dim); border-width: 1px 0 0 1px; opacity: .55;
-  transition: opacity .5s, border-color .5s, filter .5s, translate .5s; }
+  transition: opacity .5s, border-color .5s, filter .5s, top .35s ease-out, left .35s ease-out; }
 .cue.lo { top: calc(var(--edge-y) - 18px); rotate: 225deg; }
 .cue.hi { top: calc(var(--cap-top, calc(100% - var(--edge-y))) + 30px); rotate: 45deg; }
 .swiping .cue { opacity: 1; border-color: var(--ink); filter: drop-shadow(0 0 4px rgb(244 244 246 / .75)); transition-duration: .12s; }
-.swiping[data-swipe="on"] .cue.hi { translate: 0 -6px; }
-.swiping[data-swipe="back"] .cue.lo { translate: 0 6px; }
+.cues .ring { position: absolute; left: 50%; width: 22px; height: 22px; margin-left: -11px; border: 1px solid var(--ink); border-radius: 50%;
+  opacity: 0; transition: opacity .3s, box-shadow .15s; }
+.cues .slot { position: absolute; left: 50%; top: 0; width: 30px; height: 30px; margin-left: -15px; border-radius: 15px; opacity: 0; transition: opacity .3s;
+  border: 1px solid rgb(244 244 246 / .07); box-shadow: inset 0 1px 0 rgb(244 244 246 / .06), inset 0 -8px 14px rgb(0 0 0 / .12);
+  background: linear-gradient(to right, rgb(244 244 246 / .04), rgb(244 244 246 / .01) 45%, rgb(244 244 246 / .03));
+  -webkit-backdrop-filter: blur(2.5px) saturate(1.1); backdrop-filter: blur(2.5px) saturate(1.1); }
+.guiding .slot { opacity: 1; }
+.guiding .cue, .guiding .ring, .guiding .slot { transition: opacity .12s, border-color .12s, filter .12s, box-shadow .15s; }   /* following: no easing */
+.guiding .ring { opacity: .5; }
+/* reached: the ring flares with the ripple's front (transition.js glow, GLOW_MS) and fades, leaving the chevron */
+.guiding.armed .ring { opacity: 0; animation: flare .6s linear both; }
+.guiding.armed .slot { opacity: 0; transition: opacity .6s; }
+/* pulled back short of it again: the ring and the slot fade back in */
+.guiding:not(.armed) :is(.ring, .slot) { transition: opacity .35s ease-out; }
+@keyframes flare {
+  0% { opacity: .5; box-shadow: 0 0 0 rgb(244 244 246 / 0); }
+  20% { opacity: 1; box-shadow: 0 0 16px rgb(244 244 246 / .8), inset 0 0 6px rgb(244 244 246 / .5); }
+  100% { opacity: 0; box-shadow: 0 0 24px rgb(244 244 246 / 0); }
+}
+/* while the toy a chevron leads to is loading: a nudge the way it points, two or three chevrons long, and a
+   gentle settle, every couple of seconds; translate only, so it carries on through a stall */
+.cue.nudge { animation: nudge 2.4s .5s infinite both; }
+.cue.lo { --nudge: 24px; }
+.cue.hi { --nudge: -24px; }
+@keyframes nudge {
+  0% { translate: 0 0; animation-timing-function: cubic-bezier(.3, 0, .2, 1); }
+  16% { translate: 0 var(--nudge); animation-timing-function: cubic-bezier(.45, 0, .25, 1); }
+  58%, 100% { translate: 0 0; }
+}
+.swiping .cue.nudge { animation: none; }
+/* Loading pies on the far side of the chevrons, above the top one and below the bottom one (feed.js paintPies):
+   a ring while the toy that way waits its turn, filling while it loads, gone once it has drawn. Half a second late,
+   so a toy that loads quickly never blips one. Two half-discs turning in two half-windows: transforms only, so the compositor
+   keeps them going while a toy starting up holds the main thread. --eta: how long the fill takes; --t0: time
+   already spent loading. Out of the way during a swipe. */
+.cues .pie { position: absolute; left: 50%; width: 11px; height: 11px; margin-left: -5.5px; border: 1px solid var(--dim);
+  border-radius: 50%; opacity: 0; transition: opacity .4s; }
+.cues .pie.lo { top: calc(var(--edge-y) - 18px - 18px); }
+.cues .pie.hi { top: calc(var(--cap-top, calc(100% - var(--edge-y))) + 30px + 17px); }
+.cues .pie.queued { opacity: .35; transition-delay: .5s; }
+.cues .pie.loading { opacity: .6; transition-delay: .5s; }
+.swiping .pie { opacity: 0 !important; transition-duration: .12s; }
+.pie b { position: absolute; top: 1px; bottom: 1px; width: calc(50% - 1px); overflow: hidden; }
+.pie b:first-child { left: 50%; }
+.pie b:last-child { right: 50%; }
+.pie b::before { content: ""; position: absolute; inset: 0; background: var(--ink); rotate: -180deg; opacity: 0; }   /* hidden at rest: no hairline at the seam */
+.pie b:first-child::before { border-radius: 0 99px 99px 0; transform-origin: 0 50%; }
+.pie b:last-child::before { border-radius: 99px 0 0 99px; transform-origin: 100% 50%; }
+.pie.loading b:first-child::before { animation: fill calc(var(--eta) / 2) linear calc(var(--t0) * -1) both; }
+.pie.loading b:last-child::before { animation: fill calc(var(--eta) / 2) linear calc(var(--eta) / 2 - var(--t0)) both; }
+.pie.done b::before { rotate: 0deg; opacity: 1; }   /* full while it fades */
+@keyframes fill { from { rotate: -180deg; opacity: 0; } 1% { opacity: 1; } to { rotate: 0deg; opacity: 1; } }
 
 /* what a finger does to the toy, over it as it arrives */
 .toyhint { position: absolute; z-index: 1; left: 50%; top: calc(max(12px, env(safe-area-inset-top, 0px)) + 58px); translate: -50% 0; pointer-events: none;
@@ -102,6 +154,21 @@ html[data-axis="y"] .cues { display: block; position: absolute; inset: 0; z-inde
   opacity: 0; transition: opacity .3s; }
 .slide.hinting .toyhint { opacity: 1; transition-delay: .35s; }
 .slide.ready .loader, .slide.has-poster .loader { opacity: 0; }
+/* the toy on screen hasn't drawn yet, or hasn't moved since it was told to play (feed.js waiting()): a spinner,
+   and while it hasn't drawn, a pie inside it filling over the guess at its load. Over its still, or under the
+   breathing mark when there's no still yet. A beat late, so a quick start never shows them. Transforms only, so
+   they keep turning through a stall (a toy compiling its shaders holds the main thread). */
+.wait { position: absolute; z-index: 1; left: 50%; top: 50%; width: 32px; height: 32px; margin: -16px 0 0 -16px; border-radius: 50%;
+  border: 1.5px solid rgb(244 244 246 / .16); border-top-color: var(--ink); opacity: 0; transition: opacity .2s; pointer-events: none;
+  background: rgb(0 0 0 / .35); animation: spin .8s linear infinite; }
+.slide.waiting .wait { opacity: .85; transition-delay: .3s; }
+.stage .pie { position: absolute; z-index: 1; left: 50%; top: 50%; width: 20px; height: 20px; margin: -10px 0 0 -10px; border-radius: 50%;
+  border: 1px solid rgb(244 244 246 / .3); opacity: 0; transition: opacity .2s; pointer-events: none; }
+.stage .pie b { top: 2px; bottom: 2px; width: calc(50% - 2px); }
+.slide.waiting .stage .pie.loading, .slide.waiting .stage .pie.queued { opacity: .85; transition-delay: .3s; }
+.stage .pie.finishing { opacity: .85; transition-delay: 0s; }   /* running out to full once the toy beat its guess */
+.slide:not(.has-poster) :is(.wait, .stage .pie) { translate: 0 64px; }
+@keyframes spin { to { rotate: 360deg; } }
 /* the GL transition overlay (site/transition.js): over the slides, under the chrome; only shown mid-transition */
 .fx { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 3; pointer-events: none; visibility: hidden;
   opacity: 0; transition: opacity .18s, visibility 0s .18s; }
@@ -213,7 +280,9 @@ dialog.open::backdrop { opacity: 1; }
   .cap .title { font-size: 23px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .slide.anim, .sheet, .overview, dialog::backdrop, .toyhint, .edge::before, .edge::after, .cue { transition: none; }
+  .slide.anim, .sheet, .overview, dialog::backdrop, .toyhint, .edge::before, .edge::after, .cue, .cues .ring, .cues .slot { transition: none; }
   .loader svg { animation: none; }
+  .cue.nudge { animation: none; }
+  .wait { animation: breathe 1.6s ease-in-out infinite; }
   .slide.entering { animation-duration: .12s; }
 }

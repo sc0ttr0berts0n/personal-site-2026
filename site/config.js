@@ -1,17 +1,21 @@
 // The one place to reorder the feed or fill in the artist card.
 
 // Feed order, by lab file name. Labs missing from this list are appended in lab-number order.
-// Lab-number order for now. Suggestion: open on something instantly fun and quick to load, e.g. 'sand'.
-// (Vessel is fun too, but on a first visit it takes ~8 s to compile before it draws.)
+// Lab-number order for now.
 export const ORDER = ['prism', 'fluid', 'goop', 'knockout', 'bigbang', 'godrays', 'maze', 'pachinko', 'neural', 'sand', 'life', 'splat'];
 
 // Which toy a bare link (no #toy) opens on. null = the first in ORDER.
-export const START = null;
+// Vessel, the hero: on an iPhone 15 Pro (first visit, in the feed, over HTTPS) it draws 1.3 s after its frame
+// loads, its worst freeze is 0.23 s and it runs at 60 fps (its shader compiles while a worker bakes its shape).
+export const START = 'fluid';
 
-// Toys too heavy to preload as a frozen neighbour: they mount only once someone stops on them, and preload
-// normally after their first compile. A lab whose first shader compile blocks the page's main thread (shared by
-// every toy in the feed) freezes the toy on screen while it preloads. Goop (~33 s) and Vessel (~10 s) used to;
-// they now compile in the background and set window.labWarming until they can draw, so the list is empty.
+// Toys too heavy to preload as a frozen neighbour: they mount only once someone stops on them, with the loading
+// spinner and pie over their still. Starting one blocks the page's main thread, which every toy in the feed
+// shares, so a neighbour starting up would freeze the toy being played with. Empty for now: on an iPhone 15 Pro
+// over HTTPS every toy draws within 0.7 s of its frame loading (Big Bang 676 ms, Prism 521, Fluid 357, Goop 320)
+// with one hitch of 0.2-0.36 s, which the one-at-a-time, hands-off neighbour loading keeps away from a finger.
+// (The 5-12 s freezes once measured here came over a LAN dev server, plain http, where the iPhone runs JS with
+// its JIT off.) Put a toy here if its start-up ever holds the page for a second or more.
 export const NO_PRELOAD = [];
 
 // Fallback for what each toy does with a finger in the feed. Each lab now says so itself, in the feed: line of its
