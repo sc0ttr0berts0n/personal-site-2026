@@ -416,7 +416,7 @@ function openSheet(t) {
     <span class="num">lab ${t.number}</span>
     <h2 id="sheet-title">${esc(t.title)}</h2>
     <p class="blurb">${esc(t.blurb)}</p>
-    <p class="teaches"><span>teaches →</span> ${esc(t.teaches)}</p>
+    <p class="teaches"><span>demonstrates →</span> ${esc(t.teaches)}</p>
     ${t.hint ? `<p class="hint"><span>on its own page →</span> ${esc(stripTags(t.hint))}</p>` : ''}
     <div class="row"><a class="btn primary" href="${esc(pageHref(t))}">Play with this <span aria-hidden="true">→</span></a></div>
     ${motion ? `<section><span class="label">Motion</span>
