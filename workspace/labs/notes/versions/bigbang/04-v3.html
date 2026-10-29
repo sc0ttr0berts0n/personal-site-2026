@@ -1,0 +1,782 @@
+<meta charset="utf-8">
+<title>Big Bang</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@200;300&family=Familjen+Grotesk:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="shared/lab.css">
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
+import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
+import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
+import { createLab } from '../../../shared/lab.js';
+import { logoPolygons, logoShapes, LOGO_FILL, LOGO_DEPTH } from '../../../shared/logo.js';
+import { ramp } from '../../../shared/palettes.js';
+
+// Each palette is a filter set: the ramp runs from the hottest, densest gas to the faintest wisps.
+const FILTERS = [
+  { key: 'sho',     name: 'Hubble SHO',    bg: '#000000', grid: '#13120c', ink: '#fff7e0', colors: ['#fff4c8', '#ffb800', '#ff3d2e', '#00e0c8', '#0070ff'] },
+  { key: 'hoo',     name: 'Hα + OIII',     bg: '#000000', grid: '#190d14', ink: '#ffeef5', colors: ['#ffffff', '#ff3d8b', '#e0002a', '#00e5ff', '#0050ff'] },
+  { key: 'webb',    name: 'Webb NIRCam',   bg: '#020100', grid: '#1b120a', ink: '#fff2dc', colors: ['#fff0cc', '#ffa424', '#ff4a14', '#b04dff', '#3355ff'] },
+  { key: 'chandra', name: 'Chandra X-ray', bg: '#00010a', grid: '#0b1328', ink: '#eaf6ff', colors: ['#ffffff', '#4df6ff', '#1a78ff', '#c23dff', '#6a00d8'] },
+  { key: 'halpha',  name: 'Hydrogen α',    bg: '#040000', grid: '#220a0d', ink: '#fff0f0', colors: ['#fff0ec', '#ff5a3c', '#ff0a3c', '#d4006e', '#6a0070'] },
+  { key: 'radio',   name: 'Radio',         bg: '#02000a', grid: '#160a26', ink: '#f6ecff', colors: ['#ffffff', '#fff200', '#ff2d7f', '#8a2cff', '#2a10ff'] }
+];
+
+const QUALITY = { low: [28, 0.45], medium: [40, 0.68], high: [60, 0.85], ultra: [90, 1] };
+
+const lab = createLab({
+  number: '05',
+  title: 'Big Bang',
+  blurb: 'A nebula churns inside the mark. Tap it to set off the bang, then orbit the shell of gas the blast wave lights up.',
+  teaches: 'Limb brightening: sight lines that graze a thin shell cross the most gas, so its edge glows. Expansion as a scale factor a(t), and fBm noise summed over octaves.',
+  hint: 'tap the mark · drag to orbit · tap to rewind',
+  palettes: FILTERS,
+  defaultPalette: 'sho',
+  grid: false,
+  params: {
+    style:    { type: 'select', label: 'Aftermath', value: 'shell', options: [['shell', 'Shell (supernova remnant)'], ['cloud', 'Turbulent cloud']] },
+    density:  { type: 'range', label: 'Gas density', min: 0.2, max: 2.5, step: 0.05, value: 1 },
+    octaves:  { type: 'range', label: 'fBm octaves', min: 1, max: 6, step: 1, value: 5 },
+    warp:     { type: 'range', label: 'Turbulence (domain warp)', min: 0, max: 2, step: 0.05, value: 0.9 },
+    stars:    { type: 'range', label: 'Star density', min: 0, max: 1, step: 0.01, value: 0.35 },
+    force:    { type: 'range', label: 'Explosion force', min: 0.3, max: 2, step: 0.05, value: 1, unit: '×' },
+    flash:    { type: 'range', label: 'Flash intensity', min: 0, max: 2, step: 0.05, value: 1 },
+    shock:    { type: 'range', label: 'Shockwave speed', min: 2, max: 20, step: 0.5, value: 8, unit: ' u/s' },
+    orbit:    { type: 'range', label: 'Orbit speed', min: 0, max: 30, step: 0.5, value: 7, unit: '°/s' },
+    tilt:     { type: 'range', label: 'Orbit tilt', min: -45, max: 45, step: 1, value: 16, unit: '°' },
+    time:     { type: 'range', label: 'Time scale', min: 0.1, max: 2, step: 0.05, value: 1, unit: '×' },
+    quality:  { type: 'select', label: 'Quality (march steps · resolution)', value: 'medium', options: [['low', 'Low · 28 · 45%'], ['medium', 'Medium · 40 · 68%'], ['high', 'High · 60 · 85%'], ['ultra', 'Ultra · 90 · 100%']] },
+    loop:     { type: 'toggle', label: 'Auto loop', value: true }
+  },
+  actions: [
+    { label: 'Bang', primary: true, action: () => bang() },
+    { label: 'Rewind', action: () => rewind() }
+  ]
+});
+
+// ---- world: the key square is 10 units, the mark is LOGO_FILL of that, face-on in the xy plane ----
+const SQ = 10, LOGO_W = SQ * LOGO_FILL, DEPTH = LOGO_DEPTH * LOGO_W, FOV = 22;
+const SB = 0.9;                 // seconds of build-up before the bang
+const ZB = -10;                 // back of the nebula volume
+
+const { canvas } = lab.canvas({ context: 'none' });
+let renderer;
+try { renderer = new THREE.WebGLRenderer({ canvas, antialias: true }); }
+catch (e) { lab.hud('WebGL is not available in this browser.'); throw e; }
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+function mulberry32(a) {
+  return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+}
+
+// ---- 3D noise texture: four independent channels of smooth, tileable value noise ----
+function makeNoise(N = 64, L = 16) {
+  const rnd = mulberry32(5);
+  const lat = [0, 1, 2, 3].map(() => Float32Array.from({ length: L * L * L }, rnd));
+  const data = new Uint8Array(N * N * N * 4);
+  const q = t => t * t * t * (t * (t * 6 - 15) + 10);
+  const at = (g, x, y, z) => g[((z % L) * L + (y % L)) * L + (x % L)];
+  for (let z = 0; z < N; z++) for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+    const fx = x / N * L, fy = y / N * L, fz = z / N * L;
+    const ix = Math.floor(fx), iy = Math.floor(fy), iz = Math.floor(fz);
+    const u = q(fx - ix), v = q(fy - iy), w = q(fz - iz);
+    const o = ((z * N + y) * N + x) * 4;
+    for (let c = 0; c < 4; c++) {
+      const g = lat[c];
+      const a = at(g, ix, iy, iz) + (at(g, ix + 1, iy, iz) - at(g, ix, iy, iz)) * u;
+      const b = at(g, ix, iy + 1, iz) + (at(g, ix + 1, iy + 1, iz) - at(g, ix, iy + 1, iz)) * u;
+      const cc = at(g, ix, iy, iz + 1) + (at(g, ix + 1, iy, iz + 1) - at(g, ix, iy, iz + 1)) * u;
+      const d = at(g, ix, iy + 1, iz + 1) + (at(g, ix + 1, iy + 1, iz + 1) - at(g, ix, iy + 1, iz + 1)) * u;
+      const ab = a + (b - a) * v, cd = cc + (d - cc) * v;
+      data[o + c] = Math.round((ab + (cd - ab) * w) * 255);
+    }
+  }
+  const tex = new THREE.Data3DTexture(data, N, N, N);
+  tex.format = THREE.RGBAFormat; tex.type = THREE.UnsignedByteType;
+  tex.minFilter = tex.magFilter = THREE.LinearFilter;
+  tex.wrapS = tex.wrapT = tex.wrapR = THREE.RepeatWrapping;
+  tex.unpackAlignment = 1; tex.needsUpdate = true;
+  return tex;
+}
+const noiseTex = makeNoise();
+
+// ---- signed distance field of the mark in world units (y up), negative inside ----
+const POLYS = logoPolygons({ curveSegments: 10 }).map(p => p.map(([x, y]) => [x * LOGO_W, -y * LOGO_W]));
+const SDF_B = 4, SDF_N = 320;
+function pip(px, py, poly) {
+  let c = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [ax, ay] = poly[i], [bx, by] = poly[j];
+    if ((ay > py) !== (by > py) && px < (bx - ax) * (py - ay) / (by - ay) + ax) c = !c;
+  }
+  return c;
+}
+const sdfData = new Float32Array(SDF_N * SDF_N);
+(function buildSdf() {
+  const segs = POLYS.flatMap(p => p.map((a, i) => [a, p[(i + 1) % p.length]]));
+  for (let j = 0; j < SDF_N; j++) for (let i = 0; i < SDF_N; i++) {
+    const x = -SDF_B + (i + 0.5) / SDF_N * 2 * SDF_B, y = -SDF_B + (j + 0.5) / SDF_N * 2 * SDF_B;
+    let m = Infinity;
+    for (const [[ax, ay], [bx, by]] of segs) {
+      const dx = bx - ax, dy = by - ay;
+      const t = Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy)));
+      const ex = x - ax - dx * t, ey = y - ay - dy * t, d = ex * ex + ey * ey;
+      if (d < m) m = d;
+    }
+    const inside = POLYS.some(p => pip(x, y, p));
+    sdfData[j * SDF_N + i] = (inside ? -1 : 1) * Math.sqrt(m);
+  }
+})();
+const sdfTex = new THREE.DataTexture(Uint16Array.from(sdfData, v => THREE.DataUtils.toHalfFloat(v)), SDF_N, SDF_N, THREE.RedFormat, THREE.HalfFloatType);
+sdfTex.minFilter = sdfTex.magFilter = THREE.LinearFilter;
+sdfTex.needsUpdate = true;
+function sdfAt(x, y) {
+  const cx = Math.max(-SDF_B, Math.min(SDF_B, x)), cy = Math.max(-SDF_B, Math.min(SDF_B, y));
+  const i = Math.min(SDF_N - 1, Math.floor((cx + SDF_B) / (2 * SDF_B) * SDF_N));
+  const j = Math.min(SDF_N - 1, Math.floor((cy + SDF_B) / (2 * SDF_B) * SDF_N));
+  return sdfData[j * SDF_N + i] + Math.hypot(x - cx, y - cy);
+}
+
+// ---- shared GLSL ----
+const GLSL_COMMON = /* glsl */`
+precision highp sampler3D;
+uniform sampler3D uNoise;
+uniform sampler2D uSdf;
+uniform float uB;
+uniform mat4 uInvVP;
+uniform vec3 uCam;
+uniform vec3 uC0, uC1, uC2, uC3, uC4;
+varying vec2 vUv;
+float sdf(vec2 p) {
+  vec2 c = clamp(p, -uB, uB);
+  return texture2D(uSdf, (c + uB) / (2.0 * uB)).r + length(p - c);
+}
+vec3 pal(float f) {
+  f = clamp(f, 0.0, 1.0) * 4.0;
+  if (f < 1.0) return mix(uC0, uC1, f);
+  if (f < 2.0) return mix(uC1, uC2, f - 1.0);
+  if (f < 3.0) return mix(uC2, uC3, f - 2.0);
+  return mix(uC3, uC4, f - 3.0);
+}
+vec3 rayDir(vec2 uv) {
+  vec4 w = uInvVP * vec4(uv * 2.0 - 1.0, 1.0, 1.0);
+  return normalize(w.xyz / w.w - uCam);
+}`;
+const QUAD_VERT = /* glsl */`varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`;
+
+const shared = {
+  uNoise: { value: noiseTex }, uSdf: { value: sdfTex }, uB: { value: SDF_B },
+  uInvVP: { value: new THREE.Matrix4() }, uCam: { value: new THREE.Vector3() },
+  uC0: { value: new THREE.Color() }, uC1: { value: new THREE.Color() }, uC2: { value: new THREE.Color() },
+  uC3: { value: new THREE.Color() }, uC4: { value: new THREE.Color() },
+  uTime: { value: 0 }, uR: { value: 0 }, uA: { value: 1 }
+};
+
+// ---- pass 1: raymarched nebula into a reduced-resolution target ----
+const rtOpts = { type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false };
+const nebRT = new THREE.WebGLRenderTarget(4, 4, rtOpts);
+// Temporal accumulation: each frame marches with a fresh jitter and blends into a short history,
+// so the march noise averages out instead of reading as grain. History resets on fast changes.
+const hist = [new THREE.WebGLRenderTarget(4, 4, rtOpts), new THREE.WebGLRenderTarget(4, 4, rtOpts)];
+let histI = 0, histReset = true;
+const accMat = new THREE.ShaderMaterial({
+  uniforms: { uCur: { value: nebRT.texture }, uPrev: { value: hist[1].texture }, uK: { value: 1 },
+    uInvVP: { value: new THREE.Matrix4() }, uPrevVP: { value: new THREE.Matrix4() }, uCam: { value: new THREE.Vector3() }, uTarget: { value: new THREE.Vector3() } },
+  vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`,
+  // reproject: find where this pixel's ray crosses the plane through the orbit target, look that
+  // point up in last frame's view, and clamp the history to this frame's neighbourhood
+  fragmentShader: `uniform sampler2D uCur, uPrev; uniform float uK; uniform mat4 uInvVP, uPrevVP; uniform vec3 uCam, uTarget; varying vec2 vUv;
+    void main() {
+      vec4 w = uInvVP * vec4(vUv * 2.0 - 1.0, 1.0, 1.0);
+      vec3 rd = normalize(w.xyz / w.w - uCam), fwd = normalize(uTarget - uCam);
+      vec3 P = uCam + rd * dot(uTarget - uCam, fwd) / max(dot(rd, fwd), 1e-3);
+      vec4 c = uPrevVP * vec4(P, 1.0);
+      vec2 puv = c.xy / c.w * 0.5 + 0.5;
+      vec2 tx = 1.0 / vec2(textureSize(uCur, 0));
+      vec4 cur = texture2D(uCur, vUv);
+      vec4 a = texture2D(uCur, vUv + vec2(tx.x, 0.0)), b = texture2D(uCur, vUv - vec2(tx.x, 0.0));
+      vec4 d = texture2D(uCur, vUv + vec2(0.0, tx.y)), e = texture2D(uCur, vUv - vec2(0.0, tx.y));
+      vec4 lo = min(cur, min(min(a, b), min(d, e))), hi = max(cur, max(max(a, b), max(d, e)));
+      vec4 prev = clamp(texture2D(uPrev, puv), lo - (hi - lo) * 0.5, hi + (hi - lo) * 0.5);
+      bool ok = c.w > 0.0 && all(greaterThan(puv, vec2(0.0))) && all(lessThan(puv, vec2(1.0)));
+      gl_FragColor = mix(prev, cur, ok ? uK : 1.0);
+    }`
+});
+const accScene = new THREE.Scene();
+const accQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), accMat);
+accQuad.frustumCulled = false;
+accScene.add(accQuad);
+const nebMat = new THREE.ShaderMaterial({
+  uniforms: { ...shared, uDensity: { value: 1 }, uWarp: { value: 1 }, uHeat: { value: 0 }, uZF: { value: 0 }, uZB: { value: ZB }, uBoost: { value: 1 }, uOct: { value: 5 }, uSteps: { value: 44 }, uSeed: { value: 0 },
+    uCloudW: { value: 1 }, uShellW: { value: 0 }, uRsh: { value: 0 }, uLobe: { value: new THREE.Vector3(0.25, -0.9, 0.35).normalize() } },
+  vertexShader: QUAD_VERT,
+  fragmentShader: /* glsl */`
+${GLSL_COMMON}
+uniform float uTime, uR, uA, uDensity, uWarp, uHeat, uZF, uZB, uBoost;
+uniform float uCloudW, uShellW, uRsh;
+uniform vec3 uLobe;
+uniform int uOct, uSteps;
+uniform float uSeed;
+const mat3 ROT = mat3(0.00, 0.80, 0.60, -0.80, 0.36, -0.48, -0.60, -0.48, 0.64);
+// fractional Brownian motion: each octave doubles the frequency and shrinks the amplitude.
+// The broad octaves live in comoving space and stretch with a; the fine ones live in
+// physical space, so small-scale structure keeps re-forming instead of blurring out.
+float fbm(vec3 pc, vec3 pp) {
+  float s = 0.0, a = 0.5, n = 0.0;
+  for (int i = 0; i < 6; i++) {
+    if (i >= uOct - 1) break;
+    s += a * (texture(uNoise, i < 1 ? pc : pp).r - 0.5);
+    n += a; pc = ROT * pc * 2.03; pp = ROT * pp * 2.03; a *= 0.58;
+  }
+  return n > 0.0 ? s / n : 0.0;
+}
+// turbulent cloud: emission (rgb) and extinction (a) at p
+vec4 cloud(vec3 p) {
+  vec3 drift = vec3(0.013 * uTime, 0.0, 0.006 * uTime);
+  vec3 q = p / uA * 0.06 + drift;                 // comoving: dividing by a stretches every feature at once
+  vec3 w = texture(uNoise, q * 0.55 + vec3(0.37, 0.11, 0.004 * uTime)).gba - 0.5;
+  q += w * uWarp * 0.09;
+  vec3 qp = q + (p - p / uA) * 0.06;            // the same point in physical space (equals q at rest)
+  float region = texture(uNoise, q * 0.35 + vec3(0.7)).a - 0.5;
+  float n0 = texture(uNoise, q).r - 0.5;
+  float n = uOct > 1 ? n0 * 0.58 + fbm(ROT * q * 2.03, ROT * qp * 2.03) * 0.42 : n0 * 0.8;
+  float env = smoothstep(uZB, uZB + 5.0, p.z) * (1.0 - smoothstep(uZF - 0.8, uZF, p.z));
+  env *= smoothstep(0.44, 0.58, texture(uNoise, q * 0.3 + vec3(0.13, 0.71, 0.37)).r + n * 0.25);
+  float d = smoothstep(0.09, 0.3, n);
+  float fe = (n - 0.1) / 0.035;
+  float fil = exp(-fe * fe);                      // ionization fronts
+  d = (d * d * (3.0 - 2.0 * d) + fil * 0.55) * env;
+  float dn = texture(uNoise, ROT * qp * 2.4 + vec3(0.5)).g + 0.5 * texture(uNoise, ROT * ROT * qp * 5.1 + vec3(0.2)).b - 0.75;
+  float lane = dn / 0.03;
+  float dust = (exp(-lane * lane) * 0.7 + smoothstep(0.24, 0.4, dn + n * 0.3) * 0.6) * env;
+  float sp = smoothstep(-0.06, 0.06, region + 0.07 + (texture(uNoise, q * 1.3).a - 0.5) * 0.25);
+  float f = mix(0.32, 0.8, sp) - smoothstep(0.22, 0.36, n) * mix(0.3, 0.7, sp) - uHeat;
+  vec3 c = pal(f) * (1.0 + fil * 0.8);
+  return vec4(c * d * (0.08 + 2.2 * d), d * 1.0 + dust * 2.4);
+}
+float shellTh() { return 0.016 * uRsh + 0.008; }
+float lumpR(vec3 n) {
+  vec3 sw = vec3(0.0013, 0.0007, 0.001) * uTime;
+  float lump = texture(uNoise, n * 0.09 + vec3(0.3, 0.1, 0.6) + sw).r - 0.5;
+  float lobe = pow(max(0.0, dot(n, uLobe)), 5.0);                  // a blowout, like the Loop's southern break
+  return uRsh * (1.0 + 0.34 * lump + 0.3 * lobe);
+}
+// how far p is from the band the shell can occupy (negative inside it), for skipping empty space
+float shellGap(vec3 p) {
+  float r = length(p);
+  return abs(r - lumpR(p / max(r, 1e-3))) - uRsh * 0.12 - 3.0 * shellTh();
+}
+// supernova-remnant shell: a thin, wrinkled, lumpy sphere. A wrinkled sheet seen edge-on at the
+// limb stacks into bright braided filaments; seen face-on it is faint and wispy.
+vec4 shell(vec3 p) {
+  float r = length(p);
+  vec3 n = p / max(r, 1e-3);
+  vec3 sw = vec3(0.0013, 0.0007, 0.001) * uTime;
+  float rr = lumpR(n);
+  float wr = texture(uNoise, n * 0.45 + vec3(0.7) + sw).g - 0.5;
+  float wr2 = texture(uNoise, n * 1.15 + vec3(1.3, 0.2, 0.5) - sw).b - 0.5;
+  rr += uRsh * (0.09 * wr + 0.04 * wr2);                          // wrinkles in the sheet
+  float th = shellTh();
+  float s = (r - rr) / th;
+  float cover = smoothstep(0.42, 0.64, texture(uNoise, n * 0.2 + vec3(0.9, 0.4, 0.1) + sw).a + 0.3 * wr);
+  float rn = texture(uNoise, n * 0.6 + vec3(0.2, 0.8, 0.4) + sw * 2.0).r + 0.5 * texture(uNoise, ROT * n * 1.4 + vec3(0.6, 0.1, 0.9)).r - 0.75;
+  float ridge = 1.0 - min(1.0, abs(rn) * 3.0);   // ropes where the noise crosses zero
+  float r2 = ridge * ridge;
+  float fil = cover * (0.1 + 0.9 * r2 * r2);
+  // OIII sits just outside the shock front, H-alpha and SII just inside it
+  float so = s - 0.8, si = s + 0.8;
+  // and the two gases also favour different patches of the sky, so face-on they do not blend to grey
+  float side = smoothstep(-0.08, 0.08, texture(uNoise, n * 0.32 + vec3(0.5, 0.9, 0.2) + sw).g - 0.5);
+  float cool = exp(-so * so) * fil * (0.2 + 0.8 * side), warm = exp(-si * si) * fil * (1.0 - 0.8 * side);
+  float inner = 0.035 * smoothstep(0.55, 0.75, texture(uNoise, p * 0.07 + vec3(0.5)).r) * (1.0 - smoothstep(rr * 0.85, rr, r));
+  vec3 e = (pal(0.8 - uHeat) * cool * 1.3 + pal(0.3 - uHeat) * (warm + inner)) * 2.8;
+  return vec4(e, (cool + warm) * 0.12);
+}
+vec2 slab(vec3 ro, vec3 rd) {
+  if (abs(rd.z) < 1e-4) return (ro.z > uZB && ro.z < uZF) ? vec2(0.0, 40.0) : vec2(1.0, 0.0);
+  float ta = (uZB - ro.z) / rd.z, tb = (uZF - ro.z) / rd.z;
+  float t0 = max(0.0, min(ta, tb));
+  return vec2(t0, min(max(ta, tb), t0 + 40.0));
+}
+vec2 sphere(vec3 ro, vec3 rd, float R) {
+  float b = dot(ro, rd), c = dot(ro, ro) - R * R, h = b * b - c;
+  if (h < 0.0) return vec2(1.0, 0.0);
+  h = sqrt(h);
+  return vec2(max(0.0, -b - h), -b + h);
+}
+void main() {
+  vec3 ro = uCam, rd = rayDir(vUv);
+  // the mark is a window at z = 0: skip rays that cannot see through it yet
+  float th = -ro.z / rd.z;
+  if (uR < 30.0 && th > 0.0 && sdf(ro.xy + rd.xy * th) - uR > 0.3 + uR * 0.4) { gl_FragColor = vec4(0.0); return; }
+  vec2 iv = vec2(1e9, -1e9);
+  if (uCloudW > 0.01) { vec2 c = slab(ro, rd); if (c.y > c.x) iv = vec2(min(iv.x, c.x), max(iv.y, c.y)); }
+  if (uShellW > 0.01) { vec2 c = sphere(ro, rd, uRsh * 1.62 + 0.1); if (c.y > c.x) iv = vec2(min(iv.x, c.x), max(iv.y, c.y)); }
+  if (iv.y <= iv.x) { gl_FragColor = vec4(0.0); return; }
+  float jit = fract(sin(dot(gl_FragCoord.xy + uSeed, vec2(12.9898, 78.233))) * 43758.5453);
+  vec3 acc = vec3(0.0); float T = 1.0;
+  if (uCloudW <= 0.01) {
+    // shell only: leap through empty space, take fine steps inside the thin band
+    float fine = shellTh() * 20.0 / float(uSteps);
+    float t = iv.x + fine * jit;
+    for (int i = 0; i < 220; i++) {
+      if (t > iv.y || T < 0.02) break;
+      vec3 p = ro + rd * t;
+      float g = shellGap(p);
+      if (g > 0.0) { t += max(g * 0.9, fine); continue; }
+      vec4 m = shell(p) * uShellW;
+      acc += T * m.rgb * uDensity * uBoost * fine;
+      T *= exp(-m.a * uDensity * fine);
+      t += fine;
+    }
+    gl_FragColor = vec4(acc, 1.0 - T);
+    return;
+  }
+  int steps = uSteps;
+  float dt = (iv.y - iv.x) / float(steps);
+  float t = iv.x + dt * jit;
+  for (int i = 0; i < 200; i++) {
+    if (i >= steps || T < 0.02) break;
+    vec3 p = ro + rd * t;
+    vec4 m = vec4(0.0);
+    if (uCloudW > 0.01) m += cloud(p) * uCloudW;
+    if (uShellW > 0.01) m += shell(p) * uShellW;
+    acc += T * m.rgb * uDensity * uBoost * dt;
+    T *= exp(-m.a * uDensity * dt);
+    t += dt;
+  }
+  gl_FragColor = vec4(acc, 1.0 - T);
+}`
+});
+const nebScene = new THREE.Scene();
+const nebQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), nebMat);
+nebQuad.frustumCulled = false;
+nebScene.add(nebQuad);
+const nebCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+
+// ---- pass 2: full-res composite of bench grid, window mask, stars, nebula and shockwave ----
+const compMat = new THREE.ShaderMaterial({
+  uniforms: { ...shared, uNeb: { value: hist[0].texture }, uRs: { value: 0 }, uShock: { value: 0 }, uFront: { value: 0 },
+    uStars: { value: 0.35 }, uDpr: { value: 1 }, uCell: { value: 1 }, uBg: { value: new THREE.Color() }, uGrid: { value: new THREE.Color() } },
+  vertexShader: QUAD_VERT,
+  depthTest: false, depthWrite: false,
+  fragmentShader: /* glsl */`
+${GLSL_COMMON}
+uniform sampler2D uNeb;
+uniform float uTime, uR, uA, uRs, uShock, uFront, uStars, uDpr, uCell;
+uniform vec3 uBg, uGrid;
+float hash13(vec3 p) { p = fract(p * 0.1031); p += dot(p, p.zyx + 31.32); return fract((p.x + p.y) * p.z); }
+// stars live on the sky (by direction) so they work from every orbit angle; dividing by a spreads them
+vec3 stars(vec3 rd) {
+  vec3 s = vec3(0.0);
+  for (int k = 0; k < 2; k++) {
+    float fk = float(k);
+    vec3 g = rd * (150.0 + fk * 110.0) / uA;
+    vec3 id = floor(g);
+    float px = max(length(fwidth(g)) * 0.7, 1e-5);
+    float h = hash13(id + fk * 31.7);
+    vec3 sp = id + 0.2 + 0.6 * vec3(hash13(id + 7.1), hash13(id + 2.9), hash13(id + 5.3));
+    vec3 v = g - sp; v -= rd * dot(v, rd);
+    float size = (0.55 + 1.2 * pow(hash13(id + 3.3), 4.0)) * uDpr;
+    float dpx = length(v) / px;
+    float b = exp(-dpx * dpx / (size * size)) * (0.5 + 2.5 * pow(hash13(id + 9.0), 6.0)) / (1.0 + fk * 0.5);
+    b *= 0.85 + 0.15 * sin(uTime * 2.0 + h * 60.0);
+    s += mix(vec3(1.0), pal(hash13(id + 5.0) * 0.7), 0.5) * b * step(h, uStars * 0.35);
+  }
+  return s;
+}
+void main() {
+  vec3 ro = uCam, rd = rayDir(vUv);
+  float th = -ro.z / rd.z;
+  vec2 h = ro.xy + rd.xy * max(th, 0.0);
+  float sd = th > 0.0 ? sdf(h) : 1e4;
+  float disp = (texture(uNoise, vec3(h * 0.035, 0.31 + uTime * 0.002)).r - 0.5) * uR * 0.7;
+  float e = sd - uR - disp;
+  float aa = fwidth(sd) * 0.75 + uR * 0.04;
+  float W = (uR > 30.0 || (th <= 0.0 && uR > 0.5)) ? 1.0 : 1.0 - smoothstep(-aa, aa, e);
+  vec4 neb = texture2D(uNeb, vUv);
+  // light unsharp mask on the upscaled nebula target
+  vec2 tx = 1.0 / vec2(textureSize(uNeb, 0));
+  vec4 blur = 0.25 * (texture2D(uNeb, vUv + vec2(tx.x, 0.0)) + texture2D(uNeb, vUv - vec2(tx.x, 0.0)) + texture2D(uNeb, vUv + vec2(0.0, tx.y)) + texture2D(uNeb, vUv - vec2(0.0, tx.y)));
+  neb = max(vec4(0.0), neb + (neb - blur) * 0.35);
+  float fr = e / (0.25 + uR * 0.12);
+  float front = exp(-fr * fr) * uFront;
+  vec3 inside = stars(rd) * (1.0 - neb.a * 0.92) + neb.rgb * (1.0 + front * 2.5);
+  inside = inside * (1.0 + inside / 4.0) / (1.0 + inside);
+  // grade: deeper blacks, more saturation, like an OLED demo reel
+  inside = max(vec3(0.0), mix(vec3(dot(inside, vec3(0.2126, 0.7152, 0.0722))), inside, 1.3));
+  inside = mix(inside, inside * inside * (2.2 - inside) / 1.2, 0.7);
+  // bench grid: one cell is 16 css px on the z = 0 plane, lines through the square center
+  vec2 u = h / uCell * 16.0;
+  vec2 fc = mod(u, 16.0), fw = fwidth(u);
+  vec2 cv = 1.0 - smoothstep(1.0 - fw * 0.5, 1.0 + fw * 0.5, fc);
+  vec3 bench = mix(uBg, uGrid, max(cv.x, cv.y));
+  float re = (sd - uRs) / (0.06 + uRs * 0.045);
+  float ring = exp(-re * re) * uShock;
+  vec3 col = mix(bench, inside, W) + mix(vec3(1.0), pal(0.2), 0.45) * ring * 1.4;
+  gl_FragColor = vec4(col, 1.0);
+}`
+});
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(FOV, 1, 0.1, 400);
+const compQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), compMat);
+compQuad.frustumCulled = false; compQuad.renderOrder = -10;
+scene.add(compQuad);
+
+// ---- the three chevrons: extruded glass shells with lit rims, front face at z = 0 ----
+const shellMat = new THREE.ShaderMaterial({
+  uniforms: { uColor: { value: new THREE.Color() }, uGlow: { value: 0 } },
+  transparent: true, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
+  vertexShader: /* glsl */`varying vec3 vN, vV;
+    void main() { vec4 mv = modelViewMatrix * vec4(position, 1.0); vN = normalize(normalMatrix * normal); vV = -mv.xyz; gl_Position = projectionMatrix * mv; }`,
+  fragmentShader: /* glsl */`uniform vec3 uColor; uniform float uGlow; varying vec3 vN, vV;
+    void main() { float r = 1.0 - abs(dot(normalize(vN), normalize(vV))); gl_FragColor = vec4(uColor * (0.025 + pow(r, 3.0) * 0.3 + uGlow), 1.0); }`
+});
+// Screen-space fat lines keep real pixel widths and smooth edges under MSAA.
+const lineMat = (o) => new LineMaterial({ color: 0xffffff, linewidth: 1.25, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, alphaToCoverage: true, ...o });
+const edgeMat = lineMat({ opacity: 0.42 });
+const GHOSTS = 7;
+const ghostMats = Array.from({ length: GHOSTS }, (_, j) => lineMat({ opacity: 0.34 * (1 - j / GHOSTS), linewidth: 1 }));
+const rng = mulberry32(2026);
+const pieces = logoShapes(THREE).map(shape => {
+  const geo = new THREE.ExtrudeGeometry(shape, { depth: LOGO_DEPTH, bevelEnabled: false, curveSegments: 10 });
+  geo.scale(LOGO_W, LOGO_W, LOGO_W);
+  geo.translate(0, 0, -DEPTH);
+  geo.computeBoundingBox();
+  const c = geo.boundingBox.getCenter(new THREE.Vector3());
+  geo.translate(-c.x, -c.y, -c.z);
+  const edges = new LineSegmentsGeometry().fromEdgesGeometry(new THREE.EdgesGeometry(geo, 30));
+  const group = new THREE.Group();
+  group.add(new THREE.Mesh(geo, shellMat), new LineSegments2(edges, edgeMat));
+  scene.add(group);
+  const ghosts = ghostMats.map(m => { const g = new LineSegments2(edges, m); g.visible = false; scene.add(g); return g; });
+  const dir = new THREE.Vector2(c.x, c.y);
+  if (dir.length() < 0.3) dir.set(rng() - 0.5, rng() - 0.5);
+  dir.normalize();
+  const sp = 1.6 + rng() * 1.8;
+  return {
+    group, ghosts, c,
+    v: new THREE.Vector3(dir.x * sp, dir.y * sp + 0.4, 5 + rng() * 3),
+    axis: new THREE.Vector3(rng() - 0.5, rng() - 0.5, rng() - 0.5).normalize(),
+    w: 2.2 + rng() * 3.5
+  };
+});
+const _q = new THREE.Quaternion();
+function pose(obj, pc, tau, force, jitter) {
+  if (tau <= 0) {
+    obj.position.copy(pc.c);
+    obj.position.x += jitter * Math.sin(pc.w * 97 + S * 61);
+    obj.position.y += jitter * Math.sin(pc.w * 53 + S * 73);
+    obj.quaternion.identity();
+    return;
+  }
+  obj.position.set(
+    pc.c.x + pc.v.x * force * tau,
+    pc.c.y + pc.v.y * force * tau,
+    pc.c.z + pc.v.z * force * tau + 2.5 * force * tau * tau
+  );
+  obj.quaternion.setFromAxisAngle(pc.axis, pc.w * force * tau + 0.6 * force * tau * tau);
+}
+
+// ---- sparks: streaks thrown off the mark's outline ----
+const SPARKS = 700;
+const sparks = Array.from({ length: SPARKS }, () => {
+  const poly = POLYS[Math.floor(rng() * POLYS.length)];
+  const i = Math.floor(rng() * poly.length), [ax, ay] = poly[i], [bx, by] = poly[(i + 1) % poly.length], f = rng();
+  const p = new THREE.Vector3(ax + (bx - ax) * f, ay + (by - ay) * f, -rng() * DEPTH);
+  const d = new THREE.Vector3(p.x * 0.3 + (rng() - 0.5) * 0.9, p.y * 0.3 + (rng() - 0.5) * 0.9, 0.15 + rng() * 1.1).normalize();
+  return { p, d, speed: 3 + rng() ** 2 * 16, life: 1.2 + rng() * 2.8, hue: rng() };
+});
+const sparkGeo = new LineSegmentsGeometry();
+sparkGeo.setPositions(new Float32Array(SPARKS * 6));
+sparkGeo.setColors(new Float32Array(SPARKS * 6));
+const sparkPos = sparkGeo.attributes.instanceStart.data, sparkCol = sparkGeo.attributes.instanceColorStart.data;
+const sparkMat = lineMat({ vertexColors: true, linewidth: 1.6 });
+const sparkLines = new LineSegments2(sparkGeo, sparkMat);
+sparkLines.frustumCulled = false;
+scene.add(sparkLines);
+
+// ---- flash: a white screen over everything ----
+const flashQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMaterial({
+  uniforms: { uF: { value: 0 } }, transparent: true, depthTest: false, depthWrite: false, blending: THREE.AdditiveBlending,
+  vertexShader: QUAD_VERT,
+  fragmentShader: `uniform float uF; varying vec2 vUv; void main() { gl_FragColor = vec4(vec3(uF), 1.0); }`
+}));
+flashQuad.frustumCulled = false; flashQuad.renderOrder = 100;
+scene.add(flashQuad);
+
+// Post-processing renders off screen, so antialiasing lives on its render target (MSAA samples).
+const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 }));
+composer.addPass(new RenderPass(scene, camera));
+const bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.6, 0.45, 0.85);
+composer.addPass(bloom);
+composer.addPass(new OutputPass());
+
+// ---- framing: the z = 0 plane's key square lands exactly on lab.square() ----
+let sq = lab.square(), k = SQ / sq.size, D0 = 25;
+function sizeNebula() {
+  const [, scale] = QUALITY[lab.params.quality] || QUALITY.medium;
+  const w = Math.max(2, Math.round(sq.w * scale)), h = Math.max(2, Math.round(sq.h * scale));
+  nebRT.setSize(w, h); hist.forEach(r => r.setSize(w, h));
+  histReset = true;
+}
+function resize(s) {
+  sq = s; k = SQ / s.size;
+  camera.aspect = s.w / s.h;
+  D0 = (s.h * k / 2) / Math.tan(FOV * Math.PI / 360);
+  camera.updateProjectionMatrix();
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  renderer.setPixelRatio(dpr); renderer.setSize(s.w, s.h, false);
+  composer.setPixelRatio(dpr); composer.setSize(s.w, s.h);
+  for (const m of [edgeMat, sparkMat, ...ghostMats]) m.resolution.set(s.w * dpr, s.h * dpr);
+  compMat.uniforms.uDpr.value = dpr;
+  compMat.uniforms.uCell.value = 16 * k;
+  sizeNebula();
+}
+lab.on('resize', resize);
+resize(sq);
+
+function applyPalette(p) {
+  const c = [0, 1, 2, 3, 4].map(i => new THREE.Color(ramp(p, i / 4)));
+  c.forEach((col, i) => shared['uC' + i].value.copy(col));
+  sparkStops = c;
+  compMat.uniforms.uBg.value.set(p.bg);
+  compMat.uniforms.uGrid.value.set(p.grid);
+  const ink = new THREE.Color(p.ink);
+  shellMat.uniforms.uColor.value.copy(ink);
+  edgeMat.color.copy(ink);
+  ghostMats.forEach(m => m.color.copy(ink));
+  renderer.setClearColor(p.bg, 1);
+}
+let sparkStops = [];
+lab.on('palette', applyPalette);
+applyPalette(lab.palette);
+lab.on('change', key => { if (key === 'quality') sizeNebula(); });
+
+// ---- the sequence: everything is a pure function of S, so rewinding is just running S backwards ----
+let mode = 'rest', S = 0, idle = 0, rewRate = 2, churn = 0;
+function bang() { if (mode !== 'play') { mode = 'play'; idle = 0; } }
+function rewind() { if (S > 0) { mode = 'rewind'; rewRate = Math.max(2, S / 1.4); } }
+function resetOrbit() { yaw = dragYaw = dragPitch = 0; }
+
+const ndc = new THREE.Vector2(), ray = new THREE.Raycaster(), plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0), hitP = new THREE.Vector3();
+function onMark(e) {
+  const r = canvas.getBoundingClientRect();
+  ndc.set((e.clientX - r.left) / r.width * 2 - 1, -((e.clientY - r.top) / r.height * 2 - 1));
+  ray.setFromCamera(ndc, camera);
+  return ray.ray.intersectPlane(plane, hitP) && sdfAt(hitP.x, hitP.y) < 0.12;
+}
+// a tap bangs or rewinds; a drag past a few pixels orbits the camera once the orbit has eased in
+let press = null;
+const canOrbit = () => mode === 'play' && orbitW > 0.05;
+canvas.addEventListener('pointerdown', e => {
+  press = { x: e.clientX, y: e.clientY, id: e.pointerId, drag: false };
+  if (canOrbit()) canvas.setPointerCapture(e.pointerId);
+});
+canvas.addEventListener('pointermove', e => {
+  if (press && press.id === e.pointerId) {
+    const dx = e.clientX - press.x, dy = e.clientY - press.y;
+    if (!press.drag && Math.hypot(dx, dy) > 6 && canOrbit()) press.drag = true;
+    if (press.drag) {
+      dragYaw -= dx * 0.008;
+      dragPitch = Math.max(-1.1, Math.min(1.1, dragPitch + dy * 0.006));
+      press.x = e.clientX; press.y = e.clientY;
+    }
+  }
+  canvas.style.cursor = press?.drag ? 'grabbing' : canOrbit() ? 'grab' : mode !== 'rest' || onMark(e) ? 'pointer' : '';
+});
+canvas.addEventListener('pointerup', e => {
+  if (!press || press.id !== e.pointerId) return;
+  const wasDrag = press.drag; press = null;
+  if (wasDrag) return;
+  if (mode === 'rest') { if (onMark(e)) bang(); }
+  else if (mode === 'play') rewind();
+  else bang();
+});
+canvas.addEventListener('pointercancel', () => { press = null; });
+
+const state = { a: 1, R: 0, tau: -SB };
+let yaw = 0, dragYaw = 0, dragPitch = 0, orbitW = 0;
+const orbitTarget = new THREE.Vector3(), camFwd = new THREE.Vector3(0, 0, -1), _v = new THREE.Vector3();
+const ahead = p => _v.subVectors(p, camera.position).dot(camFwd) > 0.5;
+function update(dt) {
+  const P = lab.params, calm = lab.calm;
+  if (mode === 'rest') {
+    idle += dt;
+    if (P.loop && !calm && idle > 5) bang();
+  } else if (mode === 'play') {
+    S += dt * P.time;
+    if (!calm) yaw += dt * P.time * P.orbit * Math.PI / 180 * orbitW;
+    if (P.loop && !calm && S > SB + 16) rewind();
+  } else if (mode === 'rewind') {
+    const S0 = S;
+    S -= dt * rewRate;
+    if (S <= 0) { S = 0; mode = 'rest'; idle = 0; }
+    const k = S0 > 0 ? S / S0 : 0;          // unwind the orbit in step with time
+    yaw *= k; dragYaw *= k; dragPitch *= k;
+  }
+  if (!calm) churn += dt * P.time;
+
+  const tau = S - SB;
+  const build = S > 0 && tau < 0 ? (S / SB) ** 2 : 0;
+  // throbs that speed up as the pressure builds
+  const throb = build * (0.55 + 0.45 * Math.sin(2 * Math.PI * (2.5 * S + 5 * S * S)));
+  let flash = tau < 0 ? (calm ? smooth(-0.6, 0, tau) : smooth(-0.1, 0, tau)) : Math.exp(-tau * (calm ? 1.4 : 4.2));
+  if (S <= 0) flash = 0;
+  flash *= P.flash * (calm ? 0.3 : 1);
+  const t1 = Math.max(0, tau);
+  const Rs = tau > 0 ? P.shock * t1 ** 0.85 : 0;
+  const R = tau > 0 ? Rs * 0.8 : build * 0.05;
+  const a = tau > 0 ? 1 + 1.1 * (1 - Math.exp(-2.4 * t1)) + 0.03 * t1 : 1;
+  const soft = calm ? 0.3 : 1;   // reduced motion: no blinding spike, just a soft fade up
+  const heat = (tau > 0 ? 0.9 * Math.exp(-t1 * 4.5) : throb * 0.35) * (calm ? 0.5 : 1);
+  Object.assign(state, { a, R, tau, Rs, flash });
+
+  // camera: still at rest, a touch of shake at the flash, then an orbit that eases in after it.
+  // Shell: orbit the remnant at the framing distance. Cloud: also dolly slowly into the gas.
+  const isShell = P.style !== 'cloud';
+  const drift = tau > 1 ? 1 - Math.exp(-(tau - 1) / 10) : 0;
+  orbitW = tau > 0 ? smooth(0.5, 3.5, tau) : 0;
+  const shake = calm ? 0 : flash * 0.06 + build * 0.015;
+  const az = orbitW * (calm ? 0.65 : yaw) + dragYaw;                 // calm holds a 3/4 view
+  const el = orbitW * P.tilt * Math.PI / 180 + dragPitch;
+  const zT = isShell ? 0 : 4 * drift;
+  const dist = isShell ? D0 : D0 * (1 - 0.55 * drift) + zT;
+  orbitTarget.set(0, 0, -zT);
+  camera.position.set(
+    orbitTarget.x + dist * Math.sin(az) * Math.cos(el) + shake * Math.sin(S * 91),
+    orbitTarget.y + dist * Math.sin(el) + shake * Math.sin(S * 77 + 1),
+    orbitTarget.z + dist * Math.cos(az) * Math.cos(el)
+  );
+  camera.lookAt(orbitTarget);
+  camera.updateMatrixWorld();
+  camera.getWorldDirection(camFwd);
+  shared.uInvVP.value.multiplyMatrices(camera.matrixWorld, camera.projectionMatrixInverse);
+  shared.uCam.value.copy(camera.position);
+  shared.uTime.value = churn; shared.uR.value = R; shared.uA.value = a;
+
+  const nu = nebMat.uniforms;
+  nu.uDensity.value = P.density;
+  nu.uWarp.value = P.warp;
+  nu.uOct.value = P.octaves;
+  nu.uSteps.value = (QUALITY[P.quality] || QUALITY.medium)[0];
+  nu.uHeat.value = heat;
+  nu.uSeed.value = (nu.uSeed.value + 17.13) % 1000;   // fresh jitter each frame, averaged by the history
+  nu.uBoost.value = 1 + 2.2 * throb + (tau > 0 ? 1.6 * soft * Math.exp(-t1 * (calm ? 1.2 : 4.5)) : 0);
+  nu.uZF.value = tau > 0 ? 0.6 * smooth(0, 3, t1) : 0;
+  nu.uCloudW.value = isShell && tau > 0 ? Math.exp(-t1 * 1.1) : 1;
+  nu.uShellW.value = isShell && tau > 0 ? smooth(0, 0.3, t1) : 0;
+  // the blast wave decelerates as it sweeps up gas, and stays inside the key square
+  const Rsh = 3.2 * (1 - Math.exp(-t1 * P.shock / 14)) + 0.006 * t1;
+  nu.uRsh.value = Rsh;
+  state.Rsh = Rsh; state.isShell = isShell;
+
+  const cu = compMat.uniforms;
+  cu.uRs.value = Rs;
+  cu.uShock.value = tau > 0 ? smooth(0, 0.08, t1) * Math.exp(-t1 * 0.45) * (calm ? 0.4 : 1) * (1 - orbitW) : 0;
+  cu.uFront.value = tau > 0 ? Math.exp(-t1 * 0.35) * soft : 0;
+  cu.uStars.value = P.stars;
+  flashQuad.material.uniforms.uF.value = Math.min(1.2, flash * 0.95);
+  bloom.strength = 0.32 + throb * 0.5 + flash * (calm ? 0.4 : 2.6);
+
+  // pieces and their motion-blur ghosts
+  const jitter = calm ? 0 : build * 0.03;
+  shellMat.uniforms.uGlow.value = throb * 0.18 + (tau > 0 ? 0.25 * soft * soft * Math.exp(-t1 * 3) : 0);
+  for (const pc of pieces) {
+    pose(pc.group, pc, tau, P.force, jitter);
+    pc.group.visible = tau < 2.6 && ahead(pc.group.position);
+    pc.ghosts.forEach((g, j) => {
+      const tj = tau - (j + 1) * 0.016;
+      g.visible = tau > 0 && tau < 2.6 && tj > 0 && !calm;
+      if (g.visible) { pose(g, pc, tj, P.force, 0); g.visible = ahead(g.position); }
+    });
+  }
+
+  // sparks
+  const pos = sparkPos.array, col = sparkCol.array;
+  let n = 0;
+  if (tau > 0) {
+    const reach = tt => (1 - Math.exp(-1.3 * tt)) / 1.3;
+    for (const sp of sparks) {
+      const fade = Math.exp(-t1 / sp.life) * (1 + 3 * Math.exp(-t1 * 6));
+      if (fade < 0.01) continue;
+      const v = sp.speed * P.force;
+      const h1 = reach(t1) * v, h0 = reach(Math.max(0, t1 - 0.07)) * v;
+      pos.set([sp.p.x + sp.d.x * h0, sp.p.y + sp.d.y * h0, sp.p.z + sp.d.z * h0, sp.p.x + sp.d.x * h1, sp.p.y + sp.d.y * h1, sp.p.z + sp.d.z * h1], n * 6);
+      const x = sp.hue * 2, i = Math.min(1, Math.floor(x)), c0 = sparkStops[i], c1 = sparkStops[i + 1], f = x - i;
+      const r = (c0.r + (c1.r - c0.r) * f) * fade, g = (c0.g + (c1.g - c0.g) * f) * fade, b = (c0.b + (c1.b - c0.b) * f) * fade;
+      col.set([r * 0.3, g * 0.3, b * 0.3, r, g, b], n * 6);
+      n++;
+    }
+  }
+  sparkGeo.instanceCount = n;
+  sparkPos.needsUpdate = sparkCol.needsUpdate = true;
+}
+function smooth(e0, e1, x) { const t = Math.max(0, Math.min(1, (x - e0) / (e1 - e0))); return t * t * (3 - 2 * t); }
+
+let lastS = 0;
+const prevVP = new THREE.Matrix4();
+function render() {
+  renderer.setRenderTarget(nebRT);
+  renderer.render(nebScene, nebCam);
+  // no history through the eruption, during rewind, or after a jump in time
+  const fast = histReset || mode === 'rewind' || Math.abs(S - lastS) > 0.25 || (state.tau > -0.2 && state.tau < 1.6);
+  lastS = S; histReset = false;
+  const au = accMat.uniforms;
+  au.uK.value = fast ? 1 : 0.3;
+  au.uInvVP.value.copy(shared.uInvVP.value); au.uCam.value.copy(camera.position); au.uTarget.value.copy(orbitTarget);
+  au.uPrevVP.value.copy(prevVP);
+  prevVP.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+  accMat.uniforms.uPrev.value = hist[histI ^ 1].texture;
+  renderer.setRenderTarget(hist[histI]);
+  renderer.render(accScene, nebCam);
+  compMat.uniforms.uNeb.value = hist[histI].texture;
+  histI ^= 1;
+  renderer.setRenderTarget(null);
+  composer.render();
+}
+
+let hudTick = 0;
+function hud() {
+  const { a, tau, Rs } = state;
+  const T = (1 / a).toFixed(2);
+  if (mode === 'rest') lab.hud(`at rest · scale factor a <b>1.00</b> · ${lab.params.octaves} octaves of fBm · tap the mark`);
+  else if (tau < 0) lab.hud(`t <b>${tau.toFixed(2)} s</b> · pressure building`);
+  else if (state.isShell) {
+    // chord through a shell of radius R and thickness w: grazing 2√(2Rw), face-on 2w, so the rim is √(2R/w) times brighter
+    const w = 2 * (0.016 * state.Rsh + 0.008) * 2.5, limb = Math.sqrt(2 * state.Rsh / w);
+    lab.hud(`${mode === 'rewind' ? 'rewinding · ' : ''}t <b>+${tau.toFixed(2)} s</b> · shell r <b>${state.Rsh.toFixed(2)} u</b> · grazing path ≈ <b>${limb.toFixed(1)}×</b> face-on · scale factor a <b>${a.toFixed(2)}</b>`);
+  } else lab.hud(`${mode === 'rewind' ? 'rewinding · ' : ''}t <b>+${tau.toFixed(2)} s</b> · scale factor a <b>${a.toFixed(2)}</b> · temperature ∝ 1/a <b>${T}</b> · star spacing <b>×${a.toFixed(2)}</b> · shock r <b>${Rs.toFixed(1)} u</b>`);
+}
+
+window.__lab = {
+  renderOnce(t) { if (t !== undefined) churn = t; update(0); render(); hud(); },
+  // seek(seconds since the tap, yawDegrees?) puts the orbit where auto-play would have it, or at yawDegrees
+  seek(seconds, yawDeg) {
+    S = Math.max(0, seconds); mode = S > 0 ? 'play' : 'rest'; idle = 0; resetOrbit();
+    if (yawDeg !== undefined) dragYaw = yawDeg * Math.PI / 180;
+    else if (!lab.calm) { let g = 0; for (let x = 0; x < S - SB; x += 0.01) g += smooth(0.5, 3.5, x) * 0.01; yaw = g * lab.params.orbit * Math.PI / 180; }
+    update(0); render(); hud();
+  },
+  state: () => ({ mode, S, ...state })
+};
+
+lab.loop(dt => {
+  update(dt);
+  render();
+  if (++hudTick % 6 === 0) hud();
+});
+</script>
