@@ -240,7 +240,7 @@ function setLive() {
 // It waits for the toy's first frame. Mice get the lab's own hint, written for a pointer that hovers and clicks.
 function showHint(s) {
   clearTimeout(s.hintTimer);
-  const text = finePointer && s.toy.hint ? stripTags(s.toy.hint).split(' · ').slice(0, 2).join(' · ') : s.hint;
+  const text = finePointer && s.toy.hint ? stripTags(s.toy.hint.split(/<br\s*\/?>/i)[0]) : s.hint;
   if (!s.ready || s.touch === 'none' || !text || touchedToys.has(s.toy.slug)) { s.el.classList.remove('hinting'); return; }
   s.el.querySelector('.toyhint').textContent = text;
   s.el.classList.add('hinting');
