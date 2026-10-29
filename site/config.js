@@ -1,23 +1,22 @@
 // The one place to reorder the feed or fill in the artist card.
 
 // Feed order, by lab file name. Labs missing from this list are appended in lab-number order.
-// Lab-number order for now. Suggestion: open on something instantly fun and quick to load, e.g. 'sand'.
-// (Vessel is fun too, but on a first visit it takes ~8 s to compile before it draws.)
+// Lab-number order for now.
 export const ORDER = ['prism', 'fluid', 'goop', 'knockout', 'bigbang', 'godrays', 'maze', 'pachinko', 'neural', 'sand', 'life', 'splat'];
 
 // Which toy a bare link (no #toy) opens on. null = the first in ORDER.
-// Splat: on an iPhone 15 Pro it draws 0.3 s after its frame loads, at 60 fps. Prism, first in ORDER, froze the
-// whole page for 11 s on a first visit there (its shaders compiling), so it made a poor first impression.
-export const START = 'splat';
+// Vessel, the hero: on an iPhone 15 Pro (first visit, in the feed, over HTTPS) it draws 1.3 s after its frame
+// loads, its worst freeze is 0.23 s and it runs at 60 fps (its shader compiles while a worker bakes its shape).
+export const START = 'fluid';
 
 // Toys too heavy to preload as a frozen neighbour: they mount only once someone stops on them, with the loading
 // spinner and pie over their still. Starting one blocks the page's main thread, which every toy in the feed
 // shares, so a neighbour starting up froze the toy being played with. Measured on an iPhone 15 Pro (?trace),
-// whole-page freezes on start: Vessel 12.5 s (5.7 s again later), Prism 11.4 s (5.7 s), Big Bang 9.9 s (9.8 s),
-// Goop 4.6 s (4.6 s). Every other toy starts in under 0.4 s. Take a toy off once its lab compiles without blocking.
-// PROVISIONAL: those phone numbers came over the LAN dev server (http), where the iPhone ran JS 10-70x slower than
-// over HTTPS (lab-perf's benchmark). Re-measure with ?trace on an HTTPS deploy before trusting this list or START.
-export const NO_PRELOAD = ['fluid', 'prism', 'bigbang', 'goop'];
+// whole-page freezes on start: Prism 11.4 s (5.7 s again later), Big Bang 9.9 s (9.8 s), Goop 4.6 s (4.6 s).
+// Take a toy off once its lab starts without blocking, as Vessel now does (0.23 s, so it preloads).
+// PROVISIONAL: those phone numbers came over the LAN dev server (http), where the iPhone ran with its JIT off (JS
+// ~15x slower than over HTTPS, lab-perf's benchmark). Re-measure with ?trace on an HTTPS deploy before trusting it.
+export const NO_PRELOAD = ['prism', 'bigbang', 'goop'];
 
 // What each toy does with a finger in the feed, until the lab says so itself (window.labFeed, see embed/lab-embed.js).
 // touch: 'tap' | 'hold' | 'drag' gets pointer input in the middle of the screen; 'none' lets a drag anywhere swipe.

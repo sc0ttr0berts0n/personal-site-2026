@@ -2,7 +2,7 @@
 // phone size with the CPU slowed 4x. Only the ratios matter: the feed scales them to the device (feed.js eta()).
 export const LOAD_MS = {
   prism: 1910,
-  fluid: 7860,
+  fluid: 2730,
   goop: 10740,
   knockout: 520,
   bigbang: 2110,
