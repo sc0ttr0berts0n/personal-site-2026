@@ -11,12 +11,12 @@ export const START = 'fluid';
 
 // Toys too heavy to preload as a frozen neighbour: they mount only once someone stops on them, with the loading
 // spinner and pie over their still. Starting one blocks the page's main thread, which every toy in the feed
-// shares, so a neighbour starting up froze the toy being played with. Measured on an iPhone 15 Pro (?trace),
-// whole-page freezes on start: Prism 11.4 s (5.7 s again later), Big Bang 9.9 s (9.8 s), Goop 4.6 s (4.6 s).
-// Take a toy off once its lab starts without blocking, as Vessel now does (0.23 s, so it preloads).
-// PROVISIONAL: those phone numbers came over the LAN dev server (http), where the iPhone ran with its JIT off (JS
-// ~15x slower than over HTTPS, lab-perf's benchmark). Re-measure with ?trace on an HTTPS deploy before trusting it.
-export const NO_PRELOAD = ['prism', 'bigbang', 'goop'];
+// shares, so a neighbour starting up would freeze the toy being played with. Empty for now: on an iPhone 15 Pro
+// over HTTPS every toy draws within 0.7 s of its frame loading (Big Bang 676 ms, Prism 521, Fluid 357, Goop 320)
+// with one hitch of 0.2-0.36 s, which the one-at-a-time, hands-off neighbour loading keeps away from a finger.
+// (The 5-12 s freezes once measured here came over a LAN dev server, plain http, where the iPhone runs JS with
+// its JIT off.) Put a toy here if its start-up ever holds the page for a second or more.
+export const NO_PRELOAD = [];
 
 // What each toy does with a finger in the feed, until the lab says so itself (window.labFeed, see embed/lab-embed.js).
 // touch: 'tap' | 'hold' | 'drag' gets pointer input in the middle of the screen; 'none' lets a drag anywhere swipe.
