@@ -1,0 +1,1124 @@
+<meta charset="utf-8">
+<title>Neural</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@200;300&family=Familjen+Grotesk:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="shared/lab.css">
+<style>
+  /* the network's output fills the key square; the overlay layer above it is see-through to the pointer */
+  .lab-stage { user-select: none; -webkit-user-select: none; }
+  .lab-stage > canvas.nn-out { inset: auto; cursor: crosshair; touch-action: none; image-rendering: auto; }
+  .lab-stage > canvas.nn-ghost { inset: auto; pointer-events: none; opacity: 0; }
+  .lab-stage > canvas.nn-ui { pointer-events: none; }
+</style>
+<script type="module">
+import { createLab } from './shared/lab.js';
+import { logoPath2D, LOGO_FILL } from './shared/logo.js';
+import { ramp, hex } from './shared/palettes.js';
+
+const N = 512;                 // the target image and the training grid are N × N pixels
+const STEPS = 2400;            // gradient steps a full-speed run takes to reach a crisp mark
+const SNAPS = 10;              // filmstrip frames per learning run (plus the random start)
+
+const lab = createLab({
+  number: '09',
+  title: 'Neural',
+  blurb: 'A small neural network learns the mark from scratch, live, in about twenty seconds. It only ever sees one pixel at a time: where it is, and how bright it should be. Scribble on it and watch it forget, then heal.',
+  teaches: 'gradient descent with Adam, Fourier features and spectral bias (coarse before fine), implicit neural representations f(x, y) → rgb, catastrophic interference in a shared network',
+  palettes: ['cmy', 'spectrum', 'synthwave', 'ember', 'reef', 'aurora', 'ultraviolet', 'gold'],
+  defaultPalette: 'ember',
+  params: {
+    hNet:     { type: 'heading', label: 'Network' },
+    width:    { type: 'range', label: 'Neurons per layer', min: 16, max: 64, step: 8, value: 32 },
+    depth:    { type: 'range', label: 'Hidden layers', min: 1, max: 4, step: 1, value: 2 },
+    freqs:    { type: 'range', label: 'Fourier features', min: 8, max: 64, step: 8, value: 32 },
+    sigma:    { type: 'range', label: 'Frequency spread σ', min: 1, max: 12, step: 0.5, value: 5 },
+    chroma:   { type: 'range', label: 'Color at birth', min: 0, max: 8, step: 0.1, value: 8 },
+    hTrain:   { type: 'heading', label: 'Training' },
+    lr:       { type: 'range', label: 'Learning rate', min: -3, max: 3, step: 0.25, value: 0,
+                format: v => (2 ** v).toFixed(2), unit: '×' },
+    seconds:  { type: 'range', label: 'Target time', min: 6, max: 60, step: 1, value: 8, unit: ' s' },
+    anneal:   { type: 'toggle', label: 'Coarse to fine (open frequencies slowly)', value: true },
+    hScrib:   { type: 'heading', label: 'Scribble' },
+    brush:    { type: 'range', label: 'Brush', min: 4, max: 40, step: 1, value: 12, unit: ' px' },
+    damage:   { type: 'range', label: 'Weight damage', min: 0, max: 1, step: 0.05, value: 0.35 },
+    heal:     { type: 'range', label: 'Scribble fades over', min: 1, max: 12, step: 0.5, value: 3.5, unit: ' s' },
+    hold:     { type: 'range', label: 'Hold before auto scribble', min: 2, max: 30, step: 1, value: 6, unit: ' s' },
+    auto:     { type: 'toggle', label: 'Auto scribble when idle', value: true },
+    hView:    { type: 'heading', label: 'View' },
+    showNet:  { type: 'toggle', label: 'Network diagram', value: true },
+    showLoss: { type: 'toggle', label: 'Error curve', value: true },
+    film:     { type: 'toggle', label: 'Filmstrip of past generations', value: true }
+  },
+  actions: [
+    { label: 'Relearn from scratch', primary: true, action: () => relearn() },
+    { label: 'Scribble for me', action: () => autoScribble() }
+  ]
+});
+const P = lab.params;
+
+// =====================================================================================
+// Trainer. Runs in a Web Worker (built from this function's source) so the page keeps
+// its frame rate; falls back to time-sliced work on the page if workers are unavailable.
+// Network: (x, y) → Fourier features [sin, cos](2π B·p) → ReLU layers → 3 sigmoid outputs.
+// Loss: binary cross-entropy per channel (its logit gradient is just y − t), Adam.
+// =====================================================================================
+function trainer(scope, sliceMs) {
+  const N = 512, TAU = Math.PI * 2;
+  let gray = null, edges = null;                    // target luminance, pixels near an edge
+  let net = null, cfg = null, cfgId = 0;
+  const ctl = { lr: 1, T: 20, anneal: true, heal: 3.5, steps: 2400, paused: false };
+  // scribble damage: a temporary colored target painted over the logo, fading back out
+  const dA = new Float32Array(N * N), dRGB = new Float32Array(N * N * 3), dHold = new Float32Array(N * N);
+  const dList = new Int32Array(N * N), dIn = new Uint8Array(N * N);
+  let dCount = 0, lastStroke = -1e9;
+  let mode = 'learn', p = 0, steps = 0, learnT = 0, credit = 0, lossEma = 0.2, msStep = 0, sps = 0, spsN = 0, spsT = 0;
+  let last = performance.now(), beat = 0;
+
+  let seed = 1;
+  const rnd = () => { seed ^= seed << 13; seed >>>= 0; seed ^= seed >>> 17; seed ^= seed << 5; seed >>>= 0; return seed / 4294967296; };
+  const gauss = () => Math.sqrt(-2 * Math.log(rnd() + 1e-12)) * Math.cos(TAU * rnd());
+
+  function build(c) {
+    cfg = c; cfgId = c.id; seed = (c.seed >>> 0) || 1;
+    // random Gaussian frequencies, sorted low to high so the coarse-to-fine window opens in order
+    const fr = [];
+    for (let k = 0; k < c.nf; k++) { const x = gauss() * c.sigma, y = gauss() * c.sigma; fr.push([x, y, Math.hypot(x, y)]); }
+    fr.sort((a, b) => a[2] - b[2]);
+    const sizes = [2 * c.nf, ...Array(c.depth).fill(c.width), 3];
+    const offs = []; let n = 0;
+    for (let l = 0; l < sizes.length - 1; l++) { const a = sizes[l], b = sizes[l + 1]; offs.push({ w: n, b: n + a * b, in: a, out: b, sd: 0 }); n += a * b + b; }
+    const theta = new Float32Array(n);
+    offs.forEach((o, l) => {
+      const lastL = l === offs.length - 1;
+      // He init for the ReLU layers; the output layer is deliberately loud so each channel starts its own color
+      o.sd = lastL ? c.chroma / Math.sqrt(o.in) : Math.sqrt(2 / o.in);
+      for (let i = 0; i < o.in * o.out; i++) theta[o.w + i] = gauss() * o.sd;
+      for (let i = 0; i < o.out; i++) theta[o.b + i] = lastL ? gauss() * c.chroma * 0.45 : 0;
+    });
+    net = { sizes, offs, theta, m: new Float32Array(n), v: new Float32Array(n), g: new Float32Array(n), t: 0,
+      BX: new Float32Array(fr.map(f => f[0])), BY: new Float32Array(fr.map(f => f[1])), mask: new Float32Array(c.nf), nf: c.nf };
+    bufs = null; B = n > 9000 ? 256 : 512;
+    mode = 'learn'; p = 0; steps = 0; learnT = 0; credit = 0; lossEma = 0.2;
+    clearDamage();
+    setMask(0);
+  }
+  function clearDamage() { for (let i = 0; i < dCount; i++) { const k = dList[i]; dA[k] = 0; dIn[k] = 0; } dCount = 0; }
+  // coarse-to-fine: frequency k fades in as the window α passes it (cosine ramp, after BARF)
+  function setMask(pp) {
+    // eased so the early seconds hold only a few broad waves (a blob), then the window opens faster.
+    // At birth every frequency is partly on, so the random network starts as vivid marbled noise,
+    // which then melts into the blob as the window takes over.
+    const nf = net.nf, open = ctl.anneal ? Math.min(1, pp / 0.75) ** 2.2 : 1;
+    const alpha = 0.6 + open * nf, birth = ctl.anneal ? Math.max(0, 1 - pp / 0.14) ** 2 : 0;
+    for (let k = 0; k < nf; k++) {
+      const x = Math.min(1, Math.max(0, alpha - k));
+      net.mask[k] = Math.max((1 - Math.cos(Math.PI * x)) / 2, birth * Math.exp(-1.6 * k / nf));
+    }
+  }
+
+  let bufs = null, B = 512;   // minibatch; big networks take smaller batches so they still get enough steps
+  const U = new Float32Array(512), V = new Float32Array(512), TG = new Float32Array(512 * 3), UNI = new Uint8Array(512);
+  function sample() {
+    const fD = dCount > 0 ? 0.4 : 0, fE = 0.3;
+    for (let i = 0; i < B; i++) {
+      const r = Math.random();
+      let idx;
+      if (r < fD) idx = dList[(Math.random() * dCount) | 0];
+      else if (r < fD + fE) idx = edges[(Math.random() * edges.length) | 0];
+      else idx = (Math.random() * N * N) | 0;
+      UNI[i] = r >= fD + fE ? 1 : 0;
+      const row = (idx / N) | 0, col = idx - row * N;
+      U[i] = (col + Math.random()) / N * 2 - 1; V[i] = (row + Math.random()) / N * 2 - 1;
+      const g = gray[idx], a = dA[idx];
+      if (a > 0) { const o = idx * 3; TG[i * 3] = g + (dRGB[o] - g) * a; TG[i * 3 + 1] = g + (dRGB[o + 1] - g) * a; TG[i * 3 + 2] = g + (dRGB[o + 2] - g) * a; }
+      else TG[i * 3] = TG[i * 3 + 1] = TG[i * 3 + 2] = g;
+    }
+  }
+
+  // one minibatch step; returns the mean squared error on the uniformly drawn samples
+  function step(lr) {
+    sample();
+    const { offs, theta, g, BX, BY, mask, nf, sizes } = net;
+    if (!bufs) bufs = { A: sizes.map(s => new Float32Array(B * s)), D: sizes.map(s => new Float32Array(B * s)) };
+    const { A, D } = bufs, F = 2 * nf, a0 = A[0];
+    for (let i = 0; i < B; i++) {
+      const x = U[i], y = V[i], r = i * F;
+      for (let k = 0; k < nf; k++) {
+        const ph = TAU * (BX[k] * x + BY[k] * y), mk = mask[k];
+        a0[r + 2 * k] = mk * Math.sin(ph); a0[r + 2 * k + 1] = mk * Math.cos(ph);
+      }
+    }
+    const L = offs.length;
+    for (let l = 0; l < L; l++) {
+      const o = offs[l], ai = A[l], ao = A[l + 1], nin = o.in, nout = o.out, out = l === L - 1;
+      for (let i = 0; i < B; i++) {
+        const ri = i * nin, ro = i * nout;
+        for (let j = 0; j < nout; j++) {
+          let z = theta[o.b + j]; const wr = o.w + j * nin;
+          for (let k = 0; k < nin; k++) z += theta[wr + k] * ai[ri + k];
+          ao[ro + j] = out ? 1 / (1 + Math.exp(-z)) : (z > 0 ? z : 0);
+        }
+      }
+    }
+    const y = A[L], dy = D[L], inv = 1 / B;
+    let se = 0, nu = 0;
+    for (let i = 0; i < B; i++) {
+      for (let c = 0; c < 3; c++) { const q = i * 3 + c, e = y[q] - TG[q]; dy[q] = e * inv; if (UNI[i]) se += e * e; }
+      nu += UNI[i];
+    }
+    g.fill(0);
+    for (let l = L - 1; l >= 0; l--) {
+      const o = offs[l], ai = A[l], dz = D[l + 1], da = D[l], nin = o.in, nout = o.out, back = l > 0;
+      if (back) da.fill(0);
+      for (let i = 0; i < B; i++) {
+        const ri = i * nin, ro = i * nout;
+        for (let j = 0; j < nout; j++) {
+          const gz = dz[ro + j];
+          if (gz === 0) continue;              // dead ReLU: nothing flows back
+          g[o.b + j] += gz;
+          const wr = o.w + j * nin;
+          if (back) for (let k = 0; k < nin; k++) { g[wr + k] += gz * ai[ri + k]; da[ri + k] += gz * theta[wr + k]; }
+          else for (let k = 0; k < nin; k++) g[wr + k] += gz * ai[ri + k];
+        }
+      }
+      if (back) for (let i = 0, n = B * nin; i < n; i++) if (ai[i] <= 0) da[i] = 0;
+    }
+    // Adam
+    net.t++;
+    const b1 = 0.9, b2 = 0.99, c1 = 1 / (1 - b1 ** net.t), c2 = 1 / (1 - b2 ** net.t), { m, v } = net;
+    for (let i = 0, n = theta.length; i < n; i++) {
+      const gi = g[i];
+      m[i] = b1 * m[i] + (1 - b1) * gi;
+      v[i] = b2 * v[i] + (1 - b2) * gi * gi;
+      theta[i] -= lr * (m[i] * c1) / (Math.sqrt(v[i] * c2) + 1e-8);
+    }
+    steps++;
+    return nu ? se / (nu * 3) : lossEma;
+  }
+
+  function paint(seg, r, rgb, kick) {
+    const now = performance.now();
+    lastStroke = now;
+    let len = 0;
+    for (let s = 0; s + 3 < seg.length; s += 2) {
+      const x0 = seg[s], y0 = seg[s + 1], x1 = seg[s + 2], y1 = seg[s + 3];
+      const dx = x1 - x0, dy = y1 - y0, l2 = dx * dx + dy * dy || 1e-9;
+      len += Math.sqrt(l2);
+      const xa = Math.max(0, Math.floor(Math.min(x0, x1) - r - 2)), xb = Math.min(N - 1, Math.ceil(Math.max(x0, x1) + r + 2));
+      const ya = Math.max(0, Math.floor(Math.min(y0, y1) - r - 2)), yb = Math.min(N - 1, Math.ceil(Math.max(y0, y1) + r + 2));
+      for (let yy = ya; yy <= yb; yy++) for (let xx = xa; xx <= xb; xx++) {
+        const px = xx + 0.5, py = yy + 0.5;
+        const t = Math.max(0, Math.min(1, ((px - x0) * dx + (py - y0) * dy) / l2));
+        const d = Math.hypot(px - x0 - t * dx, py - y0 - t * dy);
+        const cov = Math.max(0, Math.min(1, (r - d) / 1.5 + 0.5));
+        if (cov <= 0) continue;
+        const k = yy * N + xx, o = k * 3;
+        // no ink color given: paint the inverse of the logo
+        const cr = rgb ? rgb[0] : 1 - gray[k], cg = rgb ? rgb[1] : 1 - gray[k], cb = rgb ? rgb[2] : 1 - gray[k];
+        const f = dA[k] > 0 ? cov : 1;
+        dRGB[o] += (cr - dRGB[o]) * f; dRGB[o + 1] += (cg - dRGB[o + 1]) * f; dRGB[o + 2] += (cb - dRGB[o + 2]) * f;
+        dA[k] = Math.max(dA[k], cov); dHold[k] = now;
+        if (!dIn[k]) { dIn[k] = 1; dList[dCount++] = k; }
+      }
+    }
+    // a shared network has no private memory: shake every hidden weight a little, in proportion to the ink
+    if (kick > 0 && net) {
+      const amt = kick * 0.009 * Math.min(4, len / 24);
+      net.offs.forEach((o, l) => { if (l === net.offs.length - 1) return; for (let i = 0; i < o.in * o.out; i++) net.theta[o.w + i] += gauss() * o.sd * amt; });
+    }
+    if (mode === 'polish' || mode === 'learn' && p >= 1) mode = 'heal';
+  }
+
+  function tick() {
+    const now = performance.now(), dt = Math.min(0.1, (now - last) / 1000); last = now;
+    // the page sends a heartbeat every frame; if frames stop (hidden pane, throttled tab) the run waits for them
+    if (net && gray && !ctl.paused && now - beat < 300) {
+      const base = 0.01 * ctl.lr;
+      // scribbles fade out of the target after a short hold, so the network has to re-learn the logo under them
+      if (dCount) {
+        const k = Math.exp(-dt / (ctl.heal / 3));
+        for (let i = 0; i < dCount; i++) {
+          const q = dList[i];
+          if (now - dHold[q] < 700) continue;
+          dA[q] *= k;
+          if (dA[q] < 0.02) { dA[q] = 0; dIn[q] = 0; dList[i--] = dList[--dCount]; }
+        }
+      }
+      let rate, lr;
+      if (mode === 'learn') {
+        learnT += dt;
+        // pace: steps are released on a schedule, so a fast machine lands on the target time rather than early;
+        // a slow one runs flat out and the schedule follows the clock instead (finishing by 1.25 × T)
+        rate = ctl.steps / ctl.T;
+        credit = Math.max(credit, rate * learnT - steps);
+        lr = base * lrAt(p);
+      } else if (mode === 'heal') {
+        const since = (now - lastStroke) / 1000;
+        rate = 1.3 * ctl.steps / ctl.T;
+        credit += rate * dt;
+        lr = base * (0.1 + 0.45 * Math.exp(-since / (ctl.heal + 1.5)));
+        if (!dCount && since > ctl.heal + 4) mode = 'polish';
+      } else {
+        rate = 20; credit += rate * dt; lr = base * 0.1;
+      }
+      const t0 = performance.now();
+      let n = 0;
+      while (credit >= 1 && performance.now() - t0 < sliceMs) {
+        const e = step(lr);
+        lossEma += (e - lossEma) * 0.08;
+        credit -= 1; n++;
+        if (mode === 'learn') {
+          p = Math.max(p, Math.min(1, Math.max(steps / ctl.steps, learnT / (1.25 * ctl.T))));
+          lr = base * lrAt(p); setMask(p);
+          if (p >= 1) { mode = 'polish'; credit = 0; break; }
+        }
+      }
+      if (mode !== 'learn') credit = Math.min(credit, 2);
+      if (n) msStep += ((performance.now() - t0) / n - msStep) * 0.2;
+      spsN += n; spsT += dt;
+      if (spsT > 0.5) { sps = spsN / spsT; spsN = 0; spsT = 0; }
+    }
+    if (net) post();
+    setTimeout(tick, sliceMs > 10 ? 1 : 8);
+  }
+  // learning-rate schedule over a run: a gentle warm-up (the random colors linger), flat, then a cosine glide to 10% so the edges settle crisp
+  function lrAt(pp) { return pp < 0.2 ? 0.15 + 0.85 * pp / 0.2 : pp < 0.55 ? 1 : 0.1 + 0.9 * (1 + Math.cos(Math.PI * Math.min(1, (pp - 0.55) / 0.45))) / 2; }
+
+  function post() {
+    const theta = net.theta.slice(), mask = net.mask.slice();
+    scope.post({ type: 'state', cfgId, theta, mask, BX: net.BX, BY: net.BY, shape: { nf: net.nf, width: cfg.width, depth: cfg.depth },
+      steps, p, mode, loss: lossEma, dmg: dCount, ms: msStep, sps }, [theta.buffer, mask.buffer]);
+  }
+
+  scope.onmessage = d => {
+    if (d.type === 'target') { gray = d.gray; edges = d.edges; }
+    else if (d.type === 'build') build(d.cfg);
+    else if (d.type === 'ctl') Object.assign(ctl, d.ctl);
+    else if (d.type === 'stroke') paint(d.seg, d.r, d.rgb, d.kick);
+    else if (d.type === 'beat') beat = performance.now();
+    else if (d.type === 'force' && net) { for (let i = 0; i < d.n; i++) { lossEma += (step(0.01 * ctl.lr * lrAt(p)) - lossEma) * 0.08; } post(); }
+  };
+  tick();
+}
+
+// ---- start the trainer: a worker from this function's source, or the page itself ----
+let worker = null, send;
+const onState = msg => receive(msg);
+try {
+  const src = `const trainer = ${trainer.toString()};
+    trainer({ post: (m, t) => postMessage(m, t), set onmessage(f) { self.onmessage = e => f(e.data); } }, 14);`;
+  worker = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
+  worker.onmessage = e => onState(e.data);
+  send = (m, t) => worker.postMessage(m, t || []);
+} catch (e) {
+  worker = null;
+}
+if (!worker) {
+  // same code, sliced into ~6 ms pieces on the page so frames still get drawn
+  let handler = null;
+  trainer({ post: m => onState(m), set onmessage(f) { handler = f; } }, 6);
+  send = m => handler(m);
+}
+
+// =====================================================================================
+// Target: the mark exactly as designed, white on black, rasterized at N × N in the key square
+// =====================================================================================
+const target = (() => {
+  const c = document.createElement('canvas'); c.width = c.height = N;
+  const x = c.getContext('2d', { willReadFrequently: true });
+  x.fillStyle = '#000'; x.fillRect(0, 0, N, N);
+  x.translate(N / 2, N / 2); x.scale(N * LOGO_FILL, N * LOGO_FILL);
+  x.fillStyle = '#fff'; x.fill(logoPath2D());
+  const px = x.getImageData(0, 0, N, N).data, gray = new Float32Array(N * N);
+  for (let i = 0; i < N * N; i++) gray[i] = px[i * 4] / 255;
+  // pixels within 2 px of an edge get extra samples: that is where the detail is
+  const e = [];
+  for (let r = 2; r < N - 2; r++) for (let q = 2; q < N - 2; q++) {
+    let lo = 1, hi = 0;
+    for (let dr = -2; dr <= 2; dr += 2) for (let dq = -2; dq <= 2; dq += 2) { const v = gray[(r + dr) * N + q + dq]; if (v < lo) lo = v; if (v > hi) hi = v; }
+    if (hi - lo > 0.5) e.push(r * N + q);
+  }
+  return { gray, edges: Int32Array.from(e) };
+})();
+send({ type: 'target', gray: target.gray, edges: target.edges });
+
+// =====================================================================================
+// Composition: one square. The network's output fills it, and the readouts are glyph overlays
+// in the mark's empty corners: diagram top right, error curve bottom left, filmstrip along the
+// bottom. Every overlay is masked by the mark grown by a margin, so nothing ever touches it.
+// =====================================================================================
+const stage = lab.stage;
+const ui = lab.canvas({ className: 'nn-ui' });
+const ctx = ui.ctx, uiCanvas = ui.canvas;
+const glCanvas = document.createElement('canvas'); glCanvas.className = 'nn-out';
+const ghost = document.createElement('canvas'); ghost.className = 'nn-ghost';
+stage.insertBefore(glCanvas, uiCanvas); stage.insertBefore(ghost, uiCanvas);
+const squareEl = document.querySelector('.lab-square');
+// overlays are drawn here first, then the keep-out is cut from them, then they land on the 2D layer
+const overCanvas = document.createElement('canvas'), octx = overCanvas.getContext('2d');
+const maskCanvas = document.createElement('canvas'), mctx = maskCanvas.getContext('2d');
+
+const KEEP = 0.04;       // hard keep-out around the mark, as a fraction of the square
+const FEATHER = 0.03;    // overlays fade to nothing across this band before the keep-out
+
+// The mark grown by the margin, in a square of `size` px at (ox, oy). With feather, a soft ramp outside it.
+function paintKeepOut(x, ox, oy, size, feather) {
+  const path = logoPath2D(), k = size * LOGO_FILL;
+  x.save();
+  x.translate(ox + size / 2, oy + size / 2); x.scale(k, k);
+  x.fillStyle = x.strokeStyle = '#000'; x.lineJoin = 'round'; x.lineCap = 'round';
+  if (feather) {
+    const n = 12;
+    x.globalAlpha = 0.15;    // stacked passes: a soft ramp that is ~86% cut by the time it reaches the hard edge
+    for (let i = 0; i < n; i++) { x.lineWidth = 2 * (KEEP + FEATHER * (1 - i / n)) / LOGO_FILL; x.stroke(path); }
+  }
+  x.globalAlpha = 1;
+  x.lineWidth = 2 * KEEP / LOGO_FILL; x.stroke(path); x.fill(path);
+  x.restore();
+}
+// occupancy grid of the keep-out (plus the feather) in square units, for placing overlays
+const GRID = 240;
+const occ = (() => {
+  const c = document.createElement('canvas'); c.width = c.height = GRID;
+  const x = c.getContext('2d', { willReadFrequently: true });
+  paintKeepOut(x, 0, 0, GRID, true);
+  const d = x.getImageData(0, 0, GRID, GRID).data, o = new Uint8Array(GRID * GRID);
+  for (let i = 0; i < o.length; i++) o[i] = d[i * 4 + 3] > 8 ? 1 : 0;
+  return o;
+})();
+function free(u0, v0, u1, v1) {
+  const a = Math.max(0, Math.floor(u0 * GRID)), b = Math.min(GRID - 1, Math.ceil(u1 * GRID));
+  const c = Math.max(0, Math.floor(v0 * GRID)), d = Math.min(GRID - 1, Math.ceil(v1 * GRID));
+  for (let y = c; y <= d; y++) for (let x = a; x <= b; x++) if (occ[y * GRID + x]) return false;
+  return true;
+}
+// widest free span that ends at uR, for a band of rows centered on v
+function spanLeft(v, half, uR, uMin) {
+  let u = uR - 0.02;
+  if (!free(u, v - half, uR, v + half)) return uR;
+  while (u - 1 / GRID > uMin && free(u - 1 / GRID, v - half, u, v + half)) u -= 1 / GRID;
+  return u;
+}
+
+let L = null; // layout, CSS px
+function layout() {
+  const sq = lab.square(), dpr = Math.min(2, devicePixelRatio || 1);
+  const snap = v => Math.round(v * dpr) / dpr;
+  const dev = Math.round(sq.size * dpr), s = dev / dpr;
+  const out = { x: snap(sq.x), y: snap(sq.y), s };
+  const fs = Math.max(9, Math.min(11, Math.round(s * 0.017)));     // overlay font size, never below 9 px
+  const U = (u, v) => [out.x + u * s, out.y + v * s];
+  L = { W: sq.w, H: sq.h, dpr, out, fs, U, net: null, loss: null, strip: null, status: { u: 0.035, v: 0.035 + fs / s } };
+
+  // filmstrip: a single row in the band under the mark
+  let stripTop = 0.97;
+  if (P.film) {
+    let v = 0.7; while (v < 0.95 && !free(0.03, v, 0.97, v + 0.004)) v += 0.004;
+    const th = Math.min(0.1, 0.965 - v - 0.012);
+    stripTop = 0.965 - th;
+    L.strip = { u: 0.035, v: stripTop, w: 0.93, th };
+  }
+  // error curve: as wide as the bottom-left corner allows, above the filmstrip
+  if (P.showLoss) {
+    const bottom = stripTop - Math.max(0.035, (fs + 6) / s), h = Math.min(0.2, Math.max(0.15, 90 / s)), top = bottom - h;
+    let w = 0.12;
+    while (w < 0.42 && free(0.035, top, 0.035 + w + 0.01, bottom)) w += 0.01;
+    L.loss = { u: 0.035, v: top, w, h };
+  }
+  // network diagram: a funnel down the top-right corner
+  if (P.showNet) L.net = { uR: 0.965 };
+  L.netCache = null;
+
+  for (const c of [glCanvas, ghost, squareEl]) Object.assign(c.style, { left: out.x + 'px', top: out.y + 'px', width: s + 'px', height: s + 'px' });
+  const res = Math.min(dev, 1024);
+  if (glCanvas.width !== res) glCanvas.width = glCanvas.height = res;
+  // overlay and mask canvases match the 2D layer exactly
+  overCanvas.width = maskCanvas.width = uiCanvas.width; overCanvas.height = maskCanvas.height = uiCanvas.height;
+  const k = uiCanvas.width / Math.max(1, L.W);
+  mctx.setTransform(1, 0, 0, 1, 0, 0); mctx.clearRect(0, 0, maskCanvas.width, maskCanvas.height);
+  paintKeepOut(mctx, out.x * k, out.y * k, s * k, true);
+  drawUI();
+}
+lab.on('resize', () => layout());
+
+// =====================================================================================
+// WebGL2: the network's forward pass, per pixel, at the canvas's own resolution
+// =====================================================================================
+const gl = glCanvas.getContext('webgl2', { antialias: false, alpha: false, preserveDrawingBuffer: false, powerPreference: 'high-performance' });
+let prog = null, progShape = '', wTex = null, wTexW = 0, wTexH = 0, wData = null, uLoc = {};
+const vsSrc = `#version 300 es
+void main() { vec2 p = vec2(gl_VertexID == 1 ? 3.0 : -1.0, gl_VertexID == 2 ? 3.0 : -1.0); gl_Position = vec4(p, 0.0, 1.0); }`;
+// Weight texture: one row per neuron, its inputs packed four to a texel, the bias in the last column.
+function fsSrc({ nf, width, depth }) {
+  const F4 = nf / 2, W4 = width / 4, TB = Math.max(2 * nf, width) / 4;
+  let s = `#version 300 es
+precision highp float; precision highp int; precision highp sampler2D;
+uniform sampler2D uW; uniform vec3 uFreq[${nf}]; uniform float uRes;
+out vec4 o;
+float relu(float z) { return max(z, 0.0); }
+void main() {
+  vec2 p = vec2(gl_FragCoord.x / uRes * 2.0 - 1.0, 1.0 - gl_FragCoord.y / uRes * 2.0);
+  vec4 f[${F4}];
+  for (int k = 0; k < ${F4}; k++) {
+    vec3 a = uFreq[2 * k], b = uFreq[2 * k + 1];
+    float pa = dot(a.xy, p), pb = dot(b.xy, p);
+    f[k] = vec4(a.z * sin(pa), a.z * cos(pa), b.z * sin(pb), b.z * cos(pb));
+  }
+  vec4 h[${W4}]; vec4 g[${W4}]; float z;
+  for (int j = 0; j < ${W4}; j++) {
+    vec4 r;
+    for (int c = 0; c < 4; c++) {
+      int row = 4 * j + c;
+      z = texelFetch(uW, ivec2(${TB}, row), 0).x;
+      for (int q = 0; q < ${F4}; q++) z += dot(texelFetch(uW, ivec2(q, row), 0), f[q]);
+      r[c] = relu(z);
+    }
+    h[j] = r;
+  }
+`;
+  for (let l = 1; l < depth; l++) {
+    const base = width * l;
+    s += `  for (int j = 0; j < ${W4}; j++) {
+    vec4 r;
+    for (int c = 0; c < 4; c++) {
+      int row = ${base} + 4 * j + c;
+      z = texelFetch(uW, ivec2(${TB}, row), 0).x;
+      for (int q = 0; q < ${W4}; q++) z += dot(texelFetch(uW, ivec2(q, row), 0), h[q]);
+      r[c] = relu(z);
+    }
+    g[j] = r;
+  }
+  for (int j = 0; j < ${W4}; j++) h[j] = g[j];
+`;
+  }
+  s += `  vec3 y;
+  for (int c = 0; c < 3; c++) {
+    int row = ${width * depth} + c;
+    z = texelFetch(uW, ivec2(${TB}, row), 0).x;
+    for (int q = 0; q < ${W4}; q++) z += dot(texelFetch(uW, ivec2(q, row), 0), h[q]);
+    y[c] = z;
+  }
+  o = vec4(1.0 / (1.0 + exp(-y)), 1.0);
+}`;
+  return s;
+}
+function compile(shape) {
+  const key = `${shape.nf}/${shape.width}/${shape.depth}`;
+  if (key === progShape) return;
+  const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
+  const p = gl.createProgram();
+  gl.attachShader(p, sh(gl.VERTEX_SHADER, vsSrc)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, fsSrc(shape)));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+  if (prog) gl.deleteProgram(prog);
+  prog = p; progShape = key;
+  uLoc = { W: gl.getUniformLocation(p, 'uW'), F: gl.getUniformLocation(p, 'uFreq'), R: gl.getUniformLocation(p, 'uRes') };
+  wTexW = Math.max(2 * shape.nf, shape.width) / 4 + 1; wTexH = shape.width * shape.depth + 3;
+  wData = new Float32Array(wTexW * wTexH * 4);
+  if (wTex) gl.deleteTexture(wTex);
+  wTex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, wTex);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA32F, wTexW, wTexH);
+}
+const freqU = new Float32Array(64 * 3);
+function drawNet() {
+  if (!S || !prog) return;
+  const { shape, theta } = S, TB = wTexW - 1;
+  // pack: layer rows one after another
+  let row = 0, off = 0;
+  const sizes = [2 * shape.nf, ...Array(shape.depth).fill(shape.width), 3];
+  for (let l = 0; l < sizes.length - 1; l++) {
+    const nin = sizes[l], nout = sizes[l + 1], bOff = off + nin * nout;
+    for (let j = 0; j < nout; j++, row++) {
+      const r = row * wTexW * 4;
+      wData.set(theta.subarray(off + j * nin, off + (j + 1) * nin), r);
+      wData[r + TB * 4] = theta[bOff + j];
+    }
+    off = bOff + nout;
+  }
+  for (let k = 0; k < shape.nf; k++) { freqU[k * 3] = 2 * Math.PI * S.BX[k]; freqU[k * 3 + 1] = 2 * Math.PI * S.BY[k]; freqU[k * 3 + 2] = S.mask[k]; }
+  gl.viewport(0, 0, glCanvas.width, glCanvas.height);
+  gl.useProgram(prog);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, wTex);
+  gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, wTexW, wTexH, gl.RGBA, gl.FLOAT, wData);
+  gl.uniform1i(uLoc.W, 0);
+  gl.uniform3fv(uLoc.F, freqU.subarray(0, shape.nf * 3));
+  gl.uniform1f(uLoc.R, glCanvas.width);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+}
+
+// =====================================================================================
+// State from the trainer, run lifecycle: learn → hold → (scribble) heal → hold …
+// =====================================================================================
+let S = null;                 // latest trainer state
+let cfgId = 0, phase = 'learn', runT = 0, holdT = 0, healT = 0;
+let curve = [], strokesAt = [], snaps = [], nextSnap = 0, pendingSnap = null, healPeak = null;
+let fresh = false;             // a new state arrived since the last draw
+let ghostA = 0;
+const waiters = [];
+
+function netConfig() {
+  return { id: ++cfgId, seed: (Math.random() * 2 ** 32) >>> 0, nf: P.freqs, width: P.width, depth: P.depth, sigma: P.sigma, chroma: P.chroma };
+}
+function sendCtl() { send({ type: 'ctl', ctl: { lr: 2 ** P.lr, T: P.seconds, anneal: P.anneal, heal: P.heal, steps: STEPS, paused } }); }
+function relearn() {
+  // the old picture dissolves over the new random one rather than popping
+  if (S && glCanvas.width) {
+    drawNet();
+    ghost.width = glCanvas.width; ghost.height = glCanvas.height;
+    ghost.getContext('2d').drawImage(glCanvas, 0, 0);
+    ghostA = 1;
+  }
+  S = null;   // the old network's state must not drive the new run's lifecycle
+  phase = 'learn'; runT = 0; holdT = 0; curve = []; strokesAt = []; snaps = []; nextSnap = 0; healPeak = null;
+  stroke = null; synth = null;
+  sendCtl();
+  send({ type: 'build', cfg: netConfig() });
+}
+
+function receive(m) {
+  if (m.type !== 'state' || m.cfgId !== cfgId) return;
+  S = m;
+  compile(m.shape);
+  fresh = true;
+  while (waiters.length) waiters.shift()(publicState());
+}
+
+// Settings: architecture changes start a fresh network (debounced while a slider is dragged)
+let rebuildTimer = 0;
+lab.on('change', key => {
+  if (['width', 'depth', 'freqs', 'sigma', 'chroma'].includes(key)) { clearTimeout(rebuildTimer); rebuildTimer = setTimeout(relearn, 350); }
+  else if (['lr', 'seconds', 'anneal', 'heal'].includes(key)) sendCtl();
+  else if (['showNet', 'showLoss', 'film'].includes(key)) layout();
+});
+lab.on('palette', () => drawUI());
+
+// pause training while the lab is off screen or the tab is hidden
+let paused = false, onScreen = true;
+const setPaused = () => { const v = document.hidden || !onScreen; if (v !== paused) { paused = v; sendCtl(); } };
+new IntersectionObserver(es => { onScreen = es[0].isIntersecting; setPaused(); }).observe(stage);
+document.addEventListener('visibilitychange', setPaused);
+
+// =====================================================================================
+// Scribble: user strokes and the self-scribble
+// =====================================================================================
+let stroke = null;             // { pts: [[x, y]...] in N-pixel coords, sent: index, len, hue }
+let synth = null;              // synthetic stroke being drawn: { path, t, dur }
+let inkTrails = [];            // fading feedback lines on the output: { pts, rgb, age }
+let probe = null, hover = null;
+
+const toPx = e => { const r = glCanvas.getBoundingClientRect(); return [(e.clientX - r.left) / r.width * N, (e.clientY - r.top) / r.height * N]; };
+let touched = false;   // the hint retires after the first scribble
+glCanvas.addEventListener('pointerdown', e => {
+  touched = true;
+  glCanvas.setPointerCapture(e.pointerId);
+  beginStroke(toPx(e));
+  e.preventDefault();
+});
+glCanvas.addEventListener('pointermove', e => {
+  const p = toPx(e);
+  hover = p;
+  if (stroke && stroke.user) addPoint(p);
+});
+const endUser = () => { if (stroke && stroke.user) endStroke(); };
+glCanvas.addEventListener('pointerup', endUser);
+glCanvas.addEventListener('pointercancel', endUser);
+glCanvas.addEventListener('pointerleave', () => { hover = null; });
+
+function beginStroke(p, user = true) {
+  if (user) synth = null;
+  stroke = { pts: [p], sent: 0, len: 0, user, trail: { pts: [p], age: 0, colors: [] } };
+  inkTrails.push(stroke.trail);
+  if (phase !== 'learn') { phase = 'heal'; healT = 0; healPeak = null; }
+  strokesAt.push(runT);
+}
+function addPoint(p) {
+  const q = stroke.pts[stroke.pts.length - 1];
+  const d = Math.hypot(p[0] - q[0], p[1] - q[1]);
+  if (d < 1.5) return;
+  stroke.len += d;
+  stroke.pts.push(p); stroke.trail.pts.push(p);
+}
+function endStroke() { flushStroke(); stroke = null; }
+// ink color walks along the palette ramp as the stroke gets longer; the Bench palette paints the inverse
+function inkAt(len) {
+  if (lab.palette.key === 'bench') return null;
+  return hex(ramp(lab.palette, (len / 420) % 1)).map(v => v / 255);
+}
+function flushStroke() {
+  if (!stroke) return;
+  const pts = stroke.pts;
+  if (pts.length - 1 <= stroke.sent && !(pts.length === 1 && stroke.sent === 0)) return;
+  const from = Math.max(0, stroke.sent - 0);
+  const seg = [];
+  for (let i = from; i < pts.length; i++) seg.push(pts[i][0], pts[i][1]);
+  if (seg.length === 2) seg.push(seg[0] + 0.01, seg[1]);
+  const rgb = inkAt(stroke.len);
+  stroke.trail.colors.push(rgb);
+  send({ type: 'stroke', seg: Float32Array.from(seg), r: P.brush / 2, rgb, kick: P.damage });
+  stroke.sent = pts.length - 1;
+}
+
+// A hand-like stroke: a few loose waypoints across the mark, smoothed, drawn with an ease in and out
+function autoScribble() {
+  if (!S) return;
+  const rnd = (a, b) => a + Math.random() * (b - a);
+  const c = N / 2, R = N * LOGO_FILL * 0.55;
+  const k = 4 + (Math.random() * 3 | 0);
+  const a0 = Math.random() * Math.PI * 2;
+  const way = [];
+  for (let i = 0; i < k; i++) {
+    const a = a0 + i * rnd(1.6, 2.6), r = R * rnd(0.15, 0.9);
+    way.push([c + Math.cos(a) * r, c + Math.sin(a) * r]);
+  }
+  const path = [];
+  for (let i = 0; i < way.length - 1; i++) {
+    const p0 = way[Math.max(0, i - 1)], p1 = way[i], p2 = way[i + 1], p3 = way[Math.min(way.length - 1, i + 2)];
+    for (let s = 0; s < 24; s++) {
+      const t = s / 24, t2 = t * t, t3 = t2 * t;
+      path.push([0, 1].map(d => 0.5 * (2 * p1[d] + (-p0[d] + p2[d]) * t + (2 * p0[d] - 5 * p1[d] + 4 * p2[d] - p3[d]) * t2 + (-p0[d] + 3 * p1[d] - 3 * p2[d] + p3[d]) * t3)));
+    }
+  }
+  path.push(way[way.length - 1]);
+  if (stroke) endStroke();
+  synth = { path, t: 0, dur: 0.9 + path.length / 120, i: 0 };
+  beginStroke(path[0], false);
+}
+function updateSynth(dt) {
+  if (!synth) return;
+  synth.t += dt;
+  const u = Math.min(1, synth.t / synth.dur), e = u < 0.5 ? 2 * u * u : 1 - (-2 * u + 2) ** 2 / 2;
+  const upto = Math.floor(e * (synth.path.length - 1));
+  while (synth.i < upto) addPoint(synth.path[++synth.i]);
+  synth.pen = synth.path[synth.i];
+  if (u >= 1) { endStroke(); synth = null; }
+}
+
+// =====================================================================================
+// Probe: a pixel pushed through the network on the page, to light up the diagram
+// =====================================================================================
+let acts = null;
+function forwardProbe(u, v) {
+  if (!S) return null;
+  const { shape, theta, BX, BY, mask } = S, nf = shape.nf;
+  const feats = new Float32Array(2 * nf);
+  for (let k = 0; k < nf; k++) { const ph = 2 * Math.PI * (BX[k] * u + BY[k] * v); feats[2 * k] = mask[k] * Math.sin(ph); feats[2 * k + 1] = mask[k] * Math.cos(ph); }
+  const sizes = [2 * nf, ...Array(shape.depth).fill(shape.width), 3];
+  const layers = [feats]; let off = 0;
+  for (let l = 0; l < sizes.length - 1; l++) {
+    const nin = sizes[l], nout = sizes[l + 1], a = layers[l], o = new Float32Array(nout), bOff = off + nin * nout, last = l === sizes.length - 2;
+    for (let j = 0; j < nout; j++) {
+      let z = theta[bOff + j];
+      for (let k = 0; k < nin; k++) z += theta[off + j * nin + k] * a[k];
+      o[j] = last ? 1 / (1 + Math.exp(-z)) : Math.max(0, z);
+    }
+    layers.push(o); off = bOff + nout;
+  }
+  return { layers, sizes };
+}
+
+// =====================================================================================
+// 2D layer: diagram, curve, filmstrip, ink feedback
+// =====================================================================================
+const rgba = (h, a) => { const [r, g, b] = hex(h); return `rgba(${r},${g},${b},${a})`; };
+function colors() {
+  const pal = lab.palette;
+  if (pal.key === 'bench') return { pos: '#f4f4f6', neg: '#7a7a88', act: '#ffffff', ink: pal.ink, dim: '#8b8b98', line: '#26262e' };
+  // activations take the brightest of the palette's other stops, so neurons read on black
+  const lum = h => { const [r, g, b] = hex(h); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+  const act = [1, 0.85, 0.7, 0.25].map(t => ramp(pal, t)).reduce((a, b) => lum(b) > lum(a) * 1.15 ? b : a);
+  return { pos: ramp(pal, 0), neg: ramp(pal, 0.5), act, ink: pal.ink, dim: '#8b8b98', line: '#26262e' };
+}
+const MONO = '"JetBrains Mono", ui-monospace, Consolas, monospace';
+
+// Fourier feature tiles: each frequency's stripe pattern over the square, drawn once per network
+let tiles = null, tilesFor = '';
+function buildTiles() {
+  if (!S) return;
+  const key = `${cfgId}`;
+  if (tilesFor === key) return;
+  tilesFor = key;
+  const nf = S.shape.nf, T = 24;
+  tiles = document.createElement('canvas'); tiles.width = T * nf; tiles.height = T;
+  const x = tiles.getContext('2d'), img = x.createImageData(T * nf, T);
+  for (let k = 0; k < nf; k++) for (let r = 0; r < T; r++) for (let c = 0; c < T; c++) {
+    const u = (c + 0.5) / T * 2 - 1, v = (r + 0.5) / T * 2 - 1;
+    const s = 0.5 + 0.5 * Math.sin(2 * Math.PI * (S.BX[k] * u + S.BY[k] * v));
+    const i = (r * T * nf + k * T + c) * 4;
+    img.data[i] = img.data[i + 1] = img.data[i + 2] = 255; img.data[i + 3] = Math.round(40 + 215 * s);
+  }
+  x.putImageData(img, 0, 0);
+}
+
+let g = octx;   // overlay context the drawing helpers below write to
+function label(text, x, y, align = 'left', color) {
+  g.font = `400 ${L.fs}px ${MONO}`; g.textAlign = align; g.textBaseline = 'alphabetic';
+  g.fillStyle = color || '#a4a4b0'; g.fillText(text, x, y);
+}
+
+// Node positions for the vertical diagram: stripe tiles in a row along the top, then each hidden
+// layer as a row, then R, G, B. Rows narrow as they go down, following the corner's free space.
+function netLayout() {
+  const sh = S.shape, key = `${sh.nf}/${sh.width}/${sh.depth}`;
+  if (L.netCache && L.netCache.key === key) return L.netCache;
+  const { out, fs } = L, s = out.s, uR = L.net.uR, X = u => out.x + u * s, Y = v => out.y + v * s;
+  const head = 0.035 + fs / s;                       // header baseline, same line as the status text
+  // tiles: right-aligned under the header, in as few rows as keep each tile at least 7 px
+  const tLeft = 0.44, span = (uR - tLeft) * s;
+  let rows = 1, ts = 0;
+  for (; rows <= 4; rows++) { ts = Math.min(14, span / Math.ceil(sh.nf / rows) - 2); if (ts >= 7) break; }
+  rows = Math.min(rows, 4); ts = Math.max(5, Math.floor(ts));
+  const per = Math.ceil(sh.nf / rows), rowW = per * (ts + 2) - 2;
+  const tx0 = X(uR) - rowW, ty0 = Y(head) + 7;
+  const pos = [[]];
+  for (let k = 0; k < sh.nf; k++) pos[0].push([Math.round(tx0 + (k % per) * (ts + 2)) + ts / 2, Math.round(ty0 + ((k / per) | 0) * (ts + 2)) + ts / 2]);
+  const tilesBottom = (ty0 + rows * (ts + 2) - out.y) / s;
+  // the output row sits as low as the corner still has room for three nodes and the swatch
+  const need = Math.max(96, 0.16 * s) / s, half = 7 / s;
+  let vOut = tilesBottom + 0.12;
+  for (let v = vOut; v < 0.62; v += 0.004) if (uR - spanLeft(v, half, uR, 0.3) >= need) vOut = v;
+  vOut = Math.min(vOut, 0.5);
+  const step = (vOut - tilesBottom) / (sh.depth + 1);
+  const radii = [];
+  for (let l = 1; l <= sh.depth; l++) {
+    const v = tilesBottom + step * l - step * 0.15, u0 = spanLeft(v, half, uR, 0.3);
+    const w = (uR - u0) * s - 6, sp = w / sh.width;
+    radii[l] = Math.max(1.2, Math.min(3.5, sp * 0.32));
+    pos[l] = [];
+    for (let j = 0; j < sh.width; j++) pos[l].push([X(u0) + 6 + sp * (j + 0.5), Math.round(Y(v)) + 0.5]);
+  }
+  const o = sh.depth + 1, gap = Math.max(12, Math.min(18, s * 0.026));
+  pos[o] = [0, 1, 2].map(c => [X(uR) - 20 - gap * (2 - c), Math.round(Y(vOut)) + 0.5]);
+  return (L.netCache = { key, pos, ts, radii, head, X, Y, uR, vOut });
+}
+
+function drawDiagram(C) {
+  if (!S || !acts) return;
+  buildTiles();
+  const { layers, sizes } = acts, nf = S.shape.nf, D = S.shape.depth;
+  const { pos, ts, radii, head, X, Y, uR } = netLayout();
+  label(`${nf} freq · ${D}×${S.shape.width} relu · rgb`, X(uR), Y(head), 'right');
+  // edges: the strongest weights per layer, brightened by what the probe pixel sends through them
+  const capBase = Math.round(Math.max(24, Math.min(64, L.out.s / 10)));
+  let off = 0;
+  g.save();
+  g.globalCompositeOperation = 'lighter';
+  g.lineWidth = 1;
+  for (let l = 0; l < sizes.length - 1; l++) {
+    const nin = sizes[l], nout = sizes[l + 1], a = layers[l];
+    const cand = [];
+    let wmax = 1e-6, cmax = 1e-6;
+    if (l === 0) {
+      for (let j = 0; j < nout; j++) for (let k = 0; k < nf; k++) {
+        const ws = S.theta[off + j * nin + 2 * k], wc = S.theta[off + j * nin + 2 * k + 1];
+        const w = Math.hypot(ws, wc) * S.mask[k], c = ws * a[2 * k] + wc * a[2 * k + 1];
+        cand.push([k, j, w, c, c]); wmax = Math.max(wmax, w); cmax = Math.max(cmax, Math.abs(c));
+      }
+    } else {
+      for (let j = 0; j < nout; j++) for (let k = 0; k < nin; k++) {
+        const w = S.theta[off + j * nin + k], c = w * a[k];
+        cand.push([k, j, Math.abs(w), c, w]); wmax = Math.max(wmax, Math.abs(w)); cmax = Math.max(cmax, Math.abs(c));
+      }
+    }
+    off += nin * nout + nout;
+    const cap = Math.min(cand.length, Math.round(capBase * (l === 0 ? 0.75 : l === sizes.length - 2 ? 0.6 : 1)));
+    const score = q => q[2] / wmax + 2 * Math.abs(q[3]) / cmax;
+    cand.sort((p, q) => score(q) - score(p));
+    // bucket by sign and alpha so a whole layer is a handful of strokes
+    const buckets = new Map();
+    for (let i = 0; i < cap; i++) {
+      const [k, j, w, c, sign] = cand[i];
+      const al = Math.min(1, 0.08 + 0.35 * (w / wmax) ** 1.5 + 0.6 * Math.abs(c) / cmax);
+      const key = (sign >= 0 ? 'p' : 'n') + Math.round(al * 10);
+      if (!buckets.has(key)) buckets.set(key, []);
+      const p0 = pos[l][k], p1 = pos[l + 1][j];
+      buckets.get(key).push([p0[0], p0[1] + (l === 0 ? ts / 2 : 0), p1[0], p1[1]]);
+    }
+    for (const [key, segs] of buckets) {
+      g.strokeStyle = rgba(key[0] === 'p' ? C.pos : C.neg, (+key.slice(1) / 10) * 0.6);
+      g.beginPath();
+      for (const [x0, y0, x1, y1] of segs) { g.moveTo(x0, y0); g.lineTo(x1, y1); }
+      g.stroke();
+    }
+  }
+  g.restore();
+  // feature tiles, dimmed until the coarse-to-fine window reaches them; outline lights with the probe
+  if (tiles) {
+    const T = 24;
+    for (let k = 0; k < nf; k++) {
+      const [cx, cy] = pos[0][k], m = S.mask[k], x = Math.round(cx - ts / 2), y = Math.round(cy - ts / 2);
+      g.globalAlpha = 0.15 + 0.85 * m;
+      g.drawImage(tiles, k * T, 0, T, T, x, y, ts, ts);
+      const sv = 0.5 + 0.5 * layers[0][2 * k] / Math.max(1e-3, m);
+      g.globalAlpha = m * (0.25 + 0.75 * sv);
+      g.strokeStyle = C.act; g.lineWidth = 1;
+      g.strokeRect(x + 0.5, y + 0.5, ts - 1, ts - 1);
+    }
+    g.globalAlpha = 1;
+  }
+  // hidden neurons glow with their activation for the probe pixel
+  for (let l = 1; l < sizes.length - 1; l++) {
+    const a = layers[l]; let mx = 1e-6; for (const v of a) mx = Math.max(mx, v);
+    const r = radii[l];
+    for (let j = 0; j < a.length; j++) {
+      const [x, y] = pos[l][j], t = a[j] / mx;
+      if (t > 0.02) { g.fillStyle = rgba(C.act, 0.2 * t); g.beginPath(); g.arc(x, y, r * (1.8 + 1.8 * t), 0, Math.PI * 2); g.fill(); }
+      g.fillStyle = t > 0 ? rgba(C.act, 0.3 + 0.7 * t) : 'rgba(0,0,0,0)';
+      g.strokeStyle = t > 0 ? rgba(C.act, 0.95) : 'rgba(150,150,165,0.55)';
+      g.lineWidth = 1;
+      g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill(); g.stroke();
+    }
+  }
+  // outputs: literally red, green and blue, then the pixel they make
+  const out = layers[sizes.length - 1], last = pos[sizes.length - 1];
+  const RGB = ['#ff2a2a', '#2aff4a', '#3a6bff'];
+  const rr = Math.max(3, Math.min(5, L.out.s * 0.008));
+  for (let c = 0; c < 3; c++) {
+    const [x, y] = last[c], [r, gg, b] = hex(RGB[c]);
+    g.fillStyle = `rgba(${r},${gg},${b},${0.15 + 0.85 * out[c]})`;
+    g.strokeStyle = RGB[c]; g.lineWidth = 1;
+    g.beginPath(); g.arc(x, y, rr, 0, Math.PI * 2); g.fill(); g.stroke();
+  }
+  const sw = Math.round(rr * 2.4), sx = Math.round(last[2][0] + rr + 6), sy = Math.round(last[2][1] - sw / 2);
+  g.fillStyle = `rgb(${out.map(v => Math.round(v * 255)).join(',')})`;
+  g.fillRect(sx, sy, sw, sw);
+  g.strokeStyle = '#a4a4b0'; g.strokeRect(sx + 0.5, sy + 0.5, sw - 1, sw - 1);
+}
+
+// error curve: log scale, the faint target pace behind it
+const LOG_LO = -4, LOG_HI = -0.5;
+// expected loss over a run (fraction of target time → log10 MSE), measured from default runs and smoothed
+const PACE = [[0, -0.65], [0.1, -0.95], [0.2, -1.15], [0.3, -1.5], [0.4, -1.95], [0.5, -2.3], [0.6, -2.5], [0.7, -2.7], [0.8, -2.9], [0.9, -3.05], [1, -3.2]];
+const paceAt = f => { f = Math.max(0, Math.min(1, f)); const i = Math.min(PACE.length - 2, Math.floor(f * 10)), u = f * 10 - i; return PACE[i][1] + (PACE[i + 1][1] - PACE[i][1]) * u; };
+function drawCurve(C) {
+  const { out, fs } = L, s = out.s, R = { x: out.x + L.loss.u * s, y: out.y + L.loss.v * s, w: L.loss.w * s, h: L.loss.h * s };
+  const T = P.seconds;
+  const span = Math.max(T * 1.25, runT + 1);
+  const t0 = Math.max(0, span - 90), t1 = t0 + Math.min(span, 90);
+  const lw = Math.round(fs * 2.6);
+  const px = { x: R.x + lw, y: R.y + fs + 6, w: R.w - lw - 2, h: R.h - 2 * fs - 9 };
+  const X = t => px.x + (t - t0) / (t1 - t0) * px.w, Y = lg => px.y + (LOG_HI - lg) / (LOG_HI - LOG_LO) * px.h;
+  label('error', R.x, R.y + fs);
+  if (S) { g.font = `400 ${fs}px ${MONO}`; label(S.loss.toExponential(1), R.x + g.measureText('error ').width + 4, R.y + fs, 'left', C.ink); }
+  g.lineWidth = 1;
+  const decades = px.h > 60 ? [-1, -2, -3, -4] : [-1, -3];
+  for (const d of decades) {
+    const y = Math.round(Y(d)) + 0.5;
+    g.strokeStyle = 'rgba(160,160,175,0.18)'; g.beginPath(); g.moveTo(px.x, y); g.lineTo(px.x + px.w, y); g.stroke();
+    label(`1e${d}`, px.x - 4, y + fs * 0.35, 'right');
+  }
+  // target time and the pace a default run keeps
+  if (T >= t0 && T <= t1) {
+    const x = Math.round(X(T)) + 0.5;
+    g.setLineDash([2, 3]); g.strokeStyle = 'rgba(160,160,175,0.35)'; g.beginPath(); g.moveTo(x, px.y); g.lineTo(x, px.y + px.h); g.stroke(); g.setLineDash([]);
+    label(`${T} s`, x, px.y + px.h + fs + 2, 'center');
+  }
+  g.strokeStyle = rgba(C.ink, 0.28); g.setLineDash([3, 3]);
+  g.beginPath();
+  let started = false;
+  for (let i = 0; i <= 60; i++) { const t = T * i / 60; if (t < t0) continue; const x = X(t), y = Y(paceAt(i / 60)); started ? g.lineTo(x, y) : g.moveTo(x, y); started = true; }
+  g.stroke(); g.setLineDash([]);
+  // scribbles
+  g.strokeStyle = rgba(C.neg, 0.6);
+  for (const t of strokesAt) if (t >= t0) { const x = Math.round(X(t)) + 0.5; g.beginPath(); g.moveTo(x, px.y); g.lineTo(x, px.y + px.h); g.stroke(); }
+  // the run so far
+  g.save();
+  g.beginPath(); g.rect(px.x, px.y - 2, px.w + 2, px.h + 4); g.clip();
+  g.strokeStyle = C.pos; g.lineWidth = 1.5; g.lineJoin = 'round';
+  g.beginPath();
+  let first = true, lx = 0, ly = 0;
+  for (const [t, l] of curve) {
+    if (t < t0) continue;
+    lx = X(t); ly = Y(Math.max(LOG_LO, Math.min(LOG_HI, Math.log10(l))));
+    first ? g.moveTo(lx, ly) : g.lineTo(lx, ly); first = false;
+  }
+  g.stroke();
+  if (!first) { g.fillStyle = C.pos; g.beginPath(); g.arc(lx, ly, 2.5, 0, Math.PI * 2); g.fill(); }
+  g.restore();
+}
+
+// filmstrip: a thin row of snapshots under the mark, newest on the right, sliding in
+function drawStrip(C, dt) {
+  const { out, fs } = L, s = out.s, st = L.strip;
+  const th = Math.round(st.th * s), gap = Math.max(3, Math.round(th * 0.08)), x0 = out.x + st.u * s, y = Math.round(out.y + st.v * s);
+  const fit = Math.max(1, Math.floor((st.w * s + gap) / (th + gap)));
+  const shown = snaps.slice(-fit);
+  const roomy = th >= 46;
+  shown.forEach((sn, i) => {
+    const tx = x0 + (fit - shown.length + i) * (th + gap);
+    sn.x = sn.x == null ? tx + th * 0.4 : sn.x + (tx - sn.x) * Math.min(1, dt * 10);
+    sn.a = Math.min(1, (sn.a || 0) + dt * 4);
+    const x = Math.round(sn.x);
+    g.globalAlpha = sn.a;
+    g.drawImage(sn.img, x, y, th, th);
+    g.strokeStyle = sn.tag ? rgba(C.neg, 0.95) : 'rgba(160,160,175,0.35)'; g.lineWidth = 1;
+    g.strokeRect(x + 0.5, y + 0.5, th - 1, th - 1);
+    if (sn.tag) label(roomy ? sn.tag : sn.tag.slice(0, 4), x + 3, y + th - 3, 'left', C.neg);
+    else if (roomy) label(`${sn.t.toFixed(1)} s`, x + 3, y + th - 3, 'left', '#d8d8e0');
+    g.globalAlpha = 1;
+  });
+}
+function snapshot(tag) {
+  const c = document.createElement('canvas'), px = Math.round(Math.min(160, Math.max(32, (L.strip ? L.strip.th * L.out.s : 64) * L.dpr)));
+  c.width = c.height = px;
+  c.getContext('2d').drawImage(glCanvas, 0, 0, px, px);
+  snaps.push({ img: c, t: runT, tag });
+  if (snaps.length > 40) snaps.shift();
+}
+
+let overA = 0.6;   // overlay strength: quiet while the network is learning, full once it holds
+function drawUI(dt = 0) {
+  if (!L) return;
+  const k = uiCanvas.width / Math.max(1, L.W), C = colors(), o = L.out, kk = o.s / N;
+  overA += ((phase === 'learn' ? 0.6 : 1) - overA) * Math.min(1, dt * 1.5);
+  // 1. overlays, in their own layer
+  g = octx;
+  octx.setTransform(1, 0, 0, 1, 0, 0); octx.globalCompositeOperation = 'source-over';
+  octx.clearRect(0, 0, overCanvas.width, overCanvas.height);
+  octx.setTransform(k, 0, 0, k, 0, 0);
+  octx.save();
+  octx.beginPath(); octx.rect(o.x, o.y, o.s, o.s); octx.clip();
+  if (L.net) drawDiagram(C);
+  if (L.loss) drawCurve(C);
+  if (L.strip) drawStrip(C, dt);
+  const cap = phase === 'learn' ? `learning · ${runT.toFixed(1)} s` : phase === 'heal' ? 'healing' : 'learned';
+  label(cap, o.x + L.status.u * o.s, o.y + L.status.v * o.s, 'left', C.ink);
+  // the interaction hint lives in the same quiet corner (the shared hint would sit on the diagram)
+  if (!hover && !touched) {
+    // the long hint only where it clears the diagram's tile row
+    let h = 'drag to scribble · hover to probe';
+    g.font = `400 ${L.fs}px ${MONO}`;
+    if (g.measureText(h).width > (0.4 - L.status.u) * o.s) h = 'drag to scribble';
+    label(h, o.x + L.status.u * o.s, o.y + L.status.v * o.s + L.fs + 5);
+  }
+  octx.restore();
+  // 2. cut the mark and its margin out of them
+  octx.setTransform(1, 0, 0, 1, 0, 0);
+  octx.globalCompositeOperation = 'destination-out';
+  octx.drawImage(maskCanvas, 0, 0);
+  octx.globalCompositeOperation = 'source-over';
+  // 3. onto the visible layer
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, uiCanvas.width, uiCanvas.height);
+  ctx.globalAlpha = overA; ctx.drawImage(overCanvas, 0, 0); ctx.globalAlpha = 1;
+  ctx.setTransform(k, 0, 0, k, 0, 0);
+  // ink feedback, the self-scribble's pen and the probe belong on the image, so they are not masked
+  ctx.save();
+  ctx.beginPath(); ctx.rect(o.x, o.y, o.s, o.s); ctx.clip();
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  for (const tr of inkTrails) {
+    const a = Math.max(0, 1 - tr.age / 0.9);
+    if (a <= 0 || tr.pts.length < 2) continue;
+    ctx.strokeStyle = rgba(C.ink, 0.7 * a); ctx.lineWidth = 1.25;
+    ctx.beginPath();
+    tr.pts.forEach(([x, y], i) => i ? ctx.lineTo(o.x + x * kk, o.y + y * kk) : ctx.moveTo(o.x + x * kk, o.y + y * kk));
+    ctx.stroke();
+  }
+  if (synth && synth.pen) {
+    const [x, y] = synth.pen;
+    ctx.strokeStyle = rgba(C.ink, 0.9); ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(o.x + x * kk, o.y + y * kk, Math.max(3, P.brush / 2 * kk), 0, Math.PI * 2); ctx.stroke();
+  }
+  if (probe && !stroke) {
+    const x = Math.round(o.x + probe[0] * kk) + 0.5, y = Math.round(o.y + probe[1] * kk) + 0.5;
+    ctx.strokeStyle = rgba(C.act, 0.9); ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x - 9, y); ctx.lineTo(x - 3, y); ctx.moveTo(x + 3, y); ctx.lineTo(x + 9, y);
+    ctx.moveTo(x, y - 9); ctx.lineTo(x, y - 3); ctx.moveTo(x, y + 3); ctx.lineTo(x, y + 9);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+// =====================================================================================
+// Frame loop
+// =====================================================================================
+let hudTick = 0, frameMs = 0, calmClock = 0, lastDraw = -1;
+function frame(dt, t) {
+  const f0 = performance.now();
+  send({ type: 'beat' });
+  if (!paused) runT += dt;
+  updateSynth(dt);
+  if (stroke) flushStroke();
+  inkTrails.forEach(tr => { tr.age += dt; if (stroke && tr === stroke.trail) tr.age = 0; });
+  inkTrails = inkTrails.filter(tr => tr.age < 1);
+  if (ghostA > 0) { ghostA = lab.calm ? 0 : Math.max(0, ghostA - dt / 0.7); ghost.style.opacity = ghostA.toFixed(3); }
+
+  // lifecycle
+  if (S) {
+    if (phase === 'learn' && S.p >= 1) { phase = 'hold'; holdT = 0; }
+    else if (phase === 'hold') {
+      holdT += dt;
+      if (P.auto && !lab.calm && !stroke && holdT > P.hold) autoScribble();
+    } else if (phase === 'heal') {
+      healT += dt;
+      // a frame for the filmstrip at the height of the damage, and one once healed
+      if (!stroke && !healPeak && S.dmg && healT > 0.3) { healPeak = 'pending'; pendingSnap = 'scribbled'; }
+      if (!stroke && healT > 1 && S.mode === 'polish') { phase = 'hold'; holdT = 0; pendingSnap = 'healed'; }
+    }
+  }
+
+  // probe: the cursor, or a slow figure-eight over the mark
+  if (hover) probe = hover;
+  else if (!lab.calm) { const c = N / 2, R = N * LOGO_FILL * 0.42; probe = [c + R * Math.sin(t * 0.31), c + R * 0.8 * Math.sin(t * 0.47 + 1)]; }
+  else probe = probe || [N / 2, N / 2];
+
+  // under reduced motion everything on the stage updates every two seconds instead of continuously,
+  // unless the viewer is drawing or probing
+  calmClock += dt;
+  const live = !lab.calm || !!stroke || !!hover;
+  const show = live || calmClock > 2 || lastDraw < 0;
+  if (S && fresh && show) {
+    lastDraw = runT;
+    drawNet();
+    fresh = false;
+    while (nextSnap <= SNAPS && S.p >= nextSnap / SNAPS) { snapshot(); nextSnap++; }
+    if (pendingSnap) { snapshot(pendingSnap); pendingSnap = null; }
+    curve.push([runT, Math.max(1e-5, S.loss)]);
+    if (curve.length > 4000) curve.splice(0, 1000);
+  }
+  if (show) calmClock = 0;
+  if (!show) { frameMs += (performance.now() - f0 - frameMs) * 0.05; return; }
+  acts = probe && S ? forwardProbe(probe[0] / N * 2 - 1, probe[1] / N * 2 - 1) : null;
+  drawUI(lab.calm ? 1 : dt);
+  frameMs += (performance.now() - f0 - frameMs) * 0.05;
+  if (++hudTick % 8 === 0) hud();
+}
+
+function hud() {
+  if (!S) return;
+  const head = `step <b>${S.steps}</b> · error <b>${S.loss.toExponential(2)}</b> · t <b>${runT.toFixed(1)} s</b>`;
+  // narrow stages get the short version so the readout stays on one or two lines
+  lab.hud(L && L.W < 520 ? `step <b>${S.steps}</b> · error <b>${S.loss.toExponential(1)}</b> · <b>${runT.toFixed(1)} s</b>` : head +
+    ` · <b>${Math.round(S.sps)}</b> steps/s · <b>${S.ms.toFixed(1)} ms</b>/step${worker ? '' : ' (on page)'} · frame <b>${frameMs.toFixed(1)} ms</b>`);
+}
+
+layout();
+relearn();
+lab.loop(frame);
+
+// test hooks
+window.__lab = {
+  state: publicState,
+  // run n training steps right now (in the trainer); resolves with the state after them
+  step(n = 1) { return new Promise(res => { waiters.push(res); send({ type: 'force', n }); }); },
+  relearn,
+  autoScribble,
+  // points in 0..1 output coordinates, e.g. [[0.2, 0.2], [0.8, 0.8]]
+  scribble(points) {
+    const pts = points.map(([x, y]) => [x * N, y * N]);
+    beginStroke(pts[0]); pts.slice(1).forEach(addPoint); endStroke();
+  },
+  layout: () => L,
+  // overlay layer (already masked) and the keep-out mask, for checking that nothing touches the mark
+  layers: () => ({ overlay: overCanvas, mask: maskCanvas }),
+  curve: () => curve
+};
+function publicState() {
+  return S ? { phase, mode: S.mode, loss: +S.loss.toExponential(3), time: +runT.toFixed(2), progress: +S.p.toFixed(3), steps: S.steps,
+    stepsPerSec: Math.round(S.sps), msPerStep: +S.ms.toFixed(2), frameMs: +frameMs.toFixed(2), damaged: S.dmg, worker: !!worker, snaps: snaps.length } : null;
+}
+</script>

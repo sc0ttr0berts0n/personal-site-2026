@@ -198,3 +198,12 @@ After the five-shot volley, Scott asked for every ball to burst into five, and e
   - **Flutter:** as the speed builds, the mark shakes on a canopy flutter that gets faster and wider, and its edges flap.
   - **Airstream:** specks rush up past the mark as radial streaks that lengthen with speed.
   - **The rule that keeps it seamless:** the tilt levels out over the last part of the fall, so the mark always lands flat. The edge flap carries into the goo and dies away there, and the air keeps streaming a moment after impact before it stops. Nothing cuts off.
+
+## 2026-10-28: Falling Sand, the reset is a drain
+
+> "just make a drain when you need to reset. it literally keeps the visual for everything but makes it behave as water."
+
+- **The decisive call:** starting over no longer wipes the box. A drain opens in the bottom 15° of the basin, and every cell keeps its look (lava glow, fire flicker, wood grain, flowers) while it falls and slides like water toward the hole. The basin empties in under 2 s, then the mark comes back and thaws. The reset became part of the show. Scott then had the plug itself hidden ("dont visually show the drain"), so it just pours out of the bottom.
+- **Settled means "just drips":** Scott: "its settled once its kind of just raining and its down to just drips". The settle detector now counts only visible change: a lone falling drop doesn't count, and nor do slow trickles such as lava cooling or roots drinking. It also has some slack, so one blip doesn't restart the clock. A cycle went from about 48 s to about 20 s.
+- **Hands off once touched:** "do not loop if they interact ever. make that manual at that point." Any interaction ends the auto loop for good, and Reset becomes a 0.8 s hold with an ink trace round the button.
+- **Watch-face controls:** "in the style of the apple watch ring … rounded arcs kind of between a rounded rect and a stroke arc." The element picker became arc buttons hugging the bedrock circle, with the labels set along each arc. Six across the top take about 90° of the ring. Eraser and Reset are rounded triangles in the bottom corners, curved where they touch the ring.

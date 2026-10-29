@@ -2,3 +2,15 @@
 [build]
   publish = "."
   command = ""
+
+# workspace/ is Scott's workspace (lab sources, ideation, brand): in the repo, but not part of the site.
+[[redirects]]
+  from = "/workspace"
+  to = "/404.html"
+  status = 404
+  force = true
+[[redirects]]
+  from = "/workspace/*"
+  to = "/404.html"
+  status = 404
+  force = true

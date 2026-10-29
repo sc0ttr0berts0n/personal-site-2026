@@ -9,17 +9,29 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@200;300&family=Familjen+Grotesk:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap">
 <link rel="stylesheet" href="shared/lab.css">
 <style>
-  /* element palette, top-left of the stage, like the old web toys */
-  .sand-tools { position: absolute; left: 12px; top: 10px; z-index: 3; display: flex; flex-wrap: wrap; gap: 4px; max-width: min(60%, 470px); }
-  .sand-tools button {
-    display: flex; align-items: center; gap: 6px; padding: 6px 8px; cursor: pointer;
-    font: 400 11px/1 var(--mono); color: var(--ink); border: 1px solid var(--line); border-radius: 2px;
-    background: color-mix(in srgb, var(--bg) 72%, transparent);
-  }
-  .sand-tools button:hover { border-color: var(--dim); }
-  .sand-tools button[aria-pressed="true"] { border-color: var(--ink); }
-  .sand-tools i { width: 9px; height: 9px; display: block; border-radius: 1px; }
-  .sand-tools kbd { font: inherit; color: var(--dim); }
+  /* element ring: arc segments hugging the bedrock circle, like the rings on a watch face. Six elements across the
+     top, the eraser and reset tucked into the bottom corners beside it. Hidden in the feed (lab-embed). */
+  .sand-tools { position: absolute; inset: 0; z-index: 3; width: 100%; height: 100%; pointer-events: none; overflow: visible; --fs: 12.5px; }
+  .sand-tools g { pointer-events: auto; cursor: pointer; outline: none; touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  .sand-tools path.seg { fill: color-mix(in srgb, var(--sw, var(--bg)) 30%, var(--bg)); stroke: var(--line); stroke-width: 1; transition: fill .15s, stroke .15s; }
+  .sand-tools g:hover path.seg { stroke: var(--dim); }
+  .sand-tools g:focus-visible path.seg { stroke: var(--ink); stroke-width: 1.5; }
+  .sand-tools g[aria-pressed="true"] path.seg { fill: color-mix(in srgb, var(--sw) 88%, var(--bg)); stroke: var(--ink); }
+  .sand-tools g.erase path.seg, .sand-tools g.reset path.seg { fill: color-mix(in srgb, var(--bg) 80%, transparent); }
+  .sand-tools g.erase path.seg { stroke-dasharray: 3 3; stroke: var(--dim); }
+  .sand-tools g.erase[aria-pressed="true"] path.seg { stroke: var(--ink); }
+  /* reset is a hold: an ink trace runs round the button while it's held, and the button flashes when it fires */
+  .sand-tools path.prog { fill: none; stroke: var(--ink); stroke-width: 2.5; stroke-linejoin: round; stroke-dasharray: 1 1; stroke-dashoffset: 1; opacity: 0; pointer-events: none; transition: stroke-dashoffset .25s ease-out, opacity .25s; }
+  .sand-tools g.holding path.prog { stroke-dashoffset: 0; opacity: 1; transition: stroke-dashoffset var(--hold) linear, opacity .1s; }
+  .sand-tools g.holding path.seg { fill: color-mix(in srgb, var(--ink) 14%, var(--bg)); }
+  .sand-tools g.fired path.seg { fill: var(--ink); transition: none; }
+  .sand-tools g.fired text { fill: var(--bg); }
+  .sand-tools text { font: 400 var(--fs) var(--mono); letter-spacing: .06em; text-transform: uppercase; fill: var(--ink); pointer-events: none; }
+  .sand-tools g.light[aria-pressed="true"] text { fill: #111; }
+  .sand-tools tspan.k { fill: var(--dim); }
+  .sand-tools g[aria-pressed="true"] tspan.k { fill: inherit; fill-opacity: .55; }
+  .sand-tools.compact tspan.k { display: none; }
+  html.lab-embed .sand-tools { display: none; }
   .lab-hint { max-width: 36%; }
   .lab-stage > canvas { cursor: crosshair; }
 </style>
@@ -44,8 +56,13 @@ const GROW_P = 0.028;      // chance per tick a stem tip grows (× Growth rate)
 const BLOOM_P = 0.045;     // chance per tick a bud takes a bloom step (× Growth rate)
 const DRINK_P = 0.07;      // chance per tick a root tries to drink (× Growth rate)
 const FADE = 0.8;          // s crossfade back to the mark on reset
-const QUIET_ACT = 0.8;     // mean events per tick below which the box counts as settled
+const QUIET_ACT = 3e-4;    // share of the box visibly changing per tick (smoothed) below which, with nothing burning, it starts to count as settled
+const BUSY_ACT = 8e-4;     // ...and above which it's busy again; in between, a settling box keeps settling
+const DRAIN_DEG = 15;       // the drain plug spans this much of the basin's bottom
+const DRAIN_MAX = 8;        // s a drain may take before the box resets anyway
+const RUN_CAP = 30;        // s after the thaw (plus the Settled for wait) before an auto reset even if it never goes quiet
 const IDLE_RESET = 240;    // s with no input before an auto reset even if it never goes quiet
+const HAND_IDLE = 20;      // s with no input before someone who touched it counts as gone: reset, back to the demo
 const OUTLINE_GAP = 3;     // body outline: one dot every this many dot sizes
 const FLOOR_PAD = 42;      // CSS px between the sandbox floor and the stage bottom (room for the HUD)
 
@@ -183,7 +200,7 @@ const lab = createLab({
     brush:     { type: 'range', label: 'Brush radius', min: 1, max: 16, step: 1, value: 4, unit: ' cells' }
   },
   actions: [
-    { label: 'Reset', primary: true, action: () => reset() },
+    { label: 'Reset', primary: true, action: () => { startDrain(); touch(); } },
     { label: 'Rain', action: () => { rainT = 1.6; touch(); } },
     { label: 'Clear', action: () => { clearAll(); touch(); } }
   ]
@@ -201,18 +218,107 @@ const TOOLS = [
   { key: 'erase', el: EMPTY, label: 'Eraser', sw: 'transparent', density: 1 }
 ];
 let tool = TOOLS[0];
-const toolBox = document.createElement('div');
-toolBox.className = 'sand-tools'; toolBox.setAttribute('role', 'group'); toolBox.setAttribute('aria-label', 'Paint element');
-TOOLS.forEach((t, k) => {
-  const b = document.createElement('button');
-  b.type = 'button';
-  b.innerHTML = `<i style="background:${t.sw};${t.el === EMPTY ? 'border:1px dashed var(--dim)' : ''}"></i>${t.label} <kbd>${k + 1}</kbd>`;
-  b.addEventListener('click', () => pickTool(t));
-  t.btn = b; toolBox.appendChild(b);
-});
+const SVGNS = 'http://www.w3.org/2000/svg', LIGHT = ['lava', 'ash', 'seed'];   // swatches light enough for dark text
+const svgEl = (tag, attrs = {}) => { const e = document.createElementNS(SVGNS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); return e; };
+const toolBox = svgEl('svg', { class: 'sand-tools', role: 'group', 'aria-label': 'Paint element' });
 lab.stage.appendChild(toolBox);
+// one ring button: a rounded arc (or, in the bottom corners, a rounded triangle) with its label set along an arc.
+// `hold` makes it fire only after being held that long, an ink trace running round its edge meanwhile.
+const HOLD = 0.8;
+function ringButton(label, key, cls, onPress, hold = 0) {
+  const g = svgEl('g', { role: 'button', tabindex: 0, 'aria-label': hold ? `Hold to ${label.toLowerCase()}` : label, class: cls });
+  const seg = svgEl('path', { class: 'seg' }), line = svgEl('path', { id: 'sand-arc-' + cls.split(' ')[0], fill: 'none' });
+  const text = svgEl('text', { 'text-anchor': 'middle', 'dominant-baseline': 'central' }), tp = svgEl('textPath', { startOffset: '50%', href: '#' + line.id });
+  tp.append(label);
+  if (key) { const k = svgEl('tspan', { class: 'k', dx: 6 }); k.textContent = key; tp.append(k); }
+  text.append(tp); g.append(line, seg, text);
+  g.chars = label.length + (key ? 2 : 0);
+  if (!hold) {
+    g.addEventListener('click', onPress);
+    g.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onPress(); } });
+  } else {
+    const prog = svgEl('path', { class: 'prog', pathLength: 1 });
+    g.append(prog); g.prog = prog; g.style.setProperty('--hold', hold + 's');
+    let timer = 0;
+    const start = () => {
+      clearTimeout(timer); g.classList.add('holding');
+      timer = setTimeout(() => {
+        g.classList.remove('holding'); g.classList.add('fired');
+        setTimeout(() => g.classList.remove('fired'), 260);
+        onPress();
+      }, hold * 1000);
+    };
+    const cancel = () => { clearTimeout(timer); g.classList.remove('holding'); };
+    g.addEventListener('pointerdown', e => { if (e.button > 0) return; e.preventDefault(); try { g.setPointerCapture(e.pointerId); } catch (_) {} start(); });
+    for (const ev of ['pointerup', 'pointercancel', 'lostpointercapture']) g.addEventListener(ev, cancel);
+    g.addEventListener('contextmenu', e => e.preventDefault());
+    g.addEventListener('keydown', e => { if ((e.key === 'Enter' || e.key === ' ') && !e.repeat) { e.preventDefault(); start(); } });
+    g.addEventListener('keyup', e => { if (e.key === 'Enter' || e.key === ' ') cancel(); });
+    g.addEventListener('blur', cancel);
+  }
+  const P = (cx, cy, a, r) => (cx + r * Math.cos(a)).toFixed(2) + ' ' + (cy + r * Math.sin(a)).toFixed(2);
+  const label_ = (cx, cy, r, a0, a1, flip) => line.setAttribute('d', flip
+    ? `M${P(cx, cy, a1, r)} A${r} ${r} 0 0 0 ${P(cx, cy, a0, r)}` : `M${P(cx, cy, a0, r)} A${r} ${r} 0 0 1 ${P(cx, cy, a1, r)}`);
+  // an arc: centre (cx, cy), centre-line radius rc, thickness th, from angle a0 to a1 (clockwise, radians); flip runs
+  // the label anticlockwise so it reads upright along the bottom. Between a rounded rect and a stroked arc: an annular
+  // sector whose corners round off by about 40% of its thickness.
+  g.place = (cx, cy, rc, th, a0, a1, flip) => {
+    const ri = rc - th / 2, ro = rc + th / 2, k = th * 0.42, Q = (a, r) => P(cx, cy, a, r);
+    seg.setAttribute('d', `M${Q(a0 + k / ro, ro)} A${ro} ${ro} 0 0 1 ${Q(a1 - k / ro, ro)} Q${Q(a1, ro)} ${Q(a1, ro - k)}` +
+      ` L${Q(a1, ri + k)} Q${Q(a1, ri)} ${Q(a1 - k / ri, ri)} A${ri} ${ri} 0 0 0 ${Q(a0 + k / ri, ri)} Q${Q(a0, ri)} ${Q(a0, ri + k)}` +
+      ` L${Q(a0, ro - k)} Q${Q(a0, ro)} ${Q(a0 + k / ro, ro)} Z`);
+    label_(cx, cy, rc, a0, a1, flip);
+  };
+  // a corner triangle: its inner side follows the ring (radius ri, from a0 to a1), the other two run out to a point
+  // h beyond the ring at the middle angle. Base corners round by k, the point more softly.
+  g.placeTri = (cx, cy, ri, h, a0, a1, k) => {
+    const xy = (a, r) => [cx + r * Math.cos(a), cy + r * Math.sin(a)], f = v => v.map(n => n.toFixed(2)).join(' ');
+    const B0 = xy(a0, ri), B1 = xy(a1, ri), A = xy((a0 + a1) / 2, ri + h), ka = Math.min(h * 0.3, k * 1.6);
+    const along = (p, q, d) => { const l = Math.hypot(q[0] - p[0], q[1] - p[1]); return [p[0] + (q[0] - p[0]) * d / l, p[1] + (q[1] - p[1]) * d / l]; };
+    const d = `M${f(xy(a0 + k / ri, ri))} A${ri} ${ri} 0 0 1 ${f(xy(a1 - k / ri, ri))} Q${f(B1)} ${f(along(B1, A, k))}` +
+      ` L${f(along(A, B1, ka))} Q${f(A)} ${f(along(A, B0, ka))} L${f(along(B0, A, k))} Q${f(B0)} ${f(xy(a0 + k / ri, ri))} Z`;
+    seg.setAttribute('d', d);
+    if (g.prog) g.prog.setAttribute('d', d);
+    label_(cx, cy, ri + h * 0.3, a0, a1, true);
+  };
+  toolBox.append(g);
+  return g;
+}
+TOOLS.forEach((t, k) => {
+  t.btn = ringButton(t.label, String(k + 1), t.key + (LIGHT.includes(t.key) ? ' light' : ''), () => { pickTool(t); touch(); });
+  t.btn.style.setProperty('--sw', t.sw);
+});
+const resetBtn = ringButton('Reset', '', 'reset', () => { startDrain(); touch(); }, HOLD);
 function pickTool(t) { tool = t; TOOLS.forEach(u => u.btn.setAttribute('aria-pressed', u === t ? 'true' : 'false')); }
 pickTool(tool);
+// Lay the ring out just outside the bedrock's inner edge (stage CSS px). The six elements share about a quarter turn
+// over the top (more on a small ring if their labels need it); Eraser and Reset fill the two bottom corners as
+// triangles, scaled with the top buttons from the old 24 px arcs. A small ring (phones) drops the keyboard numbers.
+const RING_CELLS = 3, GAP_CELLS = 2, TOP_SPAN = Math.PI / 2;   // buttons sit RING_CELLS sand cells off the ring, GAP_CELLS apart
+const CORNER = 1.4;        // the corner triangles, against the top buttons
+function layoutTools() {
+  if (!fit) return;
+  const cx = fit.cx + ENC.x * fit.scale, cy = fit.cy + ENC.y * fit.scale, R = (ENC.r + P.ringGap * BAR) * fit.scale;
+  const compact = R < 190, th = compact ? 30 : 38, fs = compact ? 13 : 14.5, grow = th / (compact ? 20 : 24);
+  toolBox.classList.toggle('compact', compact); toolBox.style.setProperty('--fs', fs + 'px');
+  const cell = cd / dpr, off = RING_CELLS * cell, rc = R + off + th / 2, gap = GAP_CELLS * cell / rc, top = TOOLS.slice(0, 6);
+  const need = Math.max(...top.map(t => (compact ? t.btn.chars - 2 : t.btn.chars) * fs * 0.68)) + th * 0.9;
+  const da = Math.max((TOP_SPAN - (top.length - 1) * gap) / top.length, need / rc);
+  const a = -Math.PI / 2 - (top.length * da + (top.length - 1) * gap) / 2;
+  top.forEach((t, k) => { const a0 = a + k * (da + gap); t.btn.place(cx, cy, rc, th, a0, a0 + da, false); });
+  // corners: aim each triangle at its corner of the box above the floor, lift it until its lower base corner clears
+  // the floor, and keep its point inside the box
+  const ri = R + off, W_ = lab.square().w, floorY = floorDev / dpr - 4, base = (compact ? 54 : 84) * grow * CORNER / ri;
+  const room = m => { const c = Math.cos(m), sn = Math.sin(m); return Math.min(sn > 0 ? (floorY - cy) / sn : 1e9, c > 0 ? (W_ - 4 - cx) / c : c < 0 ? (4 - cx) / c : 1e9) - ri; };
+  const corner = right => {
+    let m = Math.atan2(floorY - cy, (right ? W_ : 0) - cx), low = () => cy + ri * Math.sin(right ? m + base / 2 : m - base / 2);
+    while (low() > floorY && (right ? m > -0.4 : m < Math.PI + 0.4)) m += right ? -0.02 : 0.02;
+    return [m, Math.max(th, Math.min(th * 1.9 * CORNER, room(m) - 2))];
+  };
+  const [mr, hr] = corner(true), [ml, hl] = corner(false), k = th * 0.32;
+  TOOLS[6].btn.placeTri(cx, cy, ri, hl, ml - base / 2, ml + base / 2, k);
+  resetBtn.placeTri(cx, cy, ri, hr, mr - base / 2, mr + base / 2, k);
+}
 
 // ---- canvas, layout, grid ----
 const { canvas, ctx } = lab.canvas();
@@ -508,7 +614,7 @@ function fillLogo() {
 }
 
 // ---- simulation ----
-let act = 0, rainT = 0;
+let act = 0, burning = 0, rainT = 0;   // act: cells that visibly changed this tick (slow trickles like cooling lava, drinking roots and growing stems don't count)
 const swap = (i, j) => {
   let t = type[i]; type[i] = type[j]; type[j] = t;
   t = shade[i]; shade[i] = shade[j]; shade[j] = t;
@@ -547,7 +653,8 @@ function flow(i, x, y, d, reach, diagP, sideP) {
   const thru = d === DENS[WATER];
   if (y < H - 1) {
     const b = i + W;
-    if (DENS[type[b]] < d) { swap(i, b); return 1; }
+    // a lone drop falling through air (rain, the last drips) is a straight fall with no water above it: not busy
+    if (DENS[type[b]] < d) { swap(i, b); return thru && (y === 0 || type[i - W] !== WATER) ? 0 : 1; }
     if (thru && THIN[type[b]]) {
       for (let yy = y + 2, j = b + W; yy < H && yy <= y + 4; yy++, j += W) {
         if (THIN[type[j]]) continue;
@@ -629,7 +736,6 @@ function germinate(i, x, y) {
     const tg = Math.max(3, Math.min(60, Math.round(rint(s.h[0], s.h[1]) * P.tall)));
     put(i - W, TIP, packTip(1, tg, 0), id);
   }
-  act++;
 }
 function placeLeaf(x, y, sp, id) {
   const side = rnd() < 0.5 ? -1 : 1;
@@ -658,7 +764,7 @@ function growTip(i, x, y) {
   if (ri < 0) { put(i, STEM, 0, id); return; }      // root gone: the stem just stops
   if (life[ri] === 0) return;                         // thirsty: wait for the root to drink
   const toBud = () => put(i, BUD, (h << 6) | ((xo + 8) << 12), id);
-  if (h >= tg || y === 0) { toBud(); life[ri]--; act++; return; }
+  if (h >= tg || y === 0) { toBud(); life[ri]--; return; }
   let dx = 0;
   if (rnd() < SPECIES[sp].sway) { dx = rnd() < 0.5 ? -1 : 1; if (Math.abs(xo + dx) > MAX_SWAY) dx = -dx; }
   let j = -1;
@@ -667,7 +773,7 @@ function growTip(i, x, y) {
     if (nx < 0 || nx >= W) continue;
     if (SOFT[type[i - W + c]]) { j = i - W + c; dx = c; break; }
   }
-  if (j < 0) { toBud(); act++; return; }              // blocked: bloom where it stands
+  if (j < 0) { toBud(); return; }                     // blocked: bloom where it stands
   life[ri]--;
   // a stem growing through water doesn't count those cells toward its height, so blooms open above the surface
   const tg2 = type[j] === WATER && tg < 60 ? tg + 1 : tg;
@@ -678,7 +784,6 @@ function growTip(i, x, y) {
   const s = SPECIES[sp];
   const l1 = Math.max(2, Math.round(tg * 0.28)), l2 = Math.round(tg * 0.55);
   if (s.nLeaves > 0 && (h + 1 === l1 || (s.nLeaves > 1 && h + 1 === l2 && l2 > l1 + 1))) placeLeaf(x, y, sp, id);
-  act++;
 }
 function growBud(i, x, y) {
   const b = life[i], step = b & 63, h = (b >> 6) & 63, xo = (b >> 12) - 8, id = aux[i], sp = id >> 3, v = id & 7, s = SPECIES[sp];
@@ -729,7 +834,7 @@ function lava(i, x, y) {
     const lo = Math.min(P.biteMin, P.biteMax), hi = Math.max(P.biteMin, P.biteMax);
     aux[i] = 1 + N4.indexOf(woodAt); life[i] = rint(lo, hi); act++; return;
   }
-  if (P.lavaCool > 0 && rnd() < P.lavaCool * 2e-4) { type[i] = STONE; aux[i] = 0; life[i] = 0; stamp[i] = S; act++; return; }
+  if (P.lavaCool > 0 && rnd() < P.lavaCool * 2e-4) { type[i] = STONE; aux[i] = 0; life[i] = 0; stamp[i] = S; return; }
   act += flow(i, x, y, 3, LAVA_REACH, 0.6, P.lavaFlow);
 }
 
@@ -753,7 +858,7 @@ function tick() {
         case STONE: case ASH: if (!(t === STONE && aux[i]) && fall(i, x, y, DENS[t])) act++; break;
         case STEAM:
           // condensed: some falls back as rain, the rest leaves the box (or rain would quench every last drop of lava)
-          if (life[i] <= 1 || (y === 0 && rnd() < 0.02)) { put(i, rnd() < P.rainBack ? WATER : EMPTY); act++; break; }
+          if (life[i] <= 1 || (y === 0 && rnd() < 0.02)) { put(i, rnd() < P.rainBack ? WATER : EMPTY); break; }
           life[i]--; rise(i, x, y); break;
         case SMOKE:
           if (aux[i] === EMBER_AUX) {
@@ -772,7 +877,7 @@ function tick() {
           if (life[i] <= 1) { put(i, EMPTY); break; }
           life[i]--; rise(i, x, y); break;
         case FIRE: {
-          act++;
+          act++; burning++;
           // look at one random neighbour; now and then a spark jumps two cells, so a meadow can go up in a chain
           const far = rnd() < 0.25 ? 2 : 1, dx = rint(-far, far), dy = rint(-far, 1), nx = x + dx, ny = y + dy;
           if ((dx || dy) && nx >= 0 && nx < W && ny >= 0 && ny < H) {
@@ -801,7 +906,7 @@ function tick() {
           }
           break;
         case ROOT:
-          if (life[i] < SAP_MAX && rnd() < DRINK_P * g && waterNear(x, y, ROOT_REACH, 3, true)) { life[i]++; act++; }
+          if (life[i] < SAP_MAX && rnd() < DRINK_P * g && waterNear(x, y, ROOT_REACH, 3, true)) life[i]++;
           break;
         case TIP: if (rnd() < GROW_P * g) growTip(i, x, y); break;
         case BUD: if (rnd() < BLOOM_P * g) growBud(i, x, y); break;
@@ -981,35 +1086,102 @@ function render() {
   }
 }
 
+// ---- the drain ----
+// Starting over doesn't wipe the box: an unseen drain at the bottom of the basin pulls, and everything in it (lava, wood,
+// flowers, smoke, fire, all still looking like themselves) runs out like water, sliding toward the hole. When the
+// basin is empty, or after DRAIN_MAX seconds, the mark comes back. Reduced motion just resets.
+let drain = null, mouth = null, drainX = 0;
+function plugAt() {   // CSS px: centre of the plug on the basin's floor and its width
+  const cx = fit.cx + ENC.x * fit.scale, cy = fit.cy + ENC.y * fit.scale, R = (ENC.r + P.ringGap * BAR) * fit.scale;
+  return { x: cx, y: Math.min(cy + R, floorDev / dpr), w: 2 * R * Math.sin(DRAIN_DEG / 2 * Math.PI / 180) };
+}
+function startDrain() {
+  if (drain) return;
+  if (lab.calm || !built) { reset(); return; }
+  const pg = plugAt(), x0 = Math.max(0, Math.floor(((pg.x - pg.w / 2) * dpr - offX) / cd)), x1 = Math.min(W - 1, Math.ceil(((pg.x + pg.w / 2) * dpr - offX) / cd));
+  mouth = new Uint8Array(N); drainX = Math.round((pg.x * dpr - offX) / cd);
+  // the mouth: the two lowest open cells of each column under the plug
+  for (let x = x0; x <= x1; x++) {
+    let y = H - 1;
+    while (y > 0 && fixedAt(y * W + x)) y--;
+    mouth[y * W + x] = 1; if (y > 0) mouth[(y - 1) * W + x] = 1;
+  }
+  hold.fill(0); paint.on = false; rainT = 0;
+  drain = { t: 0 };
+}
+function drainTick() {
+  S = S === 255 ? 1 : S + 1;
+  T++;
+  let left = 0;
+  for (let y = H - 1; y >= 0; y--) {
+    const ltr = ((y + T) & 1) === 0, row = y * W;
+    for (let k = 0; k < W; k++) {
+      const x = ltr ? k : W - 1 - k, i = row + x;
+      if (type[i] === EMPTY || stamp[i] === S || fixedAt(i)) continue;
+      left++;
+      if (mouth[i]) { put(i, EMPTY); continue; }                                    // out it goes
+      if (y < H - 1 && type[i + W] === EMPTY) { swap(i, i + W); continue; }
+      const dir = x < drainX ? 1 : x > drainX ? -1 : rnd() < 0.5 ? -1 : 1;
+      if (y < H - 1) {
+        let moved = false;
+        for (const d of [dir, -dir]) {
+          const nx = x + d;
+          if (nx >= 0 && nx < W && type[i + W + d] === EMPTY && type[i + d] === EMPTY) { swap(i, i + W + d); moved = true; break; }
+        }
+        if (moved) continue;
+      }
+      if (x !== drainX && type[i + dir] === EMPTY) swap(i, i + dir);                // slide toward the hole
+    }
+  }
+  return left;
+}
+
 // ---- reset / loop ----
-let quietT = 0, actAvg = 10, sinceInput = 0, acc = 0, built = false;
+// engaged: someone is playing with it, so every wait before an auto reset doubles; HAND_IDLE s without input ends it
+let quietT = 0, actAvg = 10, sinceInput = 0, runT = 0, acc = 0, built = false, engaged = false, handT = 0, marked = false;   // marked: touched since the last reset
 function reset({ crossfade = true } = {}) {
+  drain = null;
   if (crossfade && built && !lab.calm) { fadeCtx.clearRect(0, 0, W, H); fadeCtx.drawImage(gcv, 0, 0); fade = { t: 0 }; }
   loops++;
   reseed(P.seed * 1000 + loops);
   fillLogo();
-  quietT = 0; actAvg = 10; acc = 0; rainT = 0; sinceInput = 0;
+  quietT = 0; actAvg = 10; acc = 0; rainT = 0; sinceInput = 0; runT = 0; marked = false;
   render();
 }
 function clearAll() { type.fill(EMPTY); hold.fill(0); life.fill(0); aux.fill(0); placeRing(); holdUntil = thawDone = T; quietT = 0; render(); }
-function rebuild() { geometry(); allocate(); built = false; reset({ crossfade: false }); built = true; }
-function touch() { quietT = 0; sinceInput = 0; }
+function rebuild() { geometry(); allocate(); built = false; reset({ crossfade: false }); built = true; layoutTools(); }
+function touch() { quietT = 0; sinceInput = 0; runT = 0; handT = 0; engaged = marked = true; }
 
 function frame(dt) {
   if (fade) { fade.t += dt; if (fade.t >= FADE) fade = null; }
   if (lab.calm) return;
-  sinceInput += dt;
+  sinceInput += dt; handT = paint.on ? 0 : handT + dt;
   if (fade) return;                                   // the mark holds still while the old box fades out
+  if (drain) {
+    drain.t += dt;
+    acc += dt * 60 * P.speed;
+    const n = Math.min(acc | 0, P.speed * 3);
+    acc = Math.min(acc - n, P.speed);
+    let left = 1;
+    for (let k = 0; k < n && left; k++) left = drainTick();
+    if (!left || drain.t > DRAIN_MAX) { drain = null; reset({ crossfade: !!left }); }
+    return;
+  }
   if (paint.on) paintLine(paint.x, paint.y, paint.x, paint.y);
   if (rainT > 0) rainT -= dt;
   acc += dt * 60 * P.speed;
   const n = Math.min(acc | 0, P.speed * 3);
   acc = Math.min(acc - n, P.speed);
-  act = 0;
+  act = 0; burning = 0;
   for (let k = 0; k < n; k++) tick();
   if (n) actAvg = actAvg * 0.92 + (act / n) * 0.08;
-  quietT = T > thawDone && actAvg < QUIET_ACT && !paint.on ? quietT + dt : 0;
-  if (P.autoReset && (quietT > P.quiet || sinceInput > IDLE_RESET)) reset();
+  const share = actAvg / N, thawed = T > thawDone;
+  quietT = thawed && !paint.on && !burning && share < (quietT > 0 ? BUSY_ACT : QUIET_ACT) ? quietT + dt : 0;
+  if (thawed) runT += dt;
+  // gone: back to the demo, draining their box first unless a reset already cleared it
+  if (engaged && handT > HAND_IDLE) { engaged = false; if (P.autoReset && marked) { startDrain(); return; } }
+  const wait = engaged ? 2 : 1;
+  if (P.autoReset && (quietT > P.quiet * wait || runT > (RUN_CAP + P.quiet) * wait || sinceInput > IDLE_RESET)) startDrain();
 }
 
 // ---- painting ----
@@ -1033,6 +1205,7 @@ function paintAt(cx, cy) {
   }
 }
 function paintLine(x0, y0, x1, y1) {
+  if (drain) return;
   const n = Math.max(1, Math.ceil(Math.hypot(x1 - x0, y1 - y0) / Math.max(1, P.brush * 0.6)));
   for (let k = 0; k <= n; k++) paintAt(Math.round(x0 + (x1 - x0) * k / n), Math.round(y0 + (y1 - y0) * k / n));
   touch();
@@ -1059,7 +1232,7 @@ canvas.addEventListener('pointercancel', stop);
 addEventListener('keydown', e => {
   if (e.target.closest?.('input, select, textarea') || e.metaKey || e.ctrlKey || e.altKey) return;
   const k = +e.key;
-  if (k >= 1 && k <= TOOLS.length) pickTool(TOOLS[k - 1]);
+  if (k >= 1 && k <= TOOLS.length) { pickTool(TOOLS[k - 1]); touch(); }
   else if (e.key === '[') lab.set('brush', Math.max(1, P.brush - 1));
   else if (e.key === ']') lab.set('brush', Math.min(16, P.brush + 1));
 });
@@ -1072,12 +1245,12 @@ lab.on('change', key => {
     // swap the old bedrock for the new in place; anything it lands on is simply replaced
     for (let i = 0; i < N; i++) if (fixedAt(i)) { type[i] = EMPTY; aux[i] = 0; }
     fossilCache = null;
-    placeRing(); render();
+    placeRing(); render(); layoutTools();
   }
   touch();
 });
 lab.on('palette', () => { buildColors(); render(); });
-lab.on('resize', () => { if (!built) return; if (geometry()) rebuild(); else render(); });
+lab.on('resize', () => { if (!built) return; if (geometry()) rebuild(); else render(); layoutTools(); });
 
 buildColors();
 rebuild();
@@ -1085,7 +1258,7 @@ rebuild();
 let hudTick = 0, ms = 0;
 function hud() {
   const c = n => counts[n];
-  const flowers = c(ROOT), status = T < holdUntil ? `holding <b>${((holdUntil - T) / NOMINAL_HZ).toFixed(1)} s</b>` : T < thawDone ? '<b>thawing</b>' : quietT > 0.5 ? `settled <b>${quietT.toFixed(1)}/${P.quiet} s</b>` : 'running';
+  const flowers = c(ROOT), status = drain ? '<b>draining</b>' : T < holdUntil ? `holding <b>${((holdUntil - T) / NOMINAL_HZ).toFixed(1)} s</b>` : T < thawDone ? '<b>thawing</b>' : quietT > 0.5 ? `settled <b>${quietT.toFixed(1)}/${P.quiet * (engaged ? 2 : 1)} s</b>` : engaged ? 'yours' : 'running';
   lab.hud(`water <b>${c(WATER)}</b> · lava <b>${c(LAVA)}</b> · wood <b>${c(WOOD)}</b> · stone <b>${c(STONE)}</b> · ash <b>${c(ASH)}</b> · steam <b>${c(STEAM)}</b>` +
     ` · flowers <b>${flowers}</b>${c(FIRE) ? ` · fire <b>${c(FIRE)}</b>` : ''}<br>${status} · ${W}×${H} cells · <b>${ms.toFixed(2)} ms</b>`);
 }
@@ -1107,6 +1280,7 @@ window.__lab = {
   ticks(n = 1) { for (let k = 0; k < n; k++) tick(); render(); hud(); return this.state(); },
   renderOnce() { render(); hud(); },
   reset: () => reset({ crossfade: false }),
+  drain: () => startDrain(), draining: () => !!drain,
   paint(el, x, y, r = P.brush) { const t = TOOLS.find(q => q.key === el) || TOOLS[0]; const prev = tool, pb = P.brush; tool = t; P.brush = r; paintAt(x, y); tool = prev; P.brush = pb; render(); },
   state() {
     const c = {}; const n = new Uint32Array(16); const sp = {};

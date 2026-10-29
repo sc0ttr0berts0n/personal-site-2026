@@ -227,8 +227,7 @@ vec3 liqC(float depthT, vec2 pl) {
   if (uChroma < 0.5) return rampC(depthT);
   float ph = uBase, edge = 0.0, rip = 0.0;
   float nz = uFrontN > 0 ? churn(pl) : 0.0;
-  for (int i = 0; i < 6; i++) {
-    if (i >= uFrontN) break;
+  for (int i = 0; i < uFrontN; i++) {
     vec4 F = uFront[i];
     vec2 dv = pl - F.xy;
     float R = (uClk - F.z) * uWaveV, r = length(dv);
@@ -336,11 +335,10 @@ void main() {
   vec3 rd = normalize(vec3(ndc * uHalf, 0.0) - ro);
   vec3 rol = vec3(rotI(ro.xy - uOff), ro.z), rdl = toLocalDir(rd);
 
-  // sphere trace the outer glass
+  // sphere trace the outer glass (loops run to a uniform count: a constant bound lets ANGLE → D3D unroll them, ~3 s more compile)
   float t = (0.03 - ro.z) / rd.z, tEnd = (-uD - 0.03 - ro.z) / rd.z;
   bool hit = false; vec3 p;
-  for (int k = 0; k < 200; k++) {
-    if (k >= uSteps) break;
+  for (int k = 0; k < uSteps; k++) {
     p = rol + rdl * t;
     float d = outerD(p);
     if (d < 0.0015) { hit = true; break; }
@@ -358,8 +356,7 @@ void main() {
   // walk through the glass until we reach the cavity or leave the solid
   vec3 q = p - n * 0.004;
   float glassLen = 0.0; int state = 0; vec3 e;
-  for (int k = 0; k < 64; k++) {
-    if (k >= uGSteps) break;
+  for (int k = 0; k < uGSteps; k++) {
     e = evalP(q);
     float g = min(-e.x, e.y);
     if (g < 0.0015) { state = e.y < -e.x ? 1 : 2; break; }
@@ -395,8 +392,7 @@ void main() {
     vec2 frontW = rotF(c.xy) + uOff;
     if (inL && uBub > 0.0) bub = bubbles(frontW, pid);
     Tr = vec3(1.0); Lc = vec3(0.0);
-    for (int k = 0; k < 64; k++) {
-      if (k >= uVSteps) break;
+    for (int k = 0; k < uVSteps; k++) {
       float h = clamp(-cd, 0.025, 0.09);
       vec3 c2 = c + Dc * h;
       float cd2 = cavD(c2);
