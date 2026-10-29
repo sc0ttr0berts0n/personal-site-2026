@@ -26,6 +26,7 @@ const lab = createLab({
   title: 'Neural Mark',
   blurb: 'A small neural network learns the mark from scratch, live, in seconds. Scribble on it and watch it forget, then heal.',
   teaches: 'A neural network written from scratch in plain JavaScript, no ML library. It trains in a Web Worker so the page keeps its frame rate, with WebGL2 drawing what it has learned; it pauses when the tab is hidden and falls back to time-sliced work where workers aren’t available.',
+  feed: { touch: 'drag', hint: 'draw on it' },
   palettes: ['cmy', 'spectrum', 'synthwave', 'ember', 'reef', 'aurora', 'ultraviolet', 'gold'],
   defaultPalette: 'ember',
   params: {

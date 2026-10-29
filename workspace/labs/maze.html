@@ -32,6 +32,7 @@ const lab = createLab({
   blurb: 'Each chevron holds its own maze, and A* solves all three at once. Change the heuristic and see how much of each maze it has to explore.',
   teaches: 'Plain Canvas 2D on stacked layers (floor, search, walls, overlay), so only what changes gets redrawn. The maze grid is derived from the logo’s own SVG path data, and A* runs live, step by step, with its heuristic and weight as controls.',
   hint: 'tap a maze to move its start',
+  feed: { touch: 'tap', hint: 'tap a maze to move its start' },
   palettes: [MONO],
   defaultPalette: 'mono',
   params: {

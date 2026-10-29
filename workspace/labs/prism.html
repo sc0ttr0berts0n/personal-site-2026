@@ -38,7 +38,8 @@ const lab = createLab({
   title: 'Prism',
   blurb: 'A laser crosses the mark from above. Each color bends at its own angle, and steep rays get trapped, bouncing around inside the glass.',
   teaches: 'three.js loaded straight from a CDN through an import map, with no build step. A custom GLSL shader bends the background grid through the glass once per color channel, which is where the rainbow fringes come from, and the beams are pixel-exact screen-space lines with bloom on top. The beams follow Snell’s law at seven wavelengths; the grid fakes it with three, one per color channel.',
-  hint: 'move to aim · click to fire from there',
+  hint: 'move to aim · click to fire from there<br>on touch: drag to aim · lift to fire',
+  feed: { touch: 'drag', hint: 'drag to aim · lift to fire from there' },
   palettes: ['spectrum', 'synthwave', 'reef', 'ember', 'aurora', 'ultraviolet',
     { key: 'neonred', name: 'Neon Red', bg: '#000000', grid: '#170505', ink: '#ff3a24', colors: ['#ff1a0c', '#ff3b22', '#ff5a3a', '#e8200f', '#b80c05'] }],
   defaultPalette: 'spectrum',
@@ -473,18 +474,22 @@ lab.on('change', key => {
 buildBacklight();
 buildEdges(lab.params.rotation);
 
-// pointer: aim while moving, click moves the emitter to that spot
+// pointer: aim while moving, click moves the emitter to that spot.
+// A finger can't hover, so on touch a drag aims and lifting is the click: the emitter moves to where it lifted.
 const toWorld = e => {
   const r = canvas.getBoundingClientRect();
   return { x: (e.clientX - r.left - sq.w / 2) * k / camera.zoom, z: (e.clientY - r.top - sq.h / 2) * k / camera.zoom };
 };
 let aim = null, source = { x: -4.4, z: 1.1 };
+const fireFrom = p => { if (Math.hypot(p.x - source.x, p.z - source.z) > 0.6) { source = p; aim = null; } };
 canvas.addEventListener('pointermove', e => { aim = toWorld(e); });
 canvas.addEventListener('pointerleave', () => { aim = null; });
 canvas.addEventListener('pointerdown', e => {
-  const p = toWorld(e);
-  if (Math.hypot(p.x - source.x, p.z - source.z) > 0.6) { source = p; aim = null; }
+  if (e.pointerType === 'touch') { canvas.setPointerCapture(e.pointerId); aim = toWorld(e); }
+  else fireFrom(toWorld(e));
 });
+canvas.addEventListener('pointerup', e => { if (e.pointerType === 'touch') { fireFrom(toWorld(e)); aim = null; } });
+canvas.addEventListener('pointercancel', () => { aim = null; });
 
 let hudTick = 0;
 function frame(dt, t) {

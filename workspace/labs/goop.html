@@ -40,6 +40,7 @@ const lab = createLab({
   blurb: 'The mark rises out of a pool of black oil. Sheets of it slide off, long ropes stretch back down to the pool and snap, and the clean mark shows through.',
   teaches: 'Beautiful eye candy for its own sake. Raw WebGL2, no library: the logo’s outline is baked into a half-float texture, and one large shader draws the oil, the drips and the reflections. It’s the heaviest shader on the site, so it compiles in the background while the page stays responsive.',
   hint: 'tap the pool for a ripple · drag through it for a wake<br>tap the mark to pour a drip',
+  feed: { touch: 'drag', hint: 'tap the pool · tap the mark' },
   palettes: [OIL, HONEY, SLIME, GRAPE, NEON],
   defaultPalette: 'neon',
   grid: false,

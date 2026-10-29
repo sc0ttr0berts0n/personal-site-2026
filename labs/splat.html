@@ -51,6 +51,7 @@ const lab = createLab({
   blurb: 'The mark is made of slime and falling fast. It splats on the floor, the next mark pops out of the splat, then the floor gives way and down they go.',
   teaches: 'Raw WebGL2: every bead of goo is drawn with instanced rendering into a floating-point field (metaballs), then one composite pass lights the slime and the floors. The zoom is just perspective: a steady fall reads as an accelerating zoom.',
   hint: 'tap it mid-fall to tilt it',
+  feed: { touch: 'tap', hint: 'tap it mid-fall to tilt it' },
   grid: false,
   palettes: [
     { key: 'slime', name: 'Slime', bg: '#000000', grid: '#16161c', ink: '#f4f4f6', colors: ['#8cff1a', '#ff7a00', '#ff2fa8', '#1ee3ff', '#ffe414', '#9d4dff'] },

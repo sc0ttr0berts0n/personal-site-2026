@@ -10,6 +10,9 @@ import { PALETTES } from './palettes.js';
  * @param {string} spec.blurb    one or two sentences
  * @param {string} spec.teaches  the concept, shown under the controls
  * @param {string} [spec.hint]   short interaction hint, top-right of the stage
+ * @param {{touch:'tap'|'hold'|'drag'|'none', hint?:string}} [spec.feed]  what a finger does to the toy in the site's
+ *   feed: 'none' lets a drag anywhere on it move to the next toy; hint is touch wording, shown as it arrives.
+ *   Kept on one line in each lab: npm run sync reads it into the feed's manifest.
  * @param {object} spec.params   { key: { type: 'range'|'select'|'toggle'|'heading', label, ... } } (heading = section label only)
  * @param {string[]} [spec.palettes] keys of PALETTES, or palette objects; 'bench' is always first
  * @param {{label:string, action:Function, primary?:boolean}[]} [spec.actions]
@@ -22,6 +25,8 @@ export function createLab(spec) {
   let motionOverride = false;
   try { motionOverride = localStorage.getItem('lab-motion') === 'on'; } catch (e) {}
   const calm = prefersCalm && !motionOverride;
+  // the feed's embed hooks pass this up with the first frame (embed/lab-embed.js)
+  if (spec.feed && !window.labFeed) window.labFeed = spec.feed;
   const listeners = { change: [], palette: [], resize: [], reset: [] };
   const emit = (ev, ...a) => listeners[ev].forEach(fn => fn(...a));
 

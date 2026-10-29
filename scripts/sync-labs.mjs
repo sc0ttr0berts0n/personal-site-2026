@@ -44,6 +44,12 @@ const field = (src, key) => {
   return m ? m[1].replace(/\\(.)/g, '$1') : '';
 };
 
+// feed: { touch: 'drag', hint: '...' } from a lab's createLab spec (one line), for the feed to know before it loads
+const feedField = src => {
+  const m = src.match(/\bfeed:\s*\{\s*touch:\s*'(\w+)'(?:,\s*hint:\s*'((?:[^'\\]|\\.)*)')?\s*\}/);
+  return m ? { touch: m[1], touchHint: (m[2] || '').replace(/\\(.)/g, '$1') } : {};
+};
+
 const labs = [];
 for (const file of (await readdir(SRC)).filter(f => f.endsWith('.html')).sort()) {
   const slug = basename(file, '.html');
@@ -67,7 +73,7 @@ for (const file of (await readdir(SRC)).filter(f => f.endsWith('.html')).sort())
     : [];
   labs.push({
     slug, number: field(html, 'number'), title: field(html, 'title'),
-    blurb: field(html, 'blurb'), teaches: field(html, 'teaches'), hint: field(html, 'hint'),
+    blurb: field(html, 'blurb'), teaches: field(html, 'teaches'), hint: field(html, 'hint'), ...feedField(html),
     href: `labs/${file}`, versions
   });
 }

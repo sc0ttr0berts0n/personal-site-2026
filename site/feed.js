@@ -125,7 +125,7 @@ function makeSlide(t, play, defer = false) {
       </button>
       <a class="btn primary play" href="${esc(pageHref(t))}">Change This <span aria-hidden="true">→</span></a>
     </div>`;
-  const s = { toy: t, el, iframe: null, ready: false, playing: play, offset: 0, born: performance.now(), touch: TOUCH[t.slug]?.touch || 'none', hint: TOUCH[t.slug]?.hint || '' };
+  const s = { toy: t, el, iframe: null, ready: false, playing: play, offset: 0, born: performance.now(), touch: t.touch || TOUCH[t.slug]?.touch || 'none', hint: t.touchHint || TOUCH[t.slug]?.hint || '' };
   const img = el.querySelector('.poster');
   img.onload = () => { img.hidden = false; el.classList.add('has-poster'); };
   img.onerror = () => { const own = posters.get(t.slug); if (own && img.src !== own) img.src = own; };

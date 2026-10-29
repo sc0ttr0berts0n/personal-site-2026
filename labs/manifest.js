@@ -6,7 +6,9 @@ export const LABS = [
     "title": "Prism",
     "blurb": "A laser crosses the mark from above. Each color bends at its own angle, and steep rays get trapped, bouncing around inside the glass.",
     "teaches": "three.js loaded straight from a CDN through an import map, with no build step. A custom GLSL shader bends the background grid through the glass once per color channel, which is where the rainbow fringes come from, and the beams are pixel-exact screen-space lines with bloom on top. The beams follow Snell’s law at seven wavelengths; the grid fakes it with three, one per color channel.",
-    "hint": "move to aim · click to fire from there",
+    "hint": "move to aim · click to fire from there<br>on touch: drag to aim · lift to fire",
+    "touch": "drag",
+    "touchHint": "drag to aim · lift to fire from there",
     "href": "labs/prism.html",
     "versions": []
   },
@@ -17,6 +19,8 @@ export const LABS = [
     "blurb": "Each chevron is a sealed glass vessel, part-filled with liquid. Tilt it and watch the surface slosh, then settle level again.",
     "teaches": "Inspired in part by Valve’s liquid-in-a-bottle work: no fluid solver, just a level surface plus damped sloshing waves. The whole scene is one full-screen raymarching shader in three.js, tracing the glass and liquid through distance fields baked from the logo. It’s heavy, so it compiles in the background and the page never stalls.",
     "hint": "drag to tilt · flick to slosh",
+    "touch": "drag",
+    "touchHint": "drag to tilt · flick to slosh",
     "href": "labs/fluid.html",
     "versions": [
       {
@@ -36,6 +40,8 @@ export const LABS = [
     "blurb": "The mark rises out of a pool of black oil. Sheets of it slide off, long ropes stretch back down to the pool and snap, and the clean mark shows through.",
     "teaches": "Beautiful eye candy for its own sake. Raw WebGL2, no library: the logo’s outline is baked into a half-float texture, and one large shader draws the oil, the drips and the reflections. It’s the heaviest shader on the site, so it compiles in the background while the page stays responsive.",
     "hint": "tap the pool for a ripple · drag through it for a wake<br>tap the mark to pour a drip",
+    "touch": "drag",
+    "touchHint": "tap the pool · tap the mark",
     "href": "labs/goop.html",
     "versions": [
       {
@@ -67,6 +73,8 @@ export const LABS = [
     "blurb": "The mark stands on three slim plinths with rubber caps. Pull back anywhere and let go to throw a ball at it.",
     "teaches": "Canvas 2D drawing with planck.js, a JavaScript port of the Box2D physics engine. The logo’s concave shapes are cut into convex pieces the engine can simulate, and lines snap to whole device pixels so they stay sharp on any screen.",
     "hint": "drag back anywhere · release to fling<br>mark = 1 m wide",
+    "touch": "drag",
+    "touchHint": "pull back · let go to throw",
     "href": "labs/knockout.html",
     "versions": []
   },
@@ -77,6 +85,8 @@ export const LABS = [
     "blurb": "A cold dust cloud collapses into the mark.",
     "teaches": "A volumetric cloud in three.js, raymarched at reduced resolution and smoothed over several frames by temporal reprojection, the trick games use to make expensive effects affordable. A pull field shaped like the logo draws the gas in, and it spins up as it shrinks, like a real collapsing cloud.",
     "hint": "drag to orbit · tap to replay",
+    "touch": "drag",
+    "touchHint": "drag to orbit · tap to replay",
     "href": "labs/bigbang.html",
     "versions": [
       {
@@ -107,7 +117,9 @@ export const LABS = [
     "title": "Radiant",
     "blurb": "A lamp glows behind the mark in a hazy room and carves out light shafts as the light shines through.",
     "teaches": "Two-pass god rays in three.js: render the lamp and a black silhouette of the logo off screen, then blur it outward from the light. Colors are mixed in OKLab, so gradients pass through clean hues instead of muddy gray.",
-    "hint": "move to steer the light · click to pin it",
+    "hint": "move to steer the light · click to pin it<br>on touch: drag to steer · lift to pin",
+    "touch": "drag",
+    "touchHint": "drag to steer the light · lift to pin it",
     "href": "labs/godrays.html",
     "versions": [
       {
@@ -131,6 +143,8 @@ export const LABS = [
     "blurb": "Each chevron holds its own maze, and A* solves all three at once. Change the heuristic and see how much of each maze it has to explore.",
     "teaches": "Plain Canvas 2D on stacked layers (floor, search, walls, overlay), so only what changes gets redrawn. The maze grid is derived from the logo’s own SVG path data, and A* runs live, step by step, with its heuristic and weight as controls.",
     "hint": "tap a maze to move its start",
+    "touch": "tap",
+    "touchHint": "tap a maze to move its start",
     "href": "labs/maze.html",
     "versions": [
       {
@@ -162,6 +176,8 @@ export const LABS = [
     "blurb": "A Galton board everywhere the mark isn’t, cut along the mark’s own angles. Tap to drop a ball or hold to pour, and watch the bins lean toward a bell curve.",
     "teaches": "Canvas 2D with planck.js physics for the balls. Every peg is placed from the logo’s geometry, so the board fits the mark exactly. Pour enough balls and the bins lean toward a bell curve, with a dent where the mark casts its shadow.",
     "hint": "tap to drop at that x · hold to pour<br>mark = 40 cm wide",
+    "touch": "hold",
+    "touchHint": "tap to drop · hold to pour",
     "href": "labs/pachinko.html",
     "versions": [
       {
@@ -176,7 +192,9 @@ export const LABS = [
     "title": "Neural Mark",
     "blurb": "A small neural network learns the mark from scratch, live, in seconds. Scribble on it and watch it forget, then heal.",
     "teaches": "A neural network written from scratch in plain JavaScript, no ML library. It trains in a Web Worker so the page keeps its frame rate, with WebGL2 drawing what it has learned; it pauses when the tab is hidden and falls back to time-sliced work where workers aren’t available.",
-    "hint": "",
+    "hint": "draw on it",
+    "touch": "drag",
+    "touchHint": "draw on it",
     "href": "labs/neural.html",
     "versions": [
       {
@@ -192,6 +210,8 @@ export const LABS = [
     "blurb": "The mark as a sandbox of lava, water and wood. Lava eats the wood, water and lava make stone and steam, and wet ground grows flowers.",
     "teaches": "A cellular automaton on Canvas 2D, writing raw pixels through ImageData, one pixel per grain. A seeded random number generator means each loop replays exactly until you paint on it.",
     "hint": "drag to paint · keys 1–7 pick · [ ] brush",
+    "touch": "drag",
+    "touchHint": "drag to paint",
     "href": "labs/sand.html",
     "versions": [
       {
@@ -239,6 +259,8 @@ export const LABS = [
     "blurb": "The mark, built as a still life in Conway’s Game of Life. One glider is enough to unravel it, and when the chaos burns out, it rebuilds.",
     "teaches": "Conway’s Game of Life on Canvas 2D, on a grid sheared to the logo’s 42.8° edges. The rules only care about neighbors, not angles, so the slant costs nothing, and the still life is laid out so not one cell moves until you disturb it.",
     "hint": "tap to drop the brush · drag to draw cells<br>gliders aim at the mark",
+    "touch": "drag",
+    "touchHint": "tap or drag to draw cells",
     "href": "labs/life.html",
     "versions": [
       {
@@ -258,6 +280,8 @@ export const LABS = [
     "blurb": "The mark is made of slime and falling fast. It splats on the floor, the next mark pops out of the splat, then the floor gives way and down they go.",
     "teaches": "Raw WebGL2: every bead of goo is drawn with instanced rendering into a floating-point field (metaballs), then one composite pass lights the slime and the floors. The zoom is just perspective: a steady fall reads as an accelerating zoom.",
     "hint": "tap it mid-fall to tilt it",
+    "touch": "tap",
+    "touchHint": "tap it mid-fall to tilt it",
     "href": "labs/splat.html",
     "versions": []
   }
