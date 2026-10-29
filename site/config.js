@@ -14,16 +14,17 @@ export const START = null;
 // they now compile in the background and set window.labWarming until they can draw, so the list is empty.
 export const NO_PRELOAD = [];
 
-// What each toy does with a finger in the feed, until the lab says so itself (window.labFeed, see embed/lab-embed.js).
+// Fallback for what each toy does with a finger in the feed. Each lab now says so itself, in the feed: line of its
+// createLab spec (read into labs/manifest.js by npm run sync, and passed up at runtime as window.labFeed).
 // touch: 'tap' | 'hold' | 'drag' gets pointer input in the middle of the screen; 'none' lets a drag anywhere swipe.
 // hint: a few words shown over the toy when it arrives, until it's touched. Touch wording; mice see the lab's own hint.
 export const TOUCH = {
-  prism:    { touch: 'tap',  hint: 'tap to fire the laser from there' },
+  prism:    { touch: 'drag', hint: 'drag to aim · drag the emitter to move it' },
   fluid:    { touch: 'drag', hint: 'drag to tilt · flick to slosh' },
   goop:     { touch: 'drag', hint: 'tap the pool · tap the mark' },
   knockout: { touch: 'drag', hint: 'pull back · let go to throw' },
   bigbang:  { touch: 'drag', hint: 'drag to orbit · tap to replay' },
-  godrays:  { touch: 'drag', hint: 'touch to steer the light' },
+  godrays:  { touch: 'drag', hint: 'drag to steer the light · lift to pin it' },
   maze:     { touch: 'tap',  hint: 'tap a maze to move its start' },
   pachinko: { touch: 'hold', hint: 'tap to drop · hold to pour' },
   neural:   { touch: 'drag', hint: 'draw on it' },

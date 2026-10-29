@@ -44,6 +44,12 @@ const field = (src, key) => {
   return m ? m[1].replace(/\\(.)/g, '$1') : '';
 };
 
+// feed: { touch: 'drag', hint: '...' } from a lab's createLab spec (one line), for the feed to know before it loads
+const feedField = src => {
+  const m = src.match(/\bfeed:\s*\{\s*touch:\s*'(\w+)'(?:,\s*hint:\s*'((?:[^'\\]|\\.)*)')?\s*\}/);
+  return m ? { touch: m[1], touchHint: (m[2] || '').replace(/\\(.)/g, '$1') } : {};
+};
+
 const labs = [];
 for (const file of (await readdir(SRC)).filter(f => f.endsWith('.html')).sort()) {
   const slug = basename(file, '.html');
@@ -65,9 +71,10 @@ for (const file of (await readdir(SRC)).filter(f => f.endsWith('.html')).sort())
   const versions = (await exists(vpath))
     ? (await readdir(vpath)).filter(f => f.endsWith('.html')).sort().map(f => ({ name: basename(f, '.html'), href: `labs/notes/versions/${vdir}/${f}` }))
     : [];
+  const spec = html.replace(/\bfeed:\s*\{[^}]*\}/, '');   // so a lab without a hint doesn't pick up its feed hint
   labs.push({
-    slug, number: field(html, 'number'), title: field(html, 'title'),
-    blurb: field(html, 'blurb'), teaches: field(html, 'teaches'), hint: field(html, 'hint'),
+    slug, number: field(spec, 'number'), title: field(spec, 'title'),
+    blurb: field(spec, 'blurb'), teaches: field(spec, 'teaches'), hint: field(spec, 'hint'), ...feedField(html),
     href: `labs/${file}`, versions
   });
 }

@@ -41,7 +41,8 @@ const lab = createLab({
   title: 'Prism',
   blurb: 'A laser crosses the mark from above. Each color bends at its own angle, and steep rays get trapped, bouncing around inside the glass.',
   teaches: 'three.js loaded straight from a CDN through an import map, with no build step. A custom GLSL shader bends the background grid through the glass once per color channel, which is where the rainbow fringes come from, and the beams are pixel-exact screen-space lines with bloom on top. The beams follow Snell’s law at seven wavelengths; the grid fakes it with three, one per color channel.',
-  hint: 'move to aim · click to fire from there',
+  hint: 'move to aim · drag the emitter to move it<br>on touch: drag to aim',
+  feed: { touch: 'drag', hint: 'drag to aim · drag the emitter to move it' },
   palettes: ['spectrum', 'synthwave', 'reef', 'ember', 'aurora', 'ultraviolet',
     { key: 'neonred', name: 'Neon Red', bg: '#000000', grid: '#170505', ink: '#ff3a24', colors: ['#ff1a0c', '#ff3b22', '#ff5a3a', '#e8200f', '#b80c05'] }],
   defaultPalette: 'spectrum',
@@ -476,18 +477,75 @@ lab.on('change', key => {
 buildBacklight();
 buildEdges(lab.params.rotation);
 
-// pointer: aim while moving, click moves the emitter to that spot
+// pointer: the beam aims at the pointer, and dragging the emitter itself moves it.
+// A mouse aims by hovering; a finger can't hover, so it aims while dragging and the beam holds that angle after it lifts.
+// While the emitter is dragged the aim point stays where it was, so the beam keeps pointing at it from the new spot.
 const toWorld = e => {
   const r = canvas.getBoundingClientRect();
   return { x: (e.clientX - r.left - sq.w / 2) * k / camera.zoom, z: (e.clientY - r.top - sq.h / 2) * k / camera.zoom };
 };
-let aim = null, source = { x: -4.4, z: 1.1 };
-canvas.addEventListener('pointermove', e => { aim = toWorld(e); });
-canvas.addEventListener('pointerleave', () => { aim = null; });
+let aim = null, source = { x: -4.4, z: 1.1 }, moving = null;
+// within a fingertip (about 24 px) of the emitter, or 0.6 units, whichever is bigger
+const onEmitter = (p, e) => Math.hypot(p.x - source.x, p.z - source.z) < Math.max(0.6, (e.pointerType === 'touch' ? 24 : 12) * k / camera.zoom);
+canvas.addEventListener('pointermove', e => {
+  const p = toWorld(e);
+  if (moving === e.pointerId) { source = p; return; }
+  // a mouse reaching for the emitter leaves the aim where it was
+  const grab = e.pointerType === 'mouse' && onEmitter(p, e);
+  if (!grab) aim = p;
+  if (e.pointerType === 'mouse') canvas.style.cursor = grab ? 'grab' : '';
+});
+// a mouse that leaves lets the sweep resume, unless it only went onto the sweep toggle
+canvas.addEventListener('pointerleave', e => {
+  if (e.pointerType !== 'touch' && moving === null && !e.relatedTarget?.closest?.('.sweep-toggle')) aim = null;
+});
 canvas.addEventListener('pointerdown', e => {
   const p = toWorld(e);
-  if (Math.hypot(p.x - source.x, p.z - source.z) > 0.6) { source = p; aim = null; }
+  if (onEmitter(p, e)) {
+    moving = e.pointerId;
+    canvas.setPointerCapture(e.pointerId);
+    if (e.pointerType === 'mouse') canvas.style.cursor = 'grabbing';
+    return;
+  }
+  if (e.pointerType === 'touch') canvas.setPointerCapture(e.pointerId);
+  aim = p;
 });
+const stopMoving = e => { if (moving === e.pointerId) { moving = null; if (e.pointerType === 'mouse') canvas.style.cursor = 'grab'; } };
+canvas.addEventListener('pointerup', stopMoving);
+canvas.addEventListener('pointercancel', stopMoving);
+
+// The ambient sweep: aiming pauses it, holding the beam where it was left. A small bubble beside the emitter,
+// drawn in the mark's own hairline style, plays or pauses it.
+let beamA = null;                     // the beam's angle, eased so a resumed sweep glides back rather than jumps
+const sweeping = () => lab.params.sweep && !aim;
+const toggle = document.createElement('div');
+toggle.className = 'sweep-toggle';
+toggle.setAttribute('role', 'button');
+toggle.tabIndex = 0;
+toggle.setAttribute('aria-label', 'Resume the sweep');
+toggle.innerHTML = `<svg viewBox="0 0 22 22" width="22" height="22" aria-hidden="true"><circle cx="11" cy="11" r="10"/>
+  <path class="pause" d="M9 7.5v7M13 7.5v7"/><path class="play" d="M9.25 7.25 14.75 11l-5.5 3.75z"/></svg>`;
+lab.stage.appendChild(toggle);
+document.head.insertAdjacentHTML('beforeend', `<style>
+  .sweep-toggle { position: absolute; left: 0; top: 0; z-index: 1; width: 40px; height: 40px; margin: -20px 0 0 -20px; display: grid; place-items: center;
+    color: var(--ink); opacity: 0; cursor: pointer; touch-action: none; -webkit-tap-highlight-color: transparent; transition: opacity .4s; }
+  .sweep-toggle.shown { opacity: .25; }
+  .sweep-toggle.shown:hover, .sweep-toggle:focus-visible { opacity: .6; outline: none; }
+  .sweep-toggle circle { fill: rgb(0 0 0 / .35); stroke: currentColor; stroke-width: 1; }
+  .sweep-toggle path { fill: none; stroke: currentColor; stroke-width: 1.2; stroke-linejoin: round; stroke-linecap: round; }
+  .sweep-toggle[data-on] .play, .sweep-toggle:not([data-on]) .pause { display: none; }
+</style>`);
+function toggleSweep() {
+  if (sweeping()) {
+    // pause: hold the beam at the angle it has now
+    aim = { x: source.x + Math.cos(beamA) * 4, z: source.z + Math.sin(beamA) * 4 };
+  } else {
+    aim = null;
+    if (!lab.params.sweep) lab.set('sweep', true);
+  }
+}
+toggle.addEventListener('click', toggleSweep);
+toggle.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleSweep(); } });
 
 let hudTick = 0;
 function frame(dt, t) {
@@ -541,11 +599,24 @@ function frame(dt, t) {
   // idle sweep aims across the chevron arms, where the colors split hardest
   const toCenter = Math.atan2(-source.z, -source.x);
   const idleA = toCenter + 0.32 * Math.sin(t * 0.3);
-  const d = aim && Math.hypot(aim.x - source.x, aim.z - source.z) > 0.05
-    ? norm({ x: aim.x - source.x, z: aim.z - source.z })
-    : P.sweep ? { x: Math.cos(idleA), z: Math.sin(idleA) } : norm({ x: -source.x, z: -source.z });
+  const aimed = aim && Math.hypot(aim.x - source.x, aim.z - source.z) > 0.05;
+  const targetA = aimed ? Math.atan2(aim.z - source.z, aim.x - source.x) : P.sweep ? idleA : toCenter;
+  if (beamA === null || aimed) beamA = targetA;
+  else beamA += (Math.atan2(Math.sin(targetA - beamA), Math.cos(targetA - beamA))) * (1 - Math.exp(-dt * 4));
+  const d = { x: Math.cos(beamA), z: Math.sin(beamA) };
   emitter.position.set(source.x, BEAM_Y, source.z);
   emitter.rotation.y = -Math.atan2(d.z, d.x);
+
+  // the toggle sits just under the emitter (over it near the stage's foot), still while the beam moves
+  const ex = sq.w / 2 + source.x / k * camera.zoom, ey = sq.h / 2 + source.z / k * camera.zoom;
+  const tx = Math.max(20, Math.min(sq.w - 20, ex)), ty = ey + 30 > sq.h - 20 ? ey - 30 : Math.max(20, ey + 30);
+  toggle.style.transform = `translate(${tx.toFixed(1)}px, ${ty.toFixed(1)}px)`;
+  toggle.classList.toggle('shown', rt > 1.6);
+  const on = sweeping();
+  if (on !== toggle.hasAttribute('data-on')) {
+    toggle.toggleAttribute('data-on', on);
+    toggle.setAttribute('aria-label', on ? 'Pause the sweep' : 'Resume the sweep');
+  }
 
   stats.tir = 0; stats.rays = 0;
   const segs = [];

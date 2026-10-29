@@ -28,7 +28,8 @@ const lab = createLab({
   title: 'Radiant',
   blurb: 'A lamp glows behind the mark in a hazy room and carves out light shafts as the light shines through.',
   teaches: 'Two-pass god rays in three.js: render the lamp and a black silhouette of the logo off screen, then blur it outward from the light. Colors are mixed in OKLab, so gradients pass through clean hues instead of muddy gray.',
-  hint: 'move to steer the light · click to pin it',
+  hint: 'move to steer the light · click to pin it<br>on touch: drag to steer · lift to pin',
+  feed: { touch: 'drag', hint: 'drag to steer the light · lift to pin it' },
   palettes: ['ember', 'gold', 'aurora', 'synthwave', 'reef', 'ultraviolet', 'spectrum'],
   defaultPalette: 'ember',
   grid: false,
@@ -456,7 +457,9 @@ const toPlane = e => {
 };
 let hover = null;
 canvas.addEventListener('pointermove', e => { hover = toPlane(e); });
-canvas.addEventListener('pointerdown', e => { pinned = hover = toPlane(e); });
+canvas.addEventListener('pointerdown', e => { pinned = hover = toPlane(e); if (e.pointerType === 'touch') canvas.setPointerCapture(e.pointerId); });
+// a finger can't hover: on touch a drag steers and the light stays pinned where it lifts
+canvas.addEventListener('pointerup', e => { if (e.pointerType === 'touch') pinned = toPlane(e); });
 canvas.addEventListener('pointerleave', () => { hover = null; });
 canvas.addEventListener('pointercancel', () => { hover = null; });
 

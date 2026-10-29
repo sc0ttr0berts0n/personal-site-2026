@@ -85,6 +85,7 @@ const lab = createLab({
   blurb: 'The mark, built as a still life in Conway’s Game of Life. One glider is enough to unravel it, and when the chaos burns out, it rebuilds.',
   teaches: 'Conway’s Game of Life on Canvas 2D, on a grid sheared to the logo’s 42.8° edges. The rules only care about neighbors, not angles, so the slant costs nothing, and the still life is laid out so not one cell moves until you disturb it.',
   hint: 'tap to drop the brush · drag to draw cells<br>gliders aim at the mark',
+  feed: { touch: 'drag', hint: 'tap or drag to draw cells' },
   palettes: ['cmy', 'spectrum', 'synthwave', 'ember', 'reef', 'aurora', 'ultraviolet', 'gold'],
   defaultPalette: 'bench',
   params: {
