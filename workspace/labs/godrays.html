@@ -25,9 +25,9 @@ let pinned = null;   // light position the user clicked, in z = 0 screen-plane u
 const MOTES = 9000;
 const lab = createLab({
   number: '06',
-  title: 'Logo Light',
-  blurb: 'A lamp glows behind the mark in a hazy room. You only see the beams where haze is lit, so the chevrons carve shafts of shadow that stream toward you.',
-  teaches: 'crepuscular rays: light scattered by a medium shows the beam, and occluders cut it into shafts (volumetric scattering as a radial blur with decay)',
+  title: 'Radiant',
+  blurb: 'A lamp glows behind the mark in a hazy room and carves out light shafts as the light shines through.',
+  teaches: 'Two-pass god rays in three.js: render the lamp and a black silhouette of the logo off screen, then blur it outward from the light. Colors are mixed in OKLab, so gradients pass through clean hues instead of muddy gray.',
   hint: 'move to steer the light · click to pin it',
   palettes: ['ember', 'gold', 'aurora', 'synthwave', 'reef', 'ultraviolet', 'spectrum'],
   defaultPalette: 'ember',

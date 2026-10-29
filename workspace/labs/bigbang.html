@@ -39,8 +39,8 @@ const QUALITY = { low: [28, 0.45], medium: [40, 0.68], high: [60, 0.85], ultra: 
 const lab = createLab({
   number: '05',
   title: 'Big Bang',
-  blurb: 'A cold dust cloud falls in on itself. It spins up, heats, streams into three chevrons and ignites as the mark. Replay blows it apart and lets gravity do it again.',
-  teaches: 'Gravitational collapse. As the cloud shrinks by a factor r, angular momentum L = mvr is conserved, so its spin climbs as 1/r²; the virial theorem says its temperature climbs as 1/r. The gas is fBm noise summed over octaves, domain-warped, and raymarched through a pull field built from the mark’s signed distance.',
+  blurb: 'A cold dust cloud collapses into the mark.',
+  teaches: 'A volumetric cloud in three.js, raymarched at reduced resolution and smoothed over several frames by temporal reprojection, the trick games use to make expensive effects affordable. A pull field shaped like the logo draws the gas in, and it spins up as it shrinks, like a real collapsing cloud.',
   hint: 'drag to orbit · tap to replay',
   palettes: FILTERS,
   defaultPalette: 'sho',
