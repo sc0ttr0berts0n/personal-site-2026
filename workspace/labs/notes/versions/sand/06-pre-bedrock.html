@@ -1,0 +1,888 @@
+<meta charset="utf-8">
+<title>Falling Sand</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@200;300&family=Familjen+Grotesk:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="shared/lab.css">
+<style>
+  /* element palette, top-left of the stage, like the old web toys */
+  .sand-tools { position: absolute; left: 12px; top: 10px; z-index: 3; display: flex; flex-wrap: wrap; gap: 4px; max-width: min(60%, 470px); }
+  .sand-tools button {
+    display: flex; align-items: center; gap: 6px; padding: 6px 8px; cursor: pointer;
+    font: 400 11px/1 var(--mono); color: var(--ink); border: 1px solid var(--line); border-radius: 2px;
+    background: color-mix(in srgb, var(--bg) 72%, transparent);
+  }
+  .sand-tools button:hover { border-color: var(--dim); }
+  .sand-tools button[aria-pressed="true"] { border-color: var(--ink); }
+  .sand-tools i { width: 9px; height: 9px; display: block; border-radius: 1px; }
+  .sand-tools kbd { font: inherit; color: var(--dim); }
+  .lab-hint { max-width: 36%; }
+  .lab-stage > canvas { cursor: crosshair; }
+</style>
+<script type="module">
+import { createLab } from '../../../shared/lab.js';
+import { LOGO_PIECES, fitLogo, logoPolygons } from '../../../shared/logo.js';
+
+// =====================================================================================
+// Knobs that aren't sliders. Everything Scott might want to argue with lives up here.
+// Sim time: 1 "sim second" = NOMINAL_HZ ticks. At the default 3 steps per frame and 60 fps,
+// sim seconds are real seconds; the Speed slider speeds everything up together.
+// =====================================================================================
+const NOMINAL_HZ = 180;
+const THAW_SPREAD = 1.6;   // sim s from the first cell of the mark released to the last
+const BUD_WAIT = 7;        // bloom steps a bud stays closed (swelling green → colour) before it opens
+const SAP_MAX = 12;        // water a root can hold for its plant
+const ROOT_REACH = 3;      // radius, in cells, a root drinks from
+const SEED_REACH = 2;      // a resting seed germinates when water is this close
+const MAX_SWAY = 3;        // stems may wander this many cells left or right of their root
+const LAVA_REACH = 2;      // lava looks this far sideways for somewhere lower (water uses the Spread slider)
+const GROW_P = 0.028;      // chance per tick a stem tip grows (× Growth rate)
+const BLOOM_P = 0.045;     // chance per tick a bud takes a bloom step (× Growth rate)
+const DRINK_P = 0.07;      // chance per tick a root tries to drink (× Growth rate)
+const FADE = 0.8;          // s crossfade back to the mark on reset
+const QUIET_ACT = 0.8;     // mean events per tick below which the box counts as settled
+const IDLE_RESET = 240;    // s with no input before an auto reset even if it never goes quiet
+const OUTLINE_GAP = 3;     // body outline: one dot every this many dot sizes
+const FLOOR_PAD = 42;      // CSS px between the sandbox floor and the stage bottom (room for the HUD)
+
+// ---- elements ----
+const EMPTY = 0, WATER = 1, LAVA = 2, WOOD = 3, STONE = 4, ASH = 5, STEAM = 6, SMOKE = 7,
+  FIRE = 8, SEED = 9, ROOT = 10, STEM = 11, LEAF = 12, TIP = 13, BUD = 14, PETAL = 15;
+const NAMES = ['empty', 'water', 'lava', 'wood', 'stone', 'ash', 'steam', 'smoke', 'fire', 'seed', 'root', 'stem', 'leaf', 'tip', 'bud', 'petal'];
+const table = (list, v = 1, fill = 0) => { const a = new Uint8Array(16).fill(fill); for (const t of list) a[t] = v; return a; };
+// density decides who sinks through whom; 255 = fixed in place
+const DENS = new Uint8Array(16).fill(255);
+DENS[EMPTY] = 0; DENS[STEAM] = 0; DENS[SMOKE] = 0; DENS[WATER] = 2; DENS[LAVA] = 3; DENS[ASH] = 4; DENS[SEED] = 4; DENS[STONE] = 5;
+const PLANT = table([SEED, ROOT, STEM, LEAF, TIP, BUD, PETAL]);   // burns
+const FERTILE = table([WOOD, STONE, ASH]);                       // water resting on these can plant a seed (the floor counts too)
+const SOFT = table([EMPTY, WATER, STEAM, SMOKE]);                // plants may grow into these
+const THIN = table([STEM, LEAF, TIP, BUD, PETAL]);              // water threads through these without moving them
+
+// ---- flowers: grown cell by cell from these patterns ----
+// '*' is the bud (the top of the stem). Letters are roles: a petal, b petal shade, c centre, d centre dark, g green.
+// Bloom order: green first, then outward from `start` ('origin' = cup opens upward from the stem, 'center' = unfurls).
+const GREEN = [58, 150, 62];
+const SPECIES = [
+  { name: 'tulip', h: [11, 17], sway: 0.03, nLeaves: 2, leaf: [[1, 0], [1, -1], [2, -2], [2, -3]], origin: 'b', start: 'origin',
+    rows: ['a.a.a', 'aabaa', 'abbba', '.b*b.'],
+    variants: [{ a: [232, 36, 54], b: [170, 18, 40] }, { a: [255, 210, 44], b: [228, 150, 18] }, { a: [255, 124, 176], b: [214, 72, 136] }, { a: [164, 74, 214], b: [112, 42, 164] }] },
+  { name: 'rose', h: [12, 18], sway: 0.07, nLeaves: 2, leaf: [[1, 0], [1, -1], [2, -1]], origin: 'g', start: 'center', spiral: true,
+    rows: ['.aba.', 'abbaa', 'abcba', 'aabba', '.aaa.', 'g.*.g'],
+    variants: [{ a: [200, 20, 46], b: [142, 8, 32], c: [92, 0, 22] }, { a: [240, 100, 142], b: [198, 58, 102], c: [150, 30, 72] }, { a: [244, 236, 228], b: [212, 200, 196], c: [180, 168, 166] }] },
+  { name: 'daisy', h: [9, 16], sway: 0.06, nLeaves: 2, leaf: [[1, 0], [2, -1]], origin: 'g', start: 'center',
+    rows: ['...a...', '.a.a.a.', '..ccc..', 'aacdcaa', '..ccc..', '.a.g.a.', '...*...'],
+    variants: [{ a: [248, 248, 242], c: [255, 206, 32], d: [212, 138, 16] }, { a: [206, 176, 246], c: [255, 206, 32], d: [212, 138, 16] }] },
+  { name: 'poppy', h: [10, 18], sway: 0.12, nLeaves: 1, leaf: [[1, 0], [2, -1]], origin: 'g', start: 'center',
+    rows: ['.a.a.', 'aabaa', 'abdba', '.aaa.', '..*..'],
+    variants: [{ a: [255, 70, 36], b: [212, 36, 24], d: [28, 18, 22] }, { a: [255, 150, 32], b: [238, 108, 18], d: [120, 60, 8] }] },
+  { name: 'cornflower', h: [8, 14], sway: 0.12, nLeaves: 1, leaf: [[1, 0], [2, -1]], origin: 'g', start: 'center',
+    rows: ['a.a.a', '.aba.', 'aabaa', '.bbb.', '..*..'],
+    variants: [{ a: [78, 120, 255], b: [44, 64, 206] }, { a: [120, 176, 255], b: [66, 108, 230] }] },
+  { name: 'lavender', h: [6, 11], sway: 0.0, nLeaves: 1, leaf: [[1, 0]], origin: 'g', start: 'origin', grey: true,
+    rows: ['.a.', 'aba', '.a.', 'aba', '.b.', 'aba', '.g.', '.*.'],
+    variants: [{ a: [178, 130, 238], b: [124, 88, 198] }] },
+  { name: 'buttercup', h: [5, 10], sway: 0.15, nLeaves: 1, leaf: [[1, 0]], origin: 'g', start: 'origin',
+    rows: ['a.a', 'aba', '.a.', '.*.'],
+    variants: [{ a: [255, 228, 50], b: [236, 176, 0] }] },
+  // water only: a seed that sprouts under water rises straight to the surface, lays a lily pad on it, and opens a
+  // lotus a few cells above (h counts only the stem above the water)
+  { name: 'lotus', water: true, h: [3, 4], sway: 0, nLeaves: 0, leaf: [], origin: 'b', start: 'origin',
+    rows: ['...a...', 'a..a..a', '.a.b.a.', '.abcba.', 'aabcbaa', '.abbba.', '...*...'],
+    variants: [{ a: [255, 170, 204], b: [236, 104, 156], c: [255, 214, 72] }, { a: [250, 246, 240], b: [240, 196, 214], c: [255, 214, 72] }] }
+];
+const LOTUS = SPECIES.findIndex(s => s.water);
+const PAD_R = [4, 6];      // lily pad half-width, cells
+const LOTUS_CALM = 1.5;    // mean events per tick under which the pools count as settled enough for a lotus
+const MIXES = {
+  meadow: [3, 2, 3, 2, 2, 2, 2],
+  garden: [3, 2, 3, 0, 0, 0, 0],
+  wild:   [0, 0, 1, 3, 3, 2, 3]
+};
+SPECIES.forEach((s, k) => { if (!s.water) MIXES[s.name] = SPECIES.map((_, j) => j === k ? 1 : 0); });
+
+// colour table for petals (aux of a PETAL cell indexes this)
+const COLORS = [];
+const cid = rgb => { COLORS.push(rgb); return COLORS.length - 1; };
+for (const s of SPECIES) {
+  let ox = 0, oy = 0;
+  s.rows.forEach((r, y) => [...r].forEach((ch, x) => { if (ch === '*') { ox = x; oy = y; } }));
+  const cells = [];
+  s.rows.forEach((r, y) => [...r].forEach((ch, x) => { if (ch !== '.' && ch !== '*') cells.push({ dx: x - ox, dy: y - oy, role: ch }); }));
+  let sx = 0, sy = 0;
+  if (s.start === 'center') {
+    const head = cells.filter(c => c.role !== 'g');
+    sx = head.reduce((v, c) => v + c.dx, 0) / head.length; sy = head.reduce((v, c) => v + c.dy, 0) / head.length;
+  }
+  const key = c => {
+    const r = Math.hypot(c.dx - sx, c.dy - sy), a = (Math.atan2(c.dy - sy, c.dx - sx) + Math.PI) / (2 * Math.PI);
+    return (c.role === 'g' ? -100 : 0) + (s.spiral ? r + a : r + a * 0.01);
+  };
+  s.cells = cells.sort((p, q) => key(p) - key(q));
+  s.cid = s.variants.map(v => {
+    const m = {};
+    for (const role of 'abcdg') m[role] = cid(role === 'g' ? GREEN : v[role] || v.a);
+    return m;
+  });
+}
+
+// =====================================================================================
+const lab = createLab({
+  number: '10',
+  title: 'Falling Sand',
+  blurb: 'The mark as a sandbox. Water on the left, lava on the right, wood in the middle. Lava chews through wood a cell at a time, water and lava make stone and steam, and water sitting on wood, stone or ash grows flowers that bloom pixel by pixel.',
+  teaches: 'cellular automata: local rules, update order and scan bias, density swaps, conserved budgets (every petal costs water)',
+  hint: 'drag to paint · keys 1–7 pick · [ ] brush',
+  palettes: [
+    { key: 'nature', name: 'Nature', bg: '#000000', grid: '#17171d', ink: '#f4f4f6', colors: ['#2a74ea', '#8a5530', '#ff7a14', '#e8304a', '#3c9a40'] },
+    'ember', 'reef', 'aurora', 'ultraviolet', 'gold'
+  ],
+  defaultPalette: 'nature',
+  params: {
+    hSim:      { type: 'heading', label: 'Simulation' },
+    speed:     { type: 'range', label: 'Steps per frame', min: 1, max: 8, step: 1, value: 2 },
+    res:       { type: 'range', label: 'Cells across', min: 120, max: 320, step: 10, value: 200 },
+    hold:      { type: 'range', label: 'Hold the mark', min: 0, max: 8, step: 0.1, value: 2, unit: ' s' },
+    thaw:      { type: 'select', label: 'Thaw', value: 'top', options: [['melt', 'Melt from the bottom'], ['top', 'Top down'], ['ripple', 'Ripple from centre'], ['all', 'All at once']] },
+    seed:      { type: 'range', label: 'Random seed', min: 1, max: 99, step: 1, value: 1 },
+    hLava:     { type: 'heading', label: 'Lava' },
+    biteMin:   { type: 'range', label: 'Bite time min', min: 1, max: 400, step: 1, value: 10, unit: ' ticks' },
+    biteMax:   { type: 'range', label: 'Bite time max', min: 1, max: 600, step: 1, value: 50, unit: ' ticks' },
+    lavaFlow:  { type: 'range', label: 'Flow', min: 0.02, max: 1, step: 0.01, value: 0.02 },
+    lavaCool:  { type: 'range', label: 'Cools on its own', min: 0, max: 1, step: 0.05, value: 0.1 },
+    embers:    { type: 'range', label: 'Embers from burning wood', min: 0, max: 1, step: 0.05, value: 0.75 },
+    emberCatch:{ type: 'range', label: 'Ember sets wood alight', min: 0, max: 1, step: 0.05, value: 0.7 },
+    hWater:    { type: 'heading', label: 'Water' },
+    spread:    { type: 'range', label: 'Spread', min: 1, max: 16, step: 1, value: 16, unit: ' cells' },
+    condense:  { type: 'range', label: 'Steam condenses', min: 0.5, max: 10, step: 0.1, value: 1.6, unit: ' s' },
+    rainBack:  { type: 'range', label: 'Steam rains back', min: 0, max: 1, step: 0.05, value: 0.4 },
+    hFlowers:  { type: 'heading', label: 'Flowers' },
+    seeding:   { type: 'range', label: 'Seeding', min: 0, max: 1, step: 0.05, value: 0.3 },
+    growth:    { type: 'range', label: 'Growth rate', min: 0.1, max: 4, step: 0.1, value: 2, unit: '×' },
+    tall:      { type: 'range', label: 'Height', min: 0.4, max: 2.5, step: 0.1, value: 0.7, unit: '×' },
+    spacing:   { type: 'range', label: 'Spacing', min: 2, max: 16, step: 1, value: 11, unit: ' cells' },
+    mix:       { type: 'select', label: 'Species', value: 'meadow', options: [['meadow', 'Meadow (all)'], ['garden', 'Garden: tulip, rose, daisy'], ['wild', 'Wildflowers'], ...SPECIES.filter(s => !s.water).map(s => [s.name, s.name[0].toUpperCase() + s.name.slice(1)])] },
+    lotus:     { type: 'toggle', label: 'Lily pads and lotus in water', value: true },
+    hFire:     { type: 'heading', label: 'Fire' },
+    fireSpread:{ type: 'range', label: 'Spread chance', min: 0, max: 1, step: 0.05, value: 0.8 },
+    burn:      { type: 'range', label: 'Burn time', min: 5, max: 300, step: 5, value: 90, unit: ' ticks' },
+    ash:       { type: 'range', label: 'Ash left behind', min: 0, max: 1, step: 0.05, value: 0.1 },
+    hLoop:     { type: 'heading', label: 'Loop' },
+    autoReset: { type: 'toggle', label: 'Auto reset when settled', value: true },
+    quiet:     { type: 'range', label: 'Settled for', min: 2, max: 30, step: 1, value: 3, unit: ' s' },
+    hLook:     { type: 'heading', label: 'Look' },
+    outline:   { type: 'toggle', label: 'Body outline', value: true },
+    shimmer:   { type: 'toggle', label: 'Shimmer', value: true },
+    glow:      { type: 'toggle', label: 'Lava glow', value: true },
+    hTools:    { type: 'heading', label: 'Brush' },
+    brush:     { type: 'range', label: 'Brush radius', min: 1, max: 16, step: 1, value: 4, unit: ' cells' }
+  },
+  actions: [
+    { label: 'Reset', primary: true, action: () => reset() },
+    { label: 'Rain', action: () => { rainT = 1.6; touch(); } },
+    { label: 'Clear', action: () => { clearAll(); touch(); } }
+  ]
+});
+const P = lab.params;
+
+// ---- element palette on the stage ----
+const TOOLS = [
+  { key: 'water', el: WATER, label: 'Water', sw: '#2f7cf0', density: 0.55 },
+  { key: 'lava', el: LAVA, label: 'Lava', sw: '#ff7a14', density: 0.55 },
+  { key: 'wood', el: WOOD, label: 'Wood', sw: '#8a5530', density: 1 },
+  { key: 'ash', el: ASH, label: 'Ash', sw: '#a3a19f', density: 0.45 },
+  { key: 'seed', el: SEED, label: 'Seed', sw: '#b08a4a', density: 0.03 },
+  { key: 'stone', el: STONE, label: 'Stone', sw: '#5b5a62', density: 0.45 },
+  { key: 'erase', el: EMPTY, label: 'Eraser', sw: 'transparent', density: 1 }
+];
+let tool = TOOLS[0];
+const toolBox = document.createElement('div');
+toolBox.className = 'sand-tools'; toolBox.setAttribute('role', 'group'); toolBox.setAttribute('aria-label', 'Paint element');
+TOOLS.forEach((t, k) => {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.innerHTML = `<i style="background:${t.sw};${t.el === EMPTY ? 'border:1px dashed var(--dim)' : ''}"></i>${t.label} <kbd>${k + 1}</kbd>`;
+  b.addEventListener('click', () => pickTool(t));
+  t.btn = b; toolBox.appendChild(b);
+});
+lab.stage.appendChild(toolBox);
+function pickTool(t) { tool = t; TOOLS.forEach(u => u.btn.setAttribute('aria-pressed', u === t ? 'true' : 'false')); }
+pickTool(tool);
+
+// ---- canvas, layout, grid ----
+const { canvas, ctx } = lab.canvas();
+canvas.style.touchAction = 'none';
+const PIECE_PATHS = LOGO_PIECES.map(piece => {
+  const p = new Path2D();
+  for (const { cmd, pts } of piece) {
+    if (cmd === 'M') p.moveTo(...pts[0]);
+    else if (cmd === 'L') p.lineTo(...pts[0]);
+    else if (cmd === 'C') p.bezierCurveTo(...pts[0], ...pts[1], ...pts[2]);
+    else p.closePath();
+  }
+  return p;
+});
+const PIECE_EL = [WATER, LAVA, WOOD];   // LOGO_PIECES order: left "<", right ">", middle zig
+
+let dpr = 1, sq, fit, floorDev = 0, cd = 1, W = 0, H = 0, N = 0, offX = 0, offY = 0;
+let type, shade, aux, life, stamp, hold, holdT;
+let gcv, gctx, img, px, fadeCv, fadeCtx, glowCv, glowCtx, glowImg, gpx, glowA, glowB, gw = 0, gh = 0;
+
+function geometry() {
+  dpr = Math.min(2, window.devicePixelRatio || 1);
+  sq = lab.square(); fit = fitLogo(sq);
+  const ncd = Math.max(1, Math.round(sq.size * dpr / P.res));
+  floorDev = Math.round(canvas.height - FLOOR_PAD * dpr);
+  const nW = Math.ceil(canvas.width / ncd), nH = Math.ceil(floorDev / ncd);
+  const changed = ncd !== cd || nW !== W || nH !== H;
+  cd = ncd; W = nW; H = nH; N = W * H;
+  offX = Math.floor((canvas.width - W * cd) / 2);
+  offY = floorDev - H * cd;             // the floor row sits exactly on the floor line
+  return changed;
+}
+function allocate() {
+  type = new Uint8Array(N); shade = new Uint8Array(N); aux = new Uint8Array(N); life = new Uint16Array(N);
+  stamp = new Uint8Array(N); hold = new Uint8Array(N); holdT = new Uint32Array(N);
+  gcv = document.createElement('canvas'); gcv.width = W; gcv.height = H; gctx = gcv.getContext('2d');
+  img = gctx.createImageData(W, H); px = new Uint32Array(img.data.buffer);
+  fadeCv = document.createElement('canvas'); fadeCv.width = W; fadeCv.height = H; fadeCtx = fadeCv.getContext('2d');
+  gw = Math.ceil(W / 4); gh = Math.ceil(H / 4);
+  glowCv = document.createElement('canvas'); glowCv.width = gw; glowCv.height = gh; glowCtx = glowCv.getContext('2d');
+  glowImg = glowCtx.createImageData(gw, gh); gpx = new Uint32Array(glowImg.data.buffer);
+  glowA = new Uint16Array(gw * gh); glowB = new Uint16Array(gw * gh);
+}
+
+// ---- RNG: xorshift32, seeded per reset so a loop replays exactly (until you paint) ----
+let rs = 1;
+const rnd = () => { rs ^= rs << 13; rs ^= rs >>> 17; rs ^= rs << 5; return (rs >>> 0) / 4294967296; };
+const rint = (a, b) => a + Math.floor(rnd() * (b - a + 1));
+function reseed(n) { rs = (Math.imul(n | 0, 2654435761) ^ 0x5bd1e995) | 0 || 1; for (let i = 0; i < 8; i++) rnd(); }
+
+// ---- the mark ----
+function rasterLogo() {
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const o = c.getContext('2d', { willReadFrequently: true });
+  o.setTransform(dpr / cd, 0, 0, dpr / cd, -offX / cd, -offY / cd);
+  o.translate(fit.cx, fit.cy); o.scale(fit.scale, fit.scale);
+  o.globalCompositeOperation = 'lighter';
+  ['#ff0000', '#00ff00', '#0000ff'].forEach((col, k) => { o.fillStyle = col; o.fill(PIECE_PATHS[k]); });
+  const d = o.getImageData(0, 0, W, H).data, m = new Int8Array(N).fill(-1);
+  for (let i = 0; i < N; i++) m[i] = d[i * 4] > 127 ? 0 : d[i * 4 + 1] > 127 ? 1 : d[i * 4 + 2] > 127 ? 2 : -1;
+  return m;
+}
+// wavy grain for wood: a stable shade per cell, darker streaks along the rows
+const woodShade = (x, y) => Math.max(0, Math.min(15, Math.round(8 + 5 * Math.sin(y * 0.9 + Math.sin(x * 0.11) * 2.2) + (rnd() - 0.5) * 6)));
+
+let T = 0, S = 1, loops = 0, holdUntil = 0, thawDone = 0;
+function fillLogo() {
+  type.fill(EMPTY); aux.fill(0); life.fill(0); hold.fill(0); stamp.fill(0);
+  for (let i = 0; i < N; i++) shade[i] = rnd() * 256 | 0;
+  const m = rasterLogo();
+  // per piece vertical extent, for the staggered thaw
+  const ext = [[1e9, -1e9], [1e9, -1e9]];
+  for (let i = 0; i < N; i++) if (m[i] === 0 || m[i] === 1) { const y = (i / W) | 0; ext[m[i]][0] = Math.min(ext[m[i]][0], y); ext[m[i]][1] = Math.max(ext[m[i]][1], y); }
+  const cgx = ((fit.cx * dpr - offX) / cd), cgy = ((fit.cy * dpr - offY) / cd), rmax = fit.scale * dpr / cd * 0.6;
+  const delay = P.hold * NOMINAL_HZ, spread = THAW_SPREAD * NOMINAL_HZ;
+  holdUntil = T + delay; thawDone = T + delay + spread * 1.15;
+  for (let i = 0; i < N; i++) {
+    const k = m[i];
+    if (k < 0) continue;
+    const x = i % W, y = (i / W) | 0;
+    type[i] = PIECE_EL[k];
+    if (k === 2) { shade[i] = woodShade(x, y); continue; }
+    const [y0, y1] = ext[k], span = Math.max(1, y1 - y0);
+    let f = 0;
+    if (P.thaw === 'melt') f = (y1 - y) / span;
+    else if (P.thaw === 'top') f = (y - y0) / span;
+    else if (P.thaw === 'ripple') f = Math.min(1, Math.hypot(x - cgx, y - cgy) / rmax);
+    hold[i] = 1;
+    holdT[i] = T + delay + Math.round(spread * Math.min(1, Math.max(0, f + (rnd() - 0.5) * 0.12)));
+  }
+}
+
+// ---- simulation ----
+let act = 0, rainT = 0;
+const swap = (i, j) => {
+  let t = type[i]; type[i] = type[j]; type[j] = t;
+  t = shade[i]; shade[i] = shade[j]; shade[j] = t;
+  t = aux[i]; aux[i] = aux[j]; aux[j] = t;
+  t = life[i]; life[i] = life[j]; life[j] = t;
+  stamp[i] = stamp[j] = S;
+};
+const put = (i, t, l = 0, a = 0) => { type[i] = t; life[i] = l; aux[i] = a; hold[i] = 0; stamp[i] = S; };
+const steamLife = () => Math.max(1, Math.round(P.condense * NOMINAL_HZ * (0.6 + rnd() * 0.8)));
+const smokeLife = () => rint(30, 90);
+const burnLife = () => Math.max(1, Math.round(P.burn * (0.7 + rnd() * 0.6)));
+// an ember is a hot spark of smoke (SMOKE with aux 1): it rises and can set the wood above it alight
+const EMBER_AUX = 1;
+const ember = j => put(j, SMOKE, rint(40, 120), EMBER_AUX);
+const WOOD_CATCH = 0.04;   // × fire spread: fire creeps into wood far slower than through a meadow
+
+// granular: down, else down-diagonal; sinks through lighter stuff (slower through liquid)
+function fall(i, x, y, d) {
+  if (y === H - 1) return false;
+  const b = i + W, db = DENS[type[b]];
+  if (db < d && (db === 0 || rnd() < 0.5)) { swap(i, b); return true; }
+  const dir = rnd() < 0.5 ? -1 : 1;
+  for (let s = 0; s < 2; s++) {
+    const dx = s ? -dir : dir, nx = x + dx;
+    if (nx < 0 || nx >= W) continue;
+    const dj = DENS[type[b + dx]];
+    if (dj < d && DENS[type[i + dx]] < d && (dj === 0 || rnd() < 0.35)) { swap(i, b + dx); return true; }
+  }
+  return false;
+}
+// liquid: fall, slide diagonally, else look sideways (up to `reach`) for a spot with a drop under it.
+// Only moving toward a drop means pools settle flat and still instead of jittering forever.
+// Water threads between the stems, leaves and petals of a flower (THIN): it slips past them to the next open cell,
+// down through up to three of them or sideways through any run of them, and the plant stays where it is.
+function flow(i, x, y, d, reach, diagP, sideP) {
+  const thru = d === DENS[WATER];
+  if (y < H - 1) {
+    const b = i + W;
+    if (DENS[type[b]] < d) { swap(i, b); return 1; }
+    if (thru && THIN[type[b]]) {
+      for (let yy = y + 2, j = b + W; yy < H && yy <= y + 4; yy++, j += W) {
+        if (THIN[type[j]]) continue;
+        if (DENS[type[j]] < d) { swap(i, j); return 1; }
+        break;
+      }
+    }
+    if (rnd() < diagP) {
+      const dir = rnd() < 0.5 ? -1 : 1;
+      for (let s = 0; s < 2; s++) {
+        const dx = s ? -dir : dir, nx = x + dx;
+        if (nx < 0 || nx >= W) continue;
+        if (DENS[type[b + dx]] < d && (DENS[type[i + dx]] < d || (thru && THIN[type[i + dx]]))) { swap(i, b + dx); return 1; }
+      }
+    }
+  } else return 0;
+  if (rnd() >= sideP) return 0;
+  let dir = rnd() < 0.5 ? -1 : 1;
+  for (let s = 0; s < 2; s++, dir = -dir) {
+    for (let r = 1; r <= reach; r++) {
+      const nx = x + dir * r;
+      if (nx < 0 || nx >= W) break;
+      const j = i + dir * r;
+      if (thru && THIN[type[j]]) continue;
+      if (DENS[type[j]] >= d) break;
+      if (DENS[type[j + W]] < d) { swap(i, j); return 1; }
+    }
+  }
+  return 0;
+}
+// gas: drift up through air and water, wander sideways
+function rise(i, x, y) {
+  if (y > 0 && rnd() < 0.7) {
+    const u = i - W, tu = type[u];
+    if (tu === EMPTY || (tu === WATER && rnd() < 0.5)) { swap(i, u); return; }
+    const dx = rnd() < 0.5 ? -1 : 1, nx = x + dx;
+    if (nx >= 0 && nx < W && type[u + dx] === EMPTY) { swap(i, u + dx); return; }
+  }
+  const dx = rnd() < 0.5 ? -1 : 1, nx = x + dx;
+  if (nx >= 0 && nx < W && type[i + dx] === EMPTY && rnd() < 0.5) swap(i, i + dx);
+}
+function plantNear(x, y, r, seeds) {
+  const x0 = Math.max(0, x - r), x1 = Math.min(W - 1, x + r), y0 = Math.max(0, y - r), y1 = Math.min(H - 1, y + r);
+  for (let yy = y0; yy <= y1; yy++) {
+    const row = yy * W;
+    for (let xx = x0; xx <= x1; xx++) { const t = type[row + xx]; if (t === ROOT || (seeds && t === SEED)) return true; }
+  }
+  return false;
+}
+function waterNear(x, y, r, probes, take) {
+  for (let k = 0; k < probes; k++) {
+    const nx = x + rint(-r, r), ny = y + rint(-r, r);
+    if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+    const j = ny * W + nx;
+    if (type[j] === WATER && !hold[j]) { if (take) put(j, EMPTY); return true; }
+  }
+  return false;
+}
+function pickSpecies() {
+  const w = MIXES[P.mix] || MIXES.meadow;
+  let tot = 0; for (const v of w) tot += v;
+  let r = rnd() * tot;
+  for (let k = 0; k < w.length; k++) { r -= w[k]; if (r < 0) return k; }
+  return 0;
+}
+// stem tip:  life = height | target << 6 | (xoff + 8) << 12      aux = species * 8 + variant
+// bud:       life = step   | height << 6 | (xoff + 8) << 12
+const packTip = (h, tg, xo) => h | (tg << 6) | ((xo + 8) << 12);
+function findRoot(x, y, h, xo) {
+  const rx = x - xo, ry = y + h;
+  if (rx < 0 || rx >= W || ry >= H) return -1;
+  const ri = ry * W + rx;
+  return type[ri] === ROOT ? ri : -1;
+}
+function germinate(i, x, y) {
+  const sp = P.lotus && y > 0 && type[i - W] === WATER ? LOTUS : pickSpecies(), s = SPECIES[sp], v = rint(0, s.variants.length - 1), id = sp * 8 + v;
+  put(i, ROOT, 2, id);
+  if (y > 0 && SOFT[type[i - W]]) {
+    const tg = Math.max(3, Math.min(60, Math.round(rint(s.h[0], s.h[1]) * P.tall)));
+    put(i - W, TIP, packTip(1, tg, 0), id);
+  }
+  act++;
+}
+function placeLeaf(x, y, sp, id) {
+  const side = rnd() < 0.5 ? -1 : 1;
+  for (const [dx, dy] of SPECIES[sp].leaf) {
+    const nx = x + dx * side, ny = y + dy;
+    if (nx < 0 || nx >= W || ny < 0) break;
+    const j = ny * W + nx;
+    if (!SOFT[type[j]]) break;
+    put(j, LEAF, 0, id);
+  }
+}
+// a lily pad: one cell thick, floating on the surface row, its outer rim turned up a cell
+function layPad(cx, y, id) {
+  if (y < 1) return;
+  const r = rint(PAD_R[0], PAD_R[1]);
+  for (let dx = -r; dx <= r; dx++) {
+    const nx = cx + dx;
+    if (nx < 0 || nx >= W || dx === 0) continue;
+    const ny = Math.abs(dx) === r ? y - 1 : y, j = ny * W + nx;
+    if (type[j] === EMPTY) put(j, LEAF, 0, id);
+  }
+}
+function growTip(i, x, y) {
+  const b = life[i], h = b & 63, tg = (b >> 6) & 63, xo = (b >> 12) - 8, id = aux[i], sp = id >> 3;
+  const ri = findRoot(x, y, h, xo);
+  if (ri < 0) { put(i, STEM, 0, id); return; }      // root gone: the stem just stops
+  if (life[ri] === 0) return;                         // thirsty: wait for the root to drink
+  const toBud = () => put(i, BUD, (h << 6) | ((xo + 8) << 12), id);
+  if (h >= tg || y === 0) { toBud(); life[ri]--; act++; return; }
+  let dx = 0;
+  if (rnd() < SPECIES[sp].sway) { dx = rnd() < 0.5 ? -1 : 1; if (Math.abs(xo + dx) > MAX_SWAY) dx = -dx; }
+  let j = -1;
+  for (const c of dx ? [dx, 0] : [0]) {
+    const nx = x + c;
+    if (nx < 0 || nx >= W) continue;
+    if (SOFT[type[i - W + c]]) { j = i - W + c; dx = c; break; }
+  }
+  if (j < 0) { toBud(); act++; return; }              // blocked: bloom where it stands
+  life[ri]--;
+  // a stem growing through water doesn't count those cells toward its height, so blooms open above the surface
+  const tg2 = type[j] === WATER && tg < 60 ? tg + 1 : tg;
+  // breaking the surface (water beside the tip, air above it), a lotus lays its pad flat on the water
+  if (sp === LOTUS && type[j] !== WATER && ((x > 0 && type[i - 1] === WATER) || (x < W - 1 && type[i + 1] === WATER))) layPad(x + dx, y - 1, id);
+  put(i, STEM, 0, id);
+  put(j, TIP, packTip(h + 1, tg2, xo + dx), id);
+  const s = SPECIES[sp];
+  const l1 = Math.max(2, Math.round(tg * 0.28)), l2 = Math.round(tg * 0.55);
+  if (s.nLeaves > 0 && (h + 1 === l1 || (s.nLeaves > 1 && h + 1 === l2 && l2 > l1 + 1))) placeLeaf(x, y, sp, id);
+  act++;
+}
+function growBud(i, x, y) {
+  const b = life[i], step = b & 63, h = (b >> 6) & 63, xo = (b >> 12) - 8, id = aux[i], sp = id >> 3, v = id & 7, s = SPECIES[sp];
+  const ri = findRoot(x, y, h, xo);
+  if (ri < 0) return;                                 // cut off: stays a bud forever
+  if (step >= BUD_WAIT && (step & 1) === 0) { if (life[ri] === 0) return; life[ri]--; }   // every second petal costs a drop
+  const k = step - BUD_WAIT;
+  if (k >= s.cells.length) { put(i, PETAL, 0, s.cid[v][s.origin]); act++; return; }
+  if (k >= 0) {
+    const c = s.cells[k], nx = x + c.dx, ny = y + c.dy;
+    if (nx >= 0 && nx < W && ny >= 0 && ny < H) { const j = ny * W + nx; if (SOFT[type[j]]) put(j, PETAL, 0, s.cid[v][c.role]); }
+  }
+  life[i] = (step + 1) | (h << 6) | ((xo + 8) << 12);
+  act++;
+}
+const N4 = [0, 0, 0, 0];
+function lava(i, x, y) {
+  // reactions with the four neighbours, starting from a random side
+  N4[0] = y > 0 ? i - W : -1; N4[1] = y < H - 1 ? i + W : -1; N4[2] = x > 0 ? i - 1 : -1; N4[3] = x < W - 1 ? i + 1 : -1;
+  const r0 = rnd() * 4 | 0;
+  let woodAt = -1;
+  for (let q = 0; q < 4; q++) {
+    const j = N4[(r0 + q) & 3];
+    if (j < 0 || hold[j]) continue;
+    const tj = type[j];
+    if (tj === WATER) { type[i] = STONE; life[i] = 0; aux[i] = 0; stamp[i] = S; put(j, STEAM, steamLife()); act++; return; }
+    if (PLANT[tj]) { put(j, FIRE, burnLife()); act++; }
+    else if (tj === WOOD && woodAt < 0) woodAt = j;
+  }
+  // biting: aux = 1 + direction of the wood being chewed, life = ticks left on this bite.
+  // A lava cell touching wood is stuck until the bite finishes; then both cells are gone (1:1 trade).
+  const dir = aux[i];
+  if (dir) {
+    const j = N4[dir - 1];
+    if (j >= 0 && type[j] === WOOD) {
+      life[j] = Math.min(65535, life[j] + 1);          // wood glows hotter while chewed
+      if (life[i] > 1) {
+        life[i]--; act++;
+        if (y > 0 && type[i - W] === EMPTY && rnd() < P.embers * 0.02) ember(i - W);   // sparks off the bite
+        return;
+      }
+      if (rnd() < P.embers) ember(j); else put(j, SMOKE, smokeLife());
+      put(i, rnd() < 0.5 ? SMOKE : EMPTY, smokeLife() >> 1); act++; return;
+    }
+    aux[i] = 0; life[i] = 0;                          // that wood went away (another lava ate it)
+  }
+  if (woodAt >= 0) {
+    const lo = Math.min(P.biteMin, P.biteMax), hi = Math.max(P.biteMin, P.biteMax);
+    aux[i] = 1 + N4.indexOf(woodAt); life[i] = rint(lo, hi); act++; return;
+  }
+  if (P.lavaCool > 0 && rnd() < P.lavaCool * 2e-4) { type[i] = STONE; stamp[i] = S; act++; return; }
+  act += flow(i, x, y, 3, LAVA_REACH, 0.6, P.lavaFlow);
+}
+
+function tick() {
+  S = S === 255 ? 1 : S + 1;
+  T++;
+  const seedP = P.seeding * 0.0015, spc = P.spacing, wReach = P.spread, g = P.growth;
+  if (rainT > 0) for (let k = 0; k < Math.max(1, W / 40); k++) { const j = rint(0, W - 1); if (type[j] === EMPTY && rnd() < 0.5) { put(j, WATER); shade[j] = rnd() * 256 | 0; } }
+  for (let y = H - 1; y >= 0; y--) {
+    const ltr = ((y + T) & 1) === 0, row = y * W;
+    for (let k = 0; k < W; k++) {
+      const x = ltr ? k : W - 1 - k, i = row + x, t = type[i];
+      if (t === EMPTY || t === WOOD || t === STEM || (t === LEAF && aux[i] >> 3 !== LOTUS) || t === PETAL || stamp[i] === S) continue;
+      if (hold[i]) { if (holdT[i] > T) continue; hold[i] = 0; }
+      switch (t) {
+        case WATER:
+          if (seedP > 0 && rnd() < seedP && (y === H - 1 || FERTILE[type[i + W]]) && !plantNear(x, y, spc, true)) { put(i, SEED); act++; break; }
+          act += flow(i, x, y, 2, wReach, 1, 1);
+          break;
+        case LAVA: lava(i, x, y); break;
+        case STONE: case ASH: if (fall(i, x, y, DENS[t])) act++; break;
+        case STEAM:
+          // condensed: some falls back as rain, the rest leaves the box (or rain would quench every last drop of lava)
+          if (life[i] <= 1 || (y === 0 && rnd() < 0.02)) { put(i, rnd() < P.rainBack ? WATER : EMPTY); act++; break; }
+          life[i]--; rise(i, x, y); break;
+        case SMOKE:
+          if (aux[i] === EMBER_AUX) {
+            act++;
+            // touch one neighbour, mostly the ones above: wood or a plant may catch, water puts it out
+            const dx = rint(-1, 1), dy = rnd() < 0.7 ? -1 : rint(0, 1), nx = x + dx, ny = y + dy;
+            if ((dx || dy) && nx >= 0 && nx < W && ny >= 0 && ny < H) {
+              const j = ny * W + nx, tj = type[j];
+              if ((tj === WOOD && rnd() < P.emberCatch * 0.15) || (PLANT[tj] && rnd() < P.emberCatch)) { put(j, FIRE, burnLife()); put(i, EMPTY); break; }
+              if (tj === WATER) { put(i, EMPTY); break; }
+            }
+            if (life[i] <= 1) { put(i, SMOKE, smokeLife() >> 1); break; }   // cooled to plain smoke
+            life[i]--; rise(i, x, y); if (rnd() < 0.5 && stamp[i] !== S) rise(i, x, y);
+            break;
+          }
+          if (life[i] <= 1) { put(i, EMPTY); break; }
+          life[i]--; rise(i, x, y); break;
+        case FIRE: {
+          act++;
+          // look at one random neighbour; now and then a spark jumps two cells, so a meadow can go up in a chain
+          const far = rnd() < 0.25 ? 2 : 1, dx = rint(-far, far), dy = rint(-far, 1), nx = x + dx, ny = y + dy;
+          if ((dx || dy) && nx >= 0 && nx < W && ny >= 0 && ny < H) {
+            const j = ny * W + nx, tj = type[j];
+            if (PLANT[tj] && rnd() < P.fireSpread) put(j, FIRE, burnLife());
+            else if (tj === WOOD && rnd() < P.fireSpread * WOOD_CATCH) put(j, FIRE, burnLife());
+            else if (tj === WATER && !hold[j]) { put(i, rnd() < P.ash ? ASH : EMPTY); put(j, STEAM, steamLife()); break; }   // doused
+          }
+          if (y > 0 && type[i - W] === EMPTY && rnd() < 0.05) { if (rnd() < P.embers * 0.3) ember(i - W); else put(i - W, SMOKE, smokeLife()); }
+          if (life[i] <= 1) { if (rnd() < P.ash) put(i, ASH); else put(i, SMOKE, smokeLife()); break; }   // burnt out: ash, or just smoke
+          life[i]--; break;
+        }
+        case LEAF:
+          // a lily pad floats: it drops onto the water as the pool is drunk down, and bobs up if the pool rises over it
+          if (y < H - 1 && type[i + W] === EMPTY) { swap(i, i + W); act++; }
+          else if (y > 0 && type[i - W] === WATER) { swap(i, i - W); act++; }
+          break;
+        case SEED:
+          if (fall(i, x, y, DENS[SEED])) { act++; break; }
+          // under water (a lotus to be) it waits until the pools have stopped filling, so its pad lands on the final surface
+          if (P.lotus && y > 0 && type[i - W] === WATER && (T < thawDone || actAvg > LOTUS_CALM)) break;
+          if (rnd() < 0.05 && (y === H - 1 || FERTILE[type[i + W]]) && waterNear(x, y, SEED_REACH, 4, false)) {
+            if (!plantNear(x, y, spc, false)) germinate(i, x, y);
+            else if (rnd() < 0.05) { put(i, EMPTY); act++; }   // crowded out: the seed rots
+          }
+          break;
+        case ROOT:
+          if (life[i] < SAP_MAX && rnd() < DRINK_P * g && waterNear(x, y, ROOT_REACH, 3, true)) { life[i]++; act++; }
+          break;
+        case TIP: if (rnd() < GROW_P * g) growTip(i, x, y); break;
+        case BUD: if (rnd() < BLOOM_P * g) growBud(i, x, y); break;
+      }
+    }
+  }
+}
+
+// ---- colours (fixed physical colours; the Bench palette turns the box black and white) ----
+let mono = false;
+const cl = v => v < 0 ? 0 : v > 255 ? 255 : v | 0;
+function pack(r, g, b, a = 255) {
+  if (mono) { const l = 0.3 * r + 0.59 * g + 0.11 * b; r = g = b = l; }
+  return ((cl(a) << 24) | (cl(b) << 16) | (cl(g) << 8) | cl(r)) >>> 0;
+}
+const mix3 = (p, q, k) => [p[0] + (q[0] - p[0]) * k, p[1] + (q[1] - p[1]) * k, p[2] + (q[2] - p[2]) * k];
+function ramp3(stops, k) { const x = Math.min(0.9999, Math.max(0, k)) * (stops.length - 1), n = x | 0; return mix3(stops[n], stops[n + 1], x - n); }
+const WOOD_RGB = [[96, 56, 28], [156, 100, 54]], EMBER = [255, 110, 28], TIP_RGB = [130, 214, 96];
+let LUT = new Uint32Array(256), EMB = new Uint32Array(16), PET = new Uint32Array(1024), GLOW_C = 0, WATER_HI = 0;
+function buildColors() {
+  mono = lab.palette.key === 'bench';
+  const L = (t, f) => { for (let s = 0; s < 16; s++) LUT[t * 16 + s] = f(s / 15, s); };
+  L(WATER, k => pack(...mix3([24, 92, 210], [52, 132, 244], k)));
+  L(LAVA, (k, s) => { const tri = s < 8 ? s / 8 : (16 - s) / 8; return pack(...ramp3([[176, 28, 0], [250, 92, 0], [255, 196, 60]], tri)); });
+  L(WOOD, k => pack(...mix3(WOOD_RGB[0], WOOD_RGB[1], k)));
+  L(STONE, k => pack(...mix3([54, 54, 62], [92, 90, 100], k)));
+  L(ASH, k => pack(...mix3([122, 120, 122], [178, 174, 170], k)));
+  L(STEAM, k => pack(...mix3([186, 196, 212], [226, 232, 242], k), 95 + k * 60));
+  L(SMOKE, k => pack(70, 70, 78, k * 150));
+  L(FIRE, k => pack(...ramp3([[255, 248, 170], [255, 172, 30], [232, 62, 10]], k)));
+  for (let s = 0; s < 16; s++) { const tri = s < 8 ? s / 8 : (16 - s) / 8; EMB[s] = pack(...ramp3([[255, 84, 12], [255, 160, 40], [255, 236, 150]], tri)); }
+  L(SEED, k => pack(...mix3([134, 96, 48], [190, 150, 82], k)));
+  L(ROOT, k => pack(...mix3([74, 58, 34], [104, 82, 48], k)));
+  // stems: 0–7 green, 8–15 the grey-green of lavender
+  L(STEM, (k, s) => s < 8 ? pack(...mix3([32, 116, 44], [58, 150, 62], s / 7)) : pack(...mix3([92, 122, 92], [124, 150, 114], (s - 8) / 7)));
+  L(LEAF, k => pack(...mix3([48, 152, 54], [96, 200, 80], k)));
+  L(TIP, k => pack(...mix3([110, 200, 86], TIP_RGB, k)));
+  const SH = [0.86, 0.95, 1, 1.07];
+  COLORS.forEach((c, n) => { for (let s = 0; s < 4; s++) PET[n * 4 + s] = pack(c[0] * SH[s], c[1] * SH[s], c[2] * SH[s]); });
+  GLOW_C = mono ? [255, 255, 255] : [255, 104, 30];
+  WATER_HI = pack(170, 214, 255);
+}
+
+// ---- outline: a dotted line of little squares, one cell big, evenly spaced round each piece ----
+// Each loop gets a whole number of dots, so the spacing never breaks where it closes. Every dot is turned to its
+// edge, so along the mark's 42.8° sides they sit as diamonds, in step with the cells.
+let outline = null;
+const PIECE_POLYS = logoPolygons({ curveSegments: 16 });
+const rgba = (hex, a) => { const n = parseInt(hex.slice(1), 16); return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${a})`; };
+function bodyOutline() {
+  const pal = lab.palette, s = fit.scale;
+  const dot = Math.min(4, Math.max(1.5, cd / dpr));          // CSS px: one cell
+  const inset = Math.max(2, cd / dpr + 1) + dot / 2;          // cells stair-step along the edges, so sit a cell plus a bit inside
+  const key = [canvas.width, canvas.height, dpr, s, fit.cx, fit.cy, pal.ink, dot].join('|');
+  if (outline?.key === key) return outline.c;
+  const c = outline?.c || document.createElement('canvas');
+  c.width = canvas.width; c.height = canvas.height;
+  const o = c.getContext('2d');
+  o.setTransform(dpr, 0, 0, dpr, 0, 0);
+  o.fillStyle = rgba(pal.ink, 0.5);
+  for (const poly of PIECE_POLYS) {
+    const pts = poly.map(([x, y]) => [fit.cx + x * s, fit.cy + y * s]), n = pts.length;
+    let area = 0;
+    for (let i = 0; i < n; i++) { const [ax, ay] = pts[i], [bx, by] = pts[(i + 1) % n]; area += ax * by - bx * ay; }
+    const inward = area > 0 ? 1 : -1;
+    const seg = pts.map((p, i) => { const q = pts[(i + 1) % n]; return Math.hypot(q[0] - p[0], q[1] - p[1]); });
+    const total = seg.reduce((a, b) => a + b, 0), count = Math.max(3, Math.round(total / (dot * OUTLINE_GAP))), step = total / count;
+    let i = 0, along = 0;
+    for (let k = 0; k < count; k++) {
+      const d = k * step;
+      while (along + seg[i] < d && i < n - 1) along += seg[i++];
+      const [px, py] = pts[i], [qx, qy] = pts[(i + 1) % n], u = (d - along) / seg[i];
+      const tx = (qx - px) / seg[i], ty = (qy - py) / seg[i];
+      const x = px + (qx - px) * u - ty * inward * inset, y = py + (qy - py) * u + tx * inward * inset;
+      o.save(); o.translate(x, y); o.transform(tx, ty, -ty, tx, 0, 0);
+      o.fillRect(-dot / 2, -dot / 2, dot, dot);
+      o.restore();
+    }
+  }
+  outline = { key, c };
+  return c;
+}
+
+// ---- render ----
+let fr = 0, fade = null;
+const counts = new Uint32Array(16);
+function render() {
+  counts.fill(0); glowA.fill(0);
+  const shim = P.shimmer && !lab.calm, f2 = fr >> 2, bite = Math.max(1, P.biteMax);
+  for (let y = 0; y < H; y++) {
+    const row = y * W, grow = (y >> 2) * gw;
+    for (let x = 0; x < W; x++) {
+      const i = row + x, t = type[i];
+      if (t === EMPTY) { px[i] = 0; continue; }
+      counts[t]++;
+      const sh = shade[i];
+      let c;
+      switch (t) {
+        case WATER: c = shim && ((sh * 7 + fr) & 255) < 2 && (y === 0 || type[i - W] === EMPTY) ? WATER_HI : LUT[16 + (sh & 15)]; break;
+        case LAVA: c = LUT[32 + ((shim ? sh + f2 : sh) & 15)]; glowA[grow + (x >> 2)] += 2; break;
+        case FIRE: c = LUT[FIRE * 16 + ((sh + (shim ? fr * 5 + x * 3 : 0)) & 15)]; glowA[grow + (x >> 2)] += 2; break;
+        case WOOD: {
+          const l = life[i];
+          if (!l) { c = LUT[48 + (sh & 15)]; break; }
+          if (!lab.calm && (fr & 3) === 0) life[i] = l - 1;     // heat is only a look: it fades once the lava stops chewing
+          const k = Math.min(1, l / bite), base = mix3(WOOD_RGB[0], WOOD_RGB[1], (sh & 15) / 15);
+          const fl = shim ? 0.85 + 0.15 * Math.sin(fr * 0.4 + sh) : 1;
+          const e = mix3(base, EMBER, k * fl);
+          c = pack(e[0], e[1], e[2]); glowA[grow + (x >> 2)] += 1; break;
+        }
+        case SMOKE:
+          if (aux[i] === EMBER_AUX) { c = EMB[(sh + (shim ? fr * 3 : 0) + (life[i] >> 3)) & 15]; glowA[grow + (x >> 2)] += 1; break; }
+          c = LUT[SMOKE * 16 + Math.min(15, life[i] >> 2)]; break;
+        case STEM: c = LUT[STEM * 16 + (sh & 7) + (SPECIES[aux[i] >> 3]?.grey ? 8 : 0)]; break;
+        case PETAL: c = PET[(aux[i] << 2) | (sh & 3)]; break;
+        case BUD: {
+          const s = SPECIES[aux[i] >> 3], v = s.variants[aux[i] & 7], k = Math.min(1, (life[i] & 63) / BUD_WAIT);
+          const e = mix3(TIP_RGB, v.b || v.a, k * 0.9);
+          c = pack(e[0], e[1], e[2]); break;
+        }
+        default: c = LUT[t * 16 + (sh & 15)];
+      }
+      px[i] = c;
+    }
+  }
+  gctx.putImageData(img, 0, 0);
+
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (P.outline) ctx.drawImage(bodyOutline(), 0, 0);
+  // floor: one crisp line with hatch ticks below, like Knockout's bench
+  const lw = Math.max(1, Math.round(dpr)), tick = Math.round(12 * dpr);
+  ctx.fillStyle = rgba(lab.palette.ink, 0.22);
+  for (let x = 0; x < canvas.width; x += tick) for (let k = 0; k < Math.round(7 * dpr); k += lw) ctx.fillRect(x - k, floorDev + lw + k, lw, lw);
+  ctx.fillStyle = rgba(lab.palette.ink, 0.75);
+  ctx.fillRect(0, floorDev, canvas.width, lw);
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(gcv, offX, offY, W * cd, H * cd);
+  if (fade) {
+    ctx.globalAlpha = Math.max(0, 1 - fade.t / FADE);
+    ctx.drawImage(fadeCv, offX, offY, W * cd, H * cd);
+    ctx.globalAlpha = 1;
+  }
+  if (P.glow && counts[LAVA] + counts[FIRE] > 0) {
+    // glow: lava per 4×4 block, box-blurred, upscaled with smoothing, added on top
+    for (let y = 0; y < gh; y++) for (let x = 0; x < gw; x++) {
+      let s = 0;
+      for (let dy = -1; dy <= 1; dy++) { const yy = y + dy; if (yy < 0 || yy >= gh) continue; for (let dx = -1; dx <= 1; dx++) { const xx = x + dx; if (xx >= 0 && xx < gw) s += glowA[yy * gw + xx]; } }
+      glowB[y * gw + x] = s;
+    }
+    for (let k = 0; k < gw * gh; k++) gpx[k] = glowB[k] ? pack(GLOW_C[0], GLOW_C[1], GLOW_C[2], Math.min(150, glowB[k] * 1.6)) : 0;
+    glowCtx.putImageData(glowImg, 0, 0);
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(glowCv, offX, offY, gw * 4 * cd, gh * 4 * cd);
+    ctx.globalCompositeOperation = 'source-over';
+  }
+}
+
+// ---- reset / loop ----
+let quietT = 0, actAvg = 10, sinceInput = 0, acc = 0, built = false;
+function reset({ crossfade = true } = {}) {
+  if (crossfade && built && !lab.calm) { fadeCtx.clearRect(0, 0, W, H); fadeCtx.drawImage(gcv, 0, 0); fade = { t: 0 }; }
+  loops++;
+  reseed(P.seed * 1000 + loops);
+  fillLogo();
+  quietT = 0; actAvg = 10; acc = 0; rainT = 0; sinceInput = 0;
+  render();
+}
+function clearAll() { type.fill(EMPTY); hold.fill(0); life.fill(0); aux.fill(0); holdUntil = thawDone = T; quietT = 0; render(); }
+function rebuild() { geometry(); allocate(); built = false; reset({ crossfade: false }); built = true; }
+function touch() { quietT = 0; sinceInput = 0; }
+
+function frame(dt) {
+  if (fade) { fade.t += dt; if (fade.t >= FADE) fade = null; }
+  if (lab.calm) return;
+  sinceInput += dt;
+  if (fade) return;                                   // the mark holds still while the old box fades out
+  if (paint.on) paintLine(paint.x, paint.y, paint.x, paint.y);
+  if (rainT > 0) rainT -= dt;
+  acc += dt * 60 * P.speed;
+  const n = Math.min(acc | 0, P.speed * 3);
+  acc = Math.min(acc - n, P.speed);
+  act = 0;
+  for (let k = 0; k < n; k++) tick();
+  if (n) actAvg = actAvg * 0.92 + (act / n) * 0.08;
+  quietT = T > thawDone && actAvg < QUIET_ACT && !paint.on ? quietT + dt : 0;
+  if (P.autoReset && (quietT > P.quiet || sinceInput > IDLE_RESET)) reset();
+}
+
+// ---- painting ----
+const paint = { on: false, x: 0, y: 0, id: null };
+function toGrid(e) {
+  const r = canvas.getBoundingClientRect();
+  return { x: Math.floor(((e.clientX - r.left) * dpr - offX) / cd), y: Math.floor(((e.clientY - r.top) * dpr - offY) / cd) };
+}
+function paintAt(cx, cy) {
+  const r = P.brush, el = tool.el;
+  for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+    if (dx * dx + dy * dy > r * r + r) continue;
+    const x = cx + dx, y = cy + dy;
+    if (x < 0 || y < 0 || x >= W || y >= H) continue;
+    const i = y * W + x;
+    if (el === EMPTY) { put(i, EMPTY); continue; }
+    const t = type[i];
+    if (!(t === EMPTY || t === STEAM || t === SMOKE)) continue;
+    if (rnd() >= tool.density) continue;
+    put(i, el); shade[i] = el === WOOD ? woodShade(x, y) : rnd() * 256 | 0;
+  }
+}
+function paintLine(x0, y0, x1, y1) {
+  const n = Math.max(1, Math.ceil(Math.hypot(x1 - x0, y1 - y0) / Math.max(1, P.brush * 0.6)));
+  for (let k = 0; k <= n; k++) paintAt(Math.round(x0 + (x1 - x0) * k / n), Math.round(y0 + (y1 - y0) * k / n));
+  touch();
+}
+canvas.addEventListener('pointerdown', e => {
+  if (e.button > 0) return;
+  const g = toGrid(e);
+  if (fade) fade = null;
+  paint.on = true; paint.id = e.pointerId; paint.x = g.x; paint.y = g.y;
+  canvas.setPointerCapture(e.pointerId);
+  paintLine(g.x, g.y, g.x, g.y);
+  if (lab.calm) render();
+});
+canvas.addEventListener('pointermove', e => {
+  if (!paint.on || e.pointerId !== paint.id) return;
+  const g = toGrid(e);
+  paintLine(paint.x, paint.y, g.x, g.y);
+  paint.x = g.x; paint.y = g.y;
+  if (lab.calm) render();
+});
+const stop = e => { if (paint.on && e.pointerId === paint.id) paint.on = false; };
+canvas.addEventListener('pointerup', stop);
+canvas.addEventListener('pointercancel', stop);
+addEventListener('keydown', e => {
+  if (e.target.closest?.('input, select, textarea') || e.metaKey || e.ctrlKey || e.altKey) return;
+  const k = +e.key;
+  if (k >= 1 && k <= TOOLS.length) pickTool(TOOLS[k - 1]);
+  else if (e.key === '[') lab.set('brush', Math.max(1, P.brush - 1));
+  else if (e.key === ']') lab.set('brush', Math.min(16, P.brush + 1));
+});
+
+// ---- wiring ----
+lab.on('change', key => {
+  if (key === 'res') rebuild();
+  else if (key === 'seed' || key === 'thaw' || key === 'hold') reset();
+  touch();
+});
+lab.on('palette', () => { buildColors(); render(); });
+lab.on('resize', () => { if (!built) return; if (geometry()) rebuild(); else render(); });
+
+buildColors();
+rebuild();
+
+let hudTick = 0, ms = 0;
+function hud() {
+  const c = n => counts[n];
+  const flowers = c(ROOT), status = T < holdUntil ? `holding <b>${((holdUntil - T) / NOMINAL_HZ).toFixed(1)} s</b>` : T < thawDone ? '<b>thawing</b>' : quietT > 0.5 ? `settled <b>${quietT.toFixed(1)}/${P.quiet} s</b>` : 'running';
+  lab.hud(`water <b>${c(WATER)}</b> · lava <b>${c(LAVA)}</b> · wood <b>${c(WOOD)}</b> · stone <b>${c(STONE)}</b> · ash <b>${c(ASH)}</b> · steam <b>${c(STEAM)}</b>` +
+    ` · flowers <b>${flowers}</b>${c(FIRE) ? ` · fire <b>${c(FIRE)}</b>` : ''}<br>${status} · ${W}×${H} cells · <b>${ms.toFixed(2)} ms</b>`);
+}
+let paused = false;
+lab.loop(dt => {
+  if (paused) return;
+  const t0 = performance.now();
+  frame(dt);
+  if (!lab.calm) fr++;
+  render();
+  ms = ms * 0.9 + (performance.now() - t0) * 0.1;
+  if (++hudTick % 8 === 0) hud();
+});
+hud();
+
+// test hooks: advance and draw without requestAnimationFrame
+window.__lab = {
+  step(n = 1) { for (let k = 0; k < n; k++) { frame(1 / 60); fr++; } render(); hud(); return this.state(); },
+  ticks(n = 1) { for (let k = 0; k < n; k++) tick(); render(); hud(); return this.state(); },
+  renderOnce() { render(); hud(); },
+  reset: () => reset({ crossfade: false }),
+  paint(el, x, y, r = P.brush) { const t = TOOLS.find(q => q.key === el) || TOOLS[0]; const prev = tool, pb = P.brush; tool = t; P.brush = r; paintAt(x, y); tool = prev; P.brush = pb; render(); },
+  state() {
+    const c = {}; const n = new Uint32Array(16); const sp = {};
+    for (let i = 0; i < N; i++) { n[type[i]]++; if (type[i] === ROOT) { const nm = SPECIES[aux[i] >> 3].name; sp[nm] = (sp[nm] || 0) + 1; } }
+    NAMES.forEach((nm, k) => { if (k && n[k]) c[nm] = n[k]; });
+    return { T, W, H, cd, held: T < holdUntil, thawed: T > thawDone, quietT: +quietT.toFixed(2), actAvg: +actAvg.toFixed(2), counts: c, species: sp, ms: +ms.toFixed(2) };
+  },
+  grid: () => ({ W, H, type, aux, life }),
+  gridCanvas: () => gcv,
+  pause(on = true) { paused = on; },
+  measure(frames = 60) { const t0 = performance.now(); for (let k = 0; k < frames; k++) { frame(1 / 60); fr++; render(); } return (performance.now() - t0) / frames; }
+};
+</script>

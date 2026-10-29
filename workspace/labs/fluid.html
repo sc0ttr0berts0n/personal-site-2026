@@ -1,0 +1,850 @@
+<meta charset="utf-8">
+<title>Logo Vessel</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@200;300&family=Familjen+Grotesk:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="shared/lab.css">
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { FXAAShader } from 'three/addons/shaders/FXAAShader.js';
+import { createLab } from './shared/lab.js';
+import { logoPolygons, LOGO_FILL, LOGO_DEPTH } from './shared/logo.js';
+import { ramp } from './shared/palettes.js';
+
+// Raymarch quality: render scale (of the device pixels, so >1 supersamples) and step budgets.
+const QUALITY = {
+  low:      { label: 'Low',      scale: 0.75, steps: 36, vsteps: 14, gsteps: 18 },
+  balanced: { label: 'Balanced', scale: 1.5,  steps: 56, vsteps: 22, gsteps: 26 },
+  high:     { label: 'High',     scale: 2,    steps: 80, vsteps: 32, gsteps: 36 }
+};
+
+const lab = createLab({
+  number: '02',
+  title: 'Logo Vessel',
+  blurb: 'Each chevron is a sealed glass vessel partly filled with liquid. Tilt it and the surface finds level again, ringing down in damped sloshing waves.',
+  teaches: 'hydrostatics: a free surface stays level at fixed volume; sloshing modes ω² = gk·tanh(kh), viscous damping, capillary meniscus ℓc = √(γ/ρg)',
+  hint: 'drag to tilt · flick to slosh',
+  palettes: ['reef', 'synthwave', 'ember', 'aurora', 'ultraviolet', 'gold'],
+  defaultPalette: 'reef',
+  grid: false,
+  params: {
+    fill:      { type: 'range', label: 'Fill', min: 0, max: 100, step: 1, value: 90, unit: '%' },
+    viscosity: { type: 'range', label: 'Viscosity', min: 0, max: 4, step: 0.01, value: 2.54,
+                 format: v => { const nu = 10 ** v; return nu < 10 ? nu.toFixed(1) : String(Math.round(nu)); }, unit: ' cSt' },
+    gravity:   { type: 'range', label: 'Gravity', min: 1.6, max: 24.8, step: 0.1, value: 4.1, unit: ' m/s²' },
+    contact:   { type: 'range', label: 'Contact angle', min: 0, max: 150, step: 1, value: 139, unit: '°' },
+    ior:       { type: 'range', label: 'Glass IOR', min: 1, max: 2, step: 0.01, value: 1.27 },
+    tint:      { type: 'range', label: 'Glass tint', min: 0, max: 1, step: 0.01, value: 0 },
+    bubbles:   { type: 'range', label: 'Bubbles', min: 0, max: 1, step: 0.01, value: 0 },
+    glow:      { type: 'range', label: 'Glow', min: 0, max: 2, step: 0.05, value: 1.05 },
+    rock:      { type: 'toggle', label: 'Idle smacks and fill drift', value: true },
+    flip:      { type: 'toggle', label: 'Flip over now and then', value: true },
+    flipEvery: { type: 'range', label: 'Flip every', min: 3, max: 15, step: 0.5, value: 5, unit: ' s' },
+    hChroma:   { type: 'heading', label: 'Color reaction' },
+    chroma:    { type: 'toggle', label: 'Clock reaction waves', value: true },
+    waveSpeed: { type: 'range', label: 'Front speed', min: 0.3, max: 5, step: 0.1, value: 1.4, unit: ' u/s' },
+    waveEvery: { type: 'range', label: 'New front every (smacks off)', min: 0.6, max: 10, step: 0.1, value: 3, unit: ' s' },
+    sheen:     { type: 'range', label: 'Front sheen and ripples', min: 0, max: 1, step: 0.01, value: 0.6 },
+    ragged:    { type: 'range', label: 'Front waviness', min: 0, max: 1, step: 0.01, value: 0.7 },
+    quality:   { type: 'select', label: 'Quality', value: 'high', options: Object.entries(QUALITY).map(([k, q]) => [k, q.label]) }
+  },
+  actions: [
+    { label: 'Pour', primary: true, action: () => pour() },
+    { label: 'Drain', action: () => drain() },
+    { label: 'Shake', action: () => shake() }
+  ]
+});
+
+// ---- world: key square = 10 units, mark = 6 units wide, front face on z = 0 ----
+const SQ = 10, W = SQ * LOGO_FILL;
+const D = W * LOGO_DEPTH * 1.25;   // vessel depth (a bit thicker than the standard extrusion)
+const WALL = 0.13, BEVEL = 0.05;   // glass wall thickness and edge radius
+const CAMZ = 16, BENCHZ = D + 0.7; // camera distance, bench plane behind the vessel
+const S = 0.04;                    // metres per world unit: the mark is 24 cm wide
+const NMODES = 6;
+
+// ---- bake a signed distance field per chevron (exact distance to the polygon) ----
+const N = 512, DOM = 1.2;          // texture covers ±0.6 logo units
+const polys = logoPolygons({ curveSegments: 12 });
+const sdf = new Float32Array(N * N * 4).fill(1);
+polys.forEach((poly, pi) => {
+  const m = poly.length;
+  const ax = new Float64Array(m), ay = new Float64Array(m), ex = new Float64Array(m), ey = new Float64Array(m), il = new Float64Array(m);
+  for (let e = 0; e < m; e++) {
+    const a = poly[e], b = poly[(e + 1) % m];
+    ax[e] = a[0]; ay[e] = a[1]; ex[e] = b[0] - a[0]; ey[e] = b[1] - a[1]; il[e] = 1 / (ex[e] * ex[e] + ey[e] * ey[e]);
+  }
+  for (let j = 0; j < N; j++) {
+    const y = ((j + 0.5) / N - 0.5) * DOM;
+    for (let i = 0; i < N; i++) {
+      const x = ((i + 0.5) / N - 0.5) * DOM;
+      let best = 1e9, inside = false;
+      for (let e = 0; e < m; e++) {
+        const px = x - ax[e], py = y - ay[e];
+        let t = (px * ex[e] + py * ey[e]) * il[e];
+        t = t < 0 ? 0 : t > 1 ? 1 : t;
+        const dx = px - ex[e] * t, dy = py - ey[e] * t, d2 = dx * dx + dy * dy;
+        if (d2 < best) best = d2;
+        if ((ay[e] > y) !== (ay[e] + ey[e] > y) && x < ax[e] + ex[e] * (y - ay[e]) / ey[e]) inside = !inside;
+      }
+      sdf[(j * N + i) * 4 + pi] = inside ? -Math.sqrt(best) : Math.sqrt(best);
+    }
+  }
+});
+const half = new Uint16Array(N * N * 4);
+for (let i = 0; i < half.length; i++) half[i] = THREE.DataUtils.toHalfFloat(sdf[i]);
+const sdfTex = new THREE.DataTexture(half, N, N, THREE.RGBAFormat, THREE.HalfFloatType);
+sdfTex.minFilter = sdfTex.magFilter = THREE.LinearFilter;
+sdfTex.needsUpdate = true;
+
+// cavity cross-section samples per vessel (local world units, y up), for the hydrostatic level
+const STRIDE = 3, CELL = STRIDE * DOM / N * W;
+const cavities = polys.map((_, pi) => {
+  const xs = [], ys = [];
+  for (let j = 1; j < N; j += STRIDE) for (let i = 1; i < N; i += STRIDE) {
+    if (sdf[(j * N + i) * 4 + pi] * W < -WALL) {
+      xs.push(((i + 0.5) / N - 0.5) * DOM * W);
+      ys.push(-((j + 0.5) / N - 0.5) * DOM * W);
+    }
+  }
+  return { xs: Float32Array.from(xs), ys: Float32Array.from(ys), yw: new Float32Array(xs.length), sorted: new Float32Array(xs.length) };
+});
+
+// ---- renderer ----
+const { canvas } = lab.canvas({ context: 'none' });
+canvas.style.touchAction = 'none';
+let renderer;
+try { renderer = new THREE.WebGLRenderer({ canvas, antialias: false }); }
+catch (e) { lab.hud('WebGL is not available in this browser.'); throw e; }
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+const vert = /* glsl */`void main() { gl_Position = vec4(position.xy, 0.0, 1.0); }`;
+const frag = /* glsl */`
+precision highp float;
+uniform vec2 uRes, uHalf, uRot, uRotL, uOff;
+uniform vec3 uCam;
+uniform sampler2D uSdf;
+uniform float uDom, uW, uD, uWall, uBevel, uBenchZ, uCell, uLine, uPx;
+uniform float uLevel[3], uX0[3], uL[3], uModes[18];
+uniform float uMen, uCap, uIor, uTint, uGlow, uBub, uRise, uDepthN;
+uniform vec3 uRamp[8];
+uniform vec4 uFront[6];                 // clock fronts: local centre xy, start time, colour step
+uniform int uFrontN;
+uniform float uClk, uWaveV, uBase, uSheen, uChroma, uRag;
+uniform int uRampN, uSteps, uVSteps, uGSteps;
+uniform vec3 uBg, uGrid, uInk, uTintCol;
+
+const float LIQ_N = 1.333;   // liquid refractive index
+const float SIGMA = 2.6;     // liquid extinction per world unit
+
+vec2 rotI(vec2 v) { return vec2(uRot.x * v.x + uRot.y * v.y, -uRot.y * v.x + uRot.x * v.y); }
+vec2 rotF(vec2 v) { return vec2(uRot.x * v.x - uRot.y * v.y, uRot.y * v.x + uRot.x * v.y); }
+// The liquid settles to the vessel's angle a beat late (sim.thL): its surface is level in the frame the vessel
+// had then, not the one it has now. In a quick turn it rides round with the walls, then falls to the new bottom.
+vec2 rotL(vec2 v) { return vec2(uRotL.x * v.x - uRotL.y * v.y, uRotL.y * v.x + uRotL.x * v.y); }
+vec2 rotLI(vec2 v) { return vec2(uRotL.x * v.x + uRotL.y * v.y, -uRotL.y * v.x + uRotL.x * v.y); }
+vec2 liqF(vec2 pl) { return rotL(pl) + uOff; }
+vec3 toWorld(vec3 p) { return vec3(rotF(p.xy) + uOff, p.z); }
+vec3 toWorldDir(vec3 d) { return vec3(rotF(d.xy), d.z); }
+vec3 toLocalDir(vec3 d) { return vec3(rotI(d.xy), d.z); }
+
+// per-chevron 2D signed distance, world units, local frame
+vec3 sdf2(vec2 pl) {
+  vec2 uv = vec2(pl.x, -pl.y) / uW / uDom + 0.5;
+  vec2 q = clamp(uv, 0.0, 1.0);
+  return textureLod(uSdf, q, 0.0).rgb * uW + length((uv - q) * uDom * uW);
+}
+float extr(float d2, float z, float hz, float r) {
+  vec2 w = vec2(d2 + r, abs(z) - hz + r);
+  return min(max(w.x, w.y), 0.0) + length(max(w, 0.0)) - r;
+}
+// x: outer glass, y: cavity, z: chevron index
+vec3 evalP(vec3 p) {
+  vec3 d = sdf2(p.xy);
+  float m = min(d.x, min(d.y, d.z));
+  float pid = d.x <= m ? 0.0 : (d.y <= m ? 1.0 : 2.0);
+  float z = p.z + uD * 0.5;
+  return vec3(extr(m, z, uD * 0.5, uBevel), extr(m + uWall, z, uD * 0.5 - uWall, uBevel * 1.6), pid);
+}
+float outerD(vec3 p) { vec3 d = sdf2(p.xy); return extr(min(d.x, min(d.y, d.z)), p.z + uD * 0.5, uD * 0.5, uBevel); }
+float cavD(vec3 p) { vec3 d = sdf2(p.xy); return extr(min(d.x, min(d.y, d.z)) + uWall, p.z + uD * 0.5, uD * 0.5 - uWall, uBevel * 1.6); }
+vec3 nOuter(vec3 p) {
+  const vec2 k = vec2(1.0, -1.0); const float e = 0.012;
+  return normalize(k.xyy * outerD(p + k.xyy * e) + k.yyx * outerD(p + k.yyx * e) + k.yxy * outerD(p + k.yxy * e) + k.xxx * outerD(p + k.xxx * e));
+}
+vec3 nCav(vec3 p) {
+  const vec2 k = vec2(1.0, -1.0); const float e = 0.012;
+  return normalize(k.xyy * cavD(p + k.xyy * e) + k.yyx * cavD(p + k.yyx * e) + k.yxy * cavD(p + k.yxy * e) + k.xxx * cavD(p + k.xxx * e));
+}
+
+// free surface of chevron i at x in the liquid's frame (liqF): hydrostatic level + standing-wave modes
+float surfY(int i, float x) {
+  float u = clamp((x - uX0[i]) / uL[i], 0.0, 1.0);
+  float c1 = cos(3.14159265 * u), cp = 1.0, cn = c1, h = uLevel[i];
+  for (int n = 0; n < 6; n++) { h += uModes[i * 6 + n] * cn; float nx = 2.0 * c1 * cn - cp; cp = cn; cn = nx; }
+  return h;
+}
+bool liq(vec3 pl, int pid, float cd) {
+  if (cd > 0.0) return false;
+  vec2 w = liqF(pl.xy);
+  return w.y < surfY(pid, w.x) + uMen * exp(cd / uCap);
+}
+vec3 rampC(float t) {
+  t = clamp(t, 0.0, 0.9999) * float(uRampN - 1);
+  int i = int(floor(t));
+  return mix(uRamp[i], uRamp[min(i + 1, uRampN - 1)], t - float(i));
+}
+// The clock reaction: fronts nucleate in the liquid and sweep outward; behind each one the colour has
+// flipped one step along the palette, read back and forth so it cycles forever. A thin rainbow sheen rides
+// each front and a few fading bands trail it, like colour passing over a cuttlefish or mantis shrimp.
+float hash2(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float vnoise2(vec2 p) {
+  vec2 i = floor(p), f = fract(p), u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash2(i), hash2(i + vec2(1, 0)), u.x), mix(hash2(i + vec2(0, 1)), hash2(i + vec2(1, 1)), u.x), u.y);
+}
+// broad, slowly drifting swells: fronts run ahead in some places and lag in others, but the edge stays smooth
+float churn(vec2 p) {
+  float t = uClk * 0.1;
+  return vnoise2(p * 0.55 + vec2(t, -t * 0.7)) * 0.7 + vnoise2(p * 1.1 - vec2(t * 0.8, t)) * 0.3 - 0.5;
+}
+vec3 rampCyc(float x) { return rampC(1.0 - abs(2.0 * fract(x * 0.5) - 1.0)); }
+vec3 liqC(float depthT, vec2 pl) {
+  if (uChroma < 0.5) return rampC(depthT);
+  float ph = uBase, edge = 0.0, rip = 0.0;
+  float nz = uFrontN > 0 ? churn(pl) : 0.0;
+  for (int i = 0; i < 6; i++) {
+    if (i >= uFrontN) break;
+    vec4 F = uFront[i];
+    vec2 dv = pl - F.xy;
+    float R = (uClk - F.z) * uWaveV, r = length(dv);
+    // ragged edge: the shared churn plus fingers around this front, both growing as it spreads
+    float grow = min(R, 2.5);
+    float a = atan(dv.y, dv.x);
+    float lobes = sin(a * 4.0 + F.z * 5.3 + uClk * 0.4) * 0.6 + sin(a * 2.0 - F.z * 2.1) * 0.4;
+    float b = R - r + uRag * grow * (nz * 0.8 + lobes * 0.22);      // b > 0: the front has passed
+    ph += F.w * smoothstep(-0.1, 0.1, b);
+    edge += exp(-b * b / 0.012);
+    if (b > 0.0) rip += sin(b * 14.0) * exp(-b * 2.2) * 0.5;
+  }
+  vec3 c = rampCyc(depthT * 0.55 + ph + rip * 0.12 * uSheen);
+  vec3 film = 0.5 + 0.5 * cos(6.2832 * (ph * 0.7 + depthT * 1.3 + vec3(0.0, 0.33, 0.67)));
+  return c + film * min(edge, 1.0) * uSheen * 0.9;
+}
+// exact dielectric Fresnel, eta = n1 / n2
+float fresnel(float ci, float eta) {
+  ci = clamp(ci, 0.0, 1.0);
+  float st2 = eta * eta * (1.0 - ci * ci);
+  if (st2 >= 1.0) return 1.0;
+  float ct = sqrt(1.0 - st2);
+  float rs = (eta * ci - ct) / (eta * ci + ct), rp = (ci - eta * ct) / (ci + eta * ct);
+  return 0.5 * (rs * rs + rp * rp);
+}
+// studio around the bench: overhead softbox, a side strip, a diagonal streak behind the viewer, a faint horizon
+vec3 env(vec3 d) {
+  float s = 0.015;
+  s += 1.8 * smoothstep(0.5, 0.72, d.y) * smoothstep(0.95, 0.35, abs(d.x));
+  s += 0.9 * smoothstep(0.62, 0.8, -d.x) * smoothstep(-0.5, 0.3, d.y);
+  float k = d.x * 0.8 - d.y * 0.6;
+  s += 4.0 * exp(-pow((k - 0.16) / 0.022, 2.0)) * smoothstep(0.2, 0.6, d.z);
+  s += 0.5 * exp(-pow(d.y / 0.1, 2.0)) * smoothstep(0.0, -0.5, d.z);
+  return uInk * s;
+}
+// liquid light spilling onto the bench behind the vessel
+vec3 benchGlow(vec2 bw) {
+  vec2 pl = rotI(bw - uOff), lw = liqF(pl);
+  vec3 d = sdf2(pl) + uWall;
+  vec3 acc = vec3(0.0);
+  for (int i = 0; i < 3; i++) {
+    float di = d[i];
+    if (di > 2.5) continue;
+    float Y = surfY(i, lw.x);
+    float below = smoothstep(0.3, -0.3, lw.y - Y);
+    acc += liqC((Y - lw.y) / uDepthN, pl) * exp(-max(di, 0.0) / 0.3) * below;
+  }
+  return acc * 0.045 * uGlow;
+}
+vec3 bench(vec3 ro, vec3 rd) {
+  float t = (-uBenchZ - ro.z) / rd.z;
+  vec3 b = ro + rd * max(t, 0.0);
+  vec2 g = abs(fract(b.xy / uCell + 0.5) - 0.5) * uCell;
+  float hw = uLine * 0.5;
+  float line = max(1.0 - smoothstep(hw - uPx * 0.5, hw + uPx * 0.5, g.x), 1.0 - smoothstep(hw - uPx * 0.5, hw + uPx * 0.5, g.y));
+  return mix(uBg, uGrid, line) + benchGlow(b.xy);
+}
+vec3 glassT(float len) { return exp(-len * uTint * 2.2 * (1.05 - uTintCol)); }
+
+// rising bubbles, drawn in the plane of the front cavity wall
+vec2 bubbles(vec2 pw, int pid) {
+  vec2 res = vec2(0.0);
+  for (int layer = 0; layer < 2; layer++) {
+    float cw = layer == 0 ? 0.34 : 0.23;
+    float cx = floor(pw.x / cw);
+    for (int dx = -1; dx <= 1; dx++) {
+      float col = cx + float(dx) + float(layer) * 517.0;
+      for (int b = 0; b < 2; b++) {
+        vec4 h = fract(sin(vec4(col, col + 1.7, col + 3.1, col + 5.3) * (12.9898 + float(b) * 7.13)) * 43758.5453);
+        if (h.x > uBub) continue;
+        float r = mix(0.025, 0.06, h.y) * (layer == 0 ? 1.0 : 0.75);
+        float m = mix(0.6, 1.4, h.z) * (r / 0.045);
+        float rise = uRise * m;
+        float y = -3.8 + fract(h.w + float(b) * 0.5 + rise / 7.6) * 7.6;
+        if (abs(pw.y - y) > r + 0.01) continue;
+        float x = (floor(pw.x / cw) + float(dx) + 0.5 + (h.y - 0.5) * 0.6) * cw + 0.05 * sin(rise * 2.3 + h.x * 40.0);
+        vec2 c = vec2(x, y);
+        float dd = length(pw - c);
+        if (dd > r + 0.01) continue;
+        vec3 cl = vec3(rotI(c - uOff), -uD * 0.5);
+        vec3 e = evalP(cl);
+        if (int(e.z) != pid || !liq(cl, pid, e.y)) continue;
+        float ring = exp(-pow((dd - r * 0.86) / (r * 0.16), 2.0));
+        float dot_ = exp(-pow(length(pw - c - vec2(-0.35, 0.4) * r) / (r * 0.18), 2.0));
+        res.x += ring * 0.7 + dot_ * 1.2;
+        res.y = max(res.y, smoothstep(r, r * 0.8, dd));
+      }
+    }
+  }
+  return res;
+}
+
+vec3 Tr; vec3 Lc;
+void absorb(float h, vec3 pl, int pid) {
+  vec2 w = liqF(pl.xy);
+  vec3 lc = min(liqC((surfY(pid, w.x) - w.y) / uDepthN, pl.xy), vec3(1.0));
+  float o = 1.0 - exp(-SIGMA * h);
+  Lc += Tr * lc * o * (0.35 + 0.65 * uGlow);
+  Tr *= exp(-SIGMA * h * (1.12 - lc));
+}
+
+void main() {
+  vec2 ndc = gl_FragCoord.xy / uRes * 2.0 - 1.0;
+  vec3 ro = uCam;
+  vec3 rd = normalize(vec3(ndc * uHalf, 0.0) - ro);
+  vec3 rol = vec3(rotI(ro.xy - uOff), ro.z), rdl = toLocalDir(rd);
+
+  // sphere trace the outer glass
+  float t = (0.03 - ro.z) / rd.z, tEnd = (-uD - 0.03 - ro.z) / rd.z;
+  bool hit = false; vec3 p;
+  for (int k = 0; k < 200; k++) {
+    if (k >= uSteps) break;
+    p = rol + rdl * t;
+    float d = outerD(p);
+    if (d < 0.0015) { hit = true; break; }
+    t += d;
+    if (t > tEnd) break;
+  }
+  if (!hit) { gl_FragColor = vec4(bench(ro, rd), 1.0); return; }
+
+  vec3 n = nOuter(p);
+  float F = fresnel(-dot(rdl, n), 1.0 / uIor);
+  vec3 col = F * env(toWorldDir(reflect(rdl, n)));
+  vec3 T = refract(rdl, n, 1.0 / uIor);
+  if (dot(T, T) < 0.5) T = rdl;
+
+  // walk through the glass until we reach the cavity or leave the solid
+  vec3 q = p - n * 0.004;
+  float glassLen = 0.0; int state = 0; vec3 e;
+  for (int k = 0; k < 64; k++) {
+    if (k >= uGSteps) break;
+    e = evalP(q);
+    float g = min(-e.x, e.y);
+    if (g < 0.0015) { state = e.y < -e.x ? 1 : 2; break; }
+    float h = max(g, 0.004);
+    q += T * h; glassLen += h;
+  }
+
+  vec3 body;
+  if (state != 1) {
+    // passed through solid glass only (rims, side walls)
+    vec3 n2 = nOuter(q);
+    vec3 o = refract(T, -n2, uIor);
+    if (dot(o, o) < 0.5) {
+      body = env(toWorldDir(reflect(T, -n2))) * 0.6 + bench(toWorld(q), toWorldDir(T)) * 0.25;
+    } else {
+      float F2 = fresnel(dot(T, n2), uIor);
+      body = (1.0 - F2) * bench(toWorld(q), toWorldDir(o));
+    }
+    body *= glassT(glassLen);
+  } else {
+    // into the cavity: glass to air at the inner wall
+    vec3 nc = nCav(q);
+    float Fi = fresnel(-dot(T, nc), uIor);
+    vec3 Dc = refract(T, nc, uIor);
+    vec3 inner = Fi * env(toWorldDir(reflect(T, nc))) * 0.7;
+    if (dot(Dc, Dc) < 0.5) { Dc = rdl; inner += env(toWorldDir(reflect(T, nc))) * 0.3; }
+
+    int pid = int(e.z);
+    vec3 c = q + Dc * 0.002;
+    float cd = cavD(c);
+    bool inL = liq(c, pid, cd);
+    vec2 bub = vec2(0.0);
+    vec2 frontW = rotF(c.xy) + uOff;
+    if (inL && uBub > 0.0) bub = bubbles(frontW, pid);
+    Tr = vec3(1.0); Lc = vec3(0.0);
+    for (int k = 0; k < 64; k++) {
+      if (k >= uVSteps) break;
+      float h = clamp(-cd, 0.025, 0.09);
+      vec3 c2 = c + Dc * h;
+      float cd2 = cavD(c2);
+      bool out2 = cd2 > 0.0;
+      if (out2) { h *= clamp(-cd / (cd2 - cd + 1e-5), 0.0, 1.0); c2 = c + Dc * h; }
+      bool inL2 = out2 ? inL : liq(c2, pid, cd2);
+      if (inL2 != inL) {
+        vec3 a = c, b = c2;
+        for (int i = 0; i < 4; i++) { vec3 mm = (a + b) * 0.5; if (liq(mm, pid, cavD(mm)) == inL) a = mm; else b = mm; }
+        vec3 s = (a + b) * 0.5;
+        if (inL) absorb(length(s - c), (s + c) * 0.5, pid);
+        vec2 sw = liqF(s.xy);
+        float dy = (surfY(pid, sw.x + 0.02) - surfY(pid, sw.x - 0.02)) / 0.04;
+        vec3 nl = vec3(rotLI(normalize(vec2(-dy, 1.0))), 0.0);
+        vec3 nf = dot(Dc, nl) < 0.0 ? nl : -nl;
+        float eta = inL ? LIQ_N : 1.0 / LIQ_N;
+        float Fs = fresnel(-dot(Dc, nf), eta);
+        if (inL) {
+          // underside of the surface: a mirror of the liquid, total internal reflection at grazing view
+          Lc += Tr * Fs * liqC(0.0, s.xy) * (0.4 + 0.6 * uGlow);
+          vec3 r = refract(Dc, nf, eta);
+          if (dot(r, r) < 0.5) { Dc = reflect(Dc, nf); inL2 = true; } else { Tr *= 1.0 - Fs; Dc = r; }
+        } else {
+          Lc += Tr * Fs * env(toWorldDir(reflect(Dc, nf))) * 1.4;
+          Tr *= 1.0 - Fs;
+          Dc = refract(Dc, nf, eta);
+        }
+        c = s + Dc * 0.003; cd = cavD(c); inL = inL2;
+        continue;
+      }
+      if (inL) absorb(h, (c + c2) * 0.5, pid);
+      c = c2; cd = cd2;
+      if (out2) break;
+    }
+    Lc = mix(Lc, Lc * 0.4, bub.y) + bub.x * mix(uInk, rampC(0.0), 0.35) * 0.6;
+    float back = uWall / max(abs(Dc.z), 0.3);
+    body = inner + glassT(glassLen + back) * (Lc + Tr * bench(toWorld(c), toWorldDir(Dc)));
+  }
+  col += (1.0 - F) * body;
+  gl_FragColor = vec4(col, 1.0);
+}`;
+
+const U = {
+  uRes: { value: new THREE.Vector2(1, 1) }, uHalf: { value: new THREE.Vector2(5, 5) },
+  uRot: { value: new THREE.Vector2(1, 0) }, uRotL: { value: new THREE.Vector2(1, 0) }, uOff: { value: new THREE.Vector2() }, uCam: { value: new THREE.Vector3(0, 0, CAMZ) },
+  uSdf: { value: sdfTex }, uDom: { value: DOM }, uW: { value: W }, uD: { value: D }, uWall: { value: WALL }, uBevel: { value: BEVEL },
+  uBenchZ: { value: BENCHZ }, uCell: { value: 1 }, uLine: { value: 0.01 }, uPx: { value: 0.01 },
+  uLevel: { value: [-1e3, -1e3, -1e3] }, uX0: { value: [-3, -3, -3] }, uL: { value: [6, 6, 6] }, uModes: { value: new Array(18).fill(0) },
+  uMen: { value: 0 }, uCap: { value: 0.13 }, uIor: { value: 1.5 }, uTint: { value: 0.25 }, uGlow: { value: 1 },
+  uBub: { value: 0.35 }, uRise: { value: 0 }, uDepthN: { value: 3.2 },
+  uRamp: { value: Array.from({ length: 8 }, () => new THREE.Color()) }, uRampN: { value: 2 },
+  uFront: { value: Array.from({ length: 6 }, () => new THREE.Vector4()) }, uFrontN: { value: 0 },
+  uClk: { value: 0 }, uWaveV: { value: 1.4 }, uBase: { value: 0 }, uSheen: { value: 0.6 }, uChroma: { value: 1 }, uRag: { value: 0.7 },
+  uSteps: { value: 56 }, uVSteps: { value: 22 }, uGSteps: { value: 26 },
+  uBg: { value: new THREE.Color() }, uGrid: { value: new THREE.Color() }, uInk: { value: new THREE.Color() }, uTintCol: { value: new THREE.Color() }
+};
+const scene = new THREE.Scene();
+const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMaterial({ vertexShader: vert, fragmentShader: frag, uniforms: U, depthTest: false, depthWrite: false }));
+quad.frustumCulled = false;
+scene.add(quad);
+
+// One full-screen shader pass, so MSAA would buy nothing here. Edges are smoothed by FXAA after tone mapping,
+// and High renders above device resolution (supersampling) before the browser scales it down.
+const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType }));
+composer.addPass(new RenderPass(scene, camera));
+const bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.3, 0.3, 0.55);
+composer.addPass(bloom);
+composer.addPass(new OutputPass());
+const fxaa = new ShaderPass(FXAAShader);
+composer.addPass(fxaa);
+
+let sq = lab.square(), k = SQ / sq.size;
+function resize(s) {
+  sq = s; k = SQ / s.size;
+  const q = QUALITY[lab.params.quality] || QUALITY.balanced;
+  const pr = Math.min(3, Math.min(2, window.devicePixelRatio || 1) * q.scale);
+  renderer.setPixelRatio(pr); renderer.setSize(s.w, s.h, false);
+  composer.setPixelRatio(pr); composer.setSize(s.w, s.h);
+  const buf = renderer.getDrawingBufferSize(new THREE.Vector2());
+  U.uRes.value.copy(buf);
+  fxaa.material.uniforms.resolution.value.set(1 / buf.x, 1 / buf.y);
+  U.uHalf.value.set(s.w * k / 2, s.h * k / 2);
+  const deep = (CAMZ + BENCHZ) / CAMZ;           // bench grid cell = 16 css px through the square center at rest
+  U.uCell.value = 16 * k * deep;
+  U.uLine.value = 1 * k * deep;
+  U.uPx.value = (s.h * k / buf.y) * deep;
+  Object.assign(U.uSteps, { value: q.steps }); U.uVSteps.value = q.vsteps; U.uGSteps.value = q.gsteps;
+}
+lab.on('resize', resize);
+resize(sq);
+
+function applyPalette(p) {
+  U.uBg.value.set(p.bg); U.uGrid.value.set(p.grid); U.uInk.value.set(p.ink);
+  const cs = p.colors.slice(0, 8);
+  cs.forEach((c, i) => U.uRamp.value[i].set(c));
+  U.uRampN.value = cs.length;
+  U.uTintCol.value.set(ramp(p, 0.75)).lerp(new THREE.Color(p.ink), 0.35);
+}
+lab.on('palette', applyPalette);
+applyPalette(lab.palette);
+lab.on('change', key => { if (key === 'quality') resize(sq); });
+
+// ---- simulation state ----
+const sim = {
+  th: 0, om: 0, al: 0, thT: 0,                 // tilt about the view axis (rad), its rates, target
+  thL: 0, omL: 0, base: 0,                     // the angle the liquid has settled to, its rate; rest angle (0 or pi)
+  x: 0, y: 0, vx: 0, vy: 0, ax: 0, ay: 0, xT: 0, yT: 0,  // translation (shake)
+  cx: 0, cy: 0, cxT: 0, cyT: 0,                // camera parallax
+  fill: lab.params.fill / 100, rise: 0, burst: 0, rockFade: 1,
+  v: cavities.map(() => ({ a: new Float64Array(NMODES), v: new Float64Array(NMODES), level: -1e3, x0: -3, L: 6, H: 1, lx: 0, ly: 0, f1: 0, z1: 0 }))
+};
+function resetState() {
+  Object.assign(sim, { th: 0, om: 0, al: 0, thT: 0, thL: 0, omL: 0, base: 0, x: 0, y: 0, vx: 0, vy: 0, ax: 0, ay: 0, xT: 0, yT: 0, cx: 0, cy: 0, cxT: 0, cyT: 0, rise: 0, burst: 0, rockFade: 1 });
+  sim.v.forEach(s => { s.a.fill(0); s.v.fill(0); });
+  pourT = drainT = shakeT = 0; dragging = false; clock = 0; flip = null; flipT = 3;
+}
+for (const b of document.querySelectorAll('.btns .btn')) if (b.textContent === 'Reset parameters') b.addEventListener('click', resetState);
+
+// Hydrostatics: the free surface is the height that leaves exactly `fill` of the cavity area below it.
+// Each sample stands for a CELL-tall slab, so the area below a level is a sum of ramps, not a count:
+// a plain quantile of grid samples would hold still across a row and then snap a whole CELL.
+// The surface span (x0, L) still comes from discrete samples, so it eases toward its target by `k`.
+function hydrostatics(k = 1) {
+  const c = Math.cos(sim.thL), s = Math.sin(sim.thL), f = sim.fill;
+  cavities.forEach((cav, i) => {
+    const st = sim.v[i], n = cav.xs.length;
+    if (f <= 0.002) { st.level = -1e3; st.bL = 0; return; }
+    if (f >= 0.998) { st.level = 1e3; st.bL = 0; return; }
+    for (let j = 0; j < n; j++) cav.yw[j] = s * cav.xs[j] + c * cav.ys[j];
+    cav.sorted.set(cav.yw); cav.sorted.sort();
+    const qf = f * (n - 1), j0 = Math.floor(qf);
+    const guess = cav.sorted[j0] + (cav.sorted[Math.min(n - 1, j0 + 1)] - cav.sorted[j0]) * (qf - j0);
+    const want = f * n, below = L => { let a = 0; for (let j = 0; j < n; j++) a += Math.min(1, Math.max(0, (L - cav.yw[j]) / CELL + 0.5)); return a; };
+    let lo = guess - CELL, hi = guess + CELL;
+    for (let it = 0; it < 14; it++) { const m = (lo + hi) / 2; if (below(m) < want) lo = m; else hi = m; }
+    const lvl = (lo + hi) / 2;
+    let x0 = Infinity, x1 = -Infinity, lx = 0, ly = 0, cnt = 0;
+    const band = CELL * 1.6;
+    for (let j = 0; j < n; j++) {
+      const yw = cav.yw[j], wgt = Math.min(1, Math.max(0, (lvl - yw) / CELL + 0.5));
+      if (wgt > 0) { lx += cav.xs[j] * wgt; ly += cav.ys[j] * wgt; cnt += wgt; }
+      if (Math.abs(yw - lvl) < band) { const xw = c * cav.xs[j] - s * cav.ys[j]; if (xw < x0) x0 = xw; if (xw > x1) x1 = xw; }
+    }
+    if (!isFinite(x0)) { x0 = -3; x1 = 3; }
+    if (!st.bL) { st.bx0 = x0; st.bL = x1 - x0; }        // first frame with a surface: no easing in from nowhere
+    st.bx0 += (x0 - st.bx0) * k; st.bL += (x1 - x0 - st.bL) * k;
+    st.level = lvl + sim.y; st.x0 = st.bx0 + sim.x; st.L = Math.max(0.5, st.bL);
+    st.H = Math.max(0.08, (cnt * CELL * CELL) / st.L);
+    st.lx = cnt ? lx / cnt : 0; st.ly = cnt ? ly / cnt : 0;
+  });
+}
+
+// Linear sloshing: cosine standing waves across the free surface, each a damped oscillator
+// with ω² = g k tanh(k h), driven toward the static tilt a_x/g that the vessel's acceleration imposes.
+function slosh(dt, dTh) {
+  const P = lab.params, g = P.gravity, nu = 1e-6 * 10 ** P.viscosity;
+  const Wg = (D - 2 * WALL) * S;
+  const c = Math.cos(sim.thL), s = Math.sin(sim.thL);
+  sim.v.forEach(st => {
+    if (Math.abs(st.level) > 900) { st.a.fill(0); st.v.fill(0); return; }
+    // acceleration of the vessel point under the liquid's centroid (world units/s², x component)
+    const lx = st.lx, ly = st.ly;
+    const rx = -sim.al * ly - sim.om * sim.om * lx, ry = sim.al * lx - sim.om * sim.om * ly;
+    const ax = (c * rx - s * ry + sim.ax) * S;
+    const Lm = st.L * S, Hm = st.H * S;
+    for (let m = 0; m < NMODES; m++) {
+      const nn = m + 1, kk = nn * Math.PI / Lm;
+      const w = Math.min(Math.sqrt(g * kk * Math.tanh(kk * Hm)), 0.9 / dt);
+      const z = Math.min(4, Math.max(0.002, Math.sqrt(nu / (2 * w)) * (2 / Wg + 1 / Hm)));
+      const shape = nn % 2 ? 4 * st.L / (nn * nn * Math.PI * Math.PI) : 0;
+      if (m === 0) { st.f1 = w / (2 * Math.PI); st.z1 = z; }
+      st.a[m] -= 0.7 * dTh * shape;              // walls carry the liquid round with a sudden tilt
+      const aeq = (ax / g) * shape;
+      st.v[m] = (st.v[m] + w * w * (aeq - st.a[m]) * dt) / (1 + 2 * z * w * dt);
+      st.a[m] += st.v[m] * dt;
+      const lim = Math.min(0.32 * st.L / nn, 1.2 * st.H);
+      if (Math.abs(st.a[m]) > lim) { st.a[m] = Math.sign(st.a[m]) * lim; st.v[m] *= 0.5; }
+    }
+  });
+}
+
+function splash(A) {
+  sim.v.forEach(st => {
+    if (Math.abs(st.level) > 900) return;
+    const u = 0.15 + 0.7 * Math.random();
+    for (let m = 0; m < NMODES; m++) {
+      const nn = m + 1;
+      st.a[m] -= A * Math.cos(nn * Math.PI * u) * Math.exp(-((nn * Math.PI * 0.07) ** 2) / 2);
+    }
+  });
+}
+
+// ---- actions ----
+let pourT = 0, drainT = 0, shakeT = 0, fillFrom = 0, fillTo = 0, splashClock = 0;
+function setParam(key, v) {
+  const el = document.getElementById('p-' + key);
+  if (!el) return;
+  el.value = v; el.dispatchEvent(new Event('input'));
+}
+function pour() {
+  if (lab.params.fill >= 100) { splash(0.08); return; }
+  drainT = 0; pourT = 1; fillFrom = lab.params.fill; fillTo = Math.min(100, fillFrom + 22);
+  sim.burst = 1.6;
+}
+function drain() { pourT = 0; drainT = 1.6; fillFrom = lab.params.fill; fillTo = 0; }
+function shake() { shakeT = 0.9; sim.rockFade = 0; }
+
+// ---- pointer: drag to tilt (grab and turn), drag sideways to shake; hover for parallax ----
+let dragging = false, prevAng = 0, thDrag = 0, grab = { x: 0, y: 0 };
+const toWorld = e => {
+  const r = canvas.getBoundingClientRect();
+  return { x: (e.clientX - r.left - sq.w / 2) * k, y: -(e.clientY - r.top - sq.h / 2) * k };
+};
+canvas.addEventListener('pointerdown', e => {
+  canvas.setPointerCapture(e.pointerId);
+  const p = toWorld(e);
+  dragging = true; prevAng = Math.atan2(p.y, p.x); thDrag = sim.th; grab = { x: p.x - sim.x, y: p.y - sim.y };
+  if (flip) { sim.base = Math.round(sim.th / Math.PI) * Math.PI; flip = null; flipT = lab.params.flipEvery; }   // grabbed mid-flip: keep the nearer side
+  sim.rockFade = 0;
+});
+canvas.addEventListener('pointermove', e => {
+  const p = toWorld(e);
+  sim.cxT = Math.max(-1.2, Math.min(1.2, p.x * 0.14));
+  sim.cyT = Math.max(-1.2, Math.min(1.2, p.y * 0.14));
+  if (!dragging) return;
+  const ang = Math.atan2(p.y, p.x), r = Math.hypot(p.x, p.y);
+  let dA = ang - prevAng;
+  dA -= Math.round(dA / (2 * Math.PI)) * 2 * Math.PI;
+  prevAng = ang;
+  const wgt = Math.min(1, Math.max(0, (r - 0.5) / 1.2));
+  thDrag = Math.max(sim.base - 2.2, Math.min(sim.base + 2.2, thDrag + dA * wgt));
+  sim.thT = thDrag;
+  sim.xT = Math.max(-1.2, Math.min(1.2, (p.x - grab.x) * 0.3));
+  sim.yT = Math.max(-0.8, Math.min(0.8, (p.y - grab.y) * 0.3));
+});
+const release = () => { dragging = false; sim.thT = sim.base; sim.xT = sim.yT = 0; };
+canvas.addEventListener('pointerup', release);
+canvas.addEventListener('pointercancel', release);
+canvas.addEventListener('pointerleave', () => { if (!dragging) sim.cxT = sim.cyT = 0; });
+
+// ---- frame ----
+let clock = 0, hudTick = 0;
+let smackT = 2, driftFill = lab.params.fill, driftPh = null;   // idle ambience: next smack, drifting fill, its cosine phase
+const DRIFT_LO = 60, DRIFT_HI = 95, DRIFT_LEG = 8;               // percent, percent, seconds per rise or fall
+// The flip: lean back, swing over, overshoot a touch, settle. Keys are [time s, angle rad] from the rest angle,
+// eased in and out between them; the tilt spring is stiffened while it runs so the keys are what you see.
+const FLIP_KEYS = [[0, 0], [0.45, -0.2], [1.15, Math.PI + 0.16], [1.7, Math.PI]];
+const FLIP_DUR = FLIP_KEYS[FLIP_KEYS.length - 1][0];
+let flip = null, flipT = 3;                                      // the flip under way, and time until the next
+function flipAngle(t) {
+  let i = 1;
+  while (i < FLIP_KEYS.length - 1 && t > FLIP_KEYS[i][0]) i++;
+  const [t0, a0] = FLIP_KEYS[i - 1], [t1, a1] = FLIP_KEYS[i];
+  const u = Math.min(1, Math.max(0, (t - t0) / (t1 - t0)));
+  const e = i === 2 ? (u < 0.5 ? 4 * u * u * u : 1 - (-2 * u + 2) ** 3 / 2) : 0.5 - 0.5 * Math.cos(Math.PI * u);  // cubic for the swing
+  return a0 + (a1 - a0) * e;
+}
+function step(dt, t) {
+  const P = lab.params;
+  clock += dt;
+
+  // scripted actions drive the Fill slider so the panel always shows the true state
+  let scripted = null;   // exact fill while Pour or Drain runs; the slider only shows it rounded
+  if (pourT > 0) {
+    pourT = Math.max(0, pourT - dt);
+    scripted = fillFrom + (fillTo - fillFrom) * (1 - pourT);
+    setParam('fill', Math.round(scripted));
+    splashClock -= dt;
+    if (splashClock <= 0) { splash(0.05); splashClock = 0.12; }
+  }
+  if (drainT > 0) {
+    drainT = Math.max(0, drainT - dt);
+    scripted = fillFrom * (drainT / 1.6);
+    setParam('fill', Math.round(scripted));
+  }
+  let shakeX = 0;
+  if (shakeT > 0) { shakeT = Math.max(0, shakeT - dt); shakeX = 0.55 * Math.sin((0.9 - shakeT) * 2 * Math.PI * 3.2) * Math.min(1, shakeT * 4); }
+
+  // idle ambience (never under reduced motion): a smack every few seconds that the tilt spring rings down,
+  // and the fill wandering slowly between DRIFT_LO and DRIFT_HI on the real Fill slider
+  if (!dragging) {
+    sim.rockFade = Math.min(1, sim.rockFade + dt / 3);
+    sim.thT = sim.base; sim.yT = 0;
+    if (P.flip && !lab.calm) {
+      if (!flip && (flipT -= dt) <= 0) flip = { t: 0, dir: Math.random() < 0.5 ? -1 : 1 };
+      if (flip) {
+        flip.t += dt;
+        sim.thT = sim.base + flip.dir * flipAngle(flip.t);
+        sim.yT = 0.35 * Math.sin(Math.PI * Math.min(1, Math.max(0, (flip.t - 0.45) / 0.9)));   // lifted as it swings
+        if (flip.t >= FLIP_DUR) {
+          sim.base += flip.dir * Math.PI;
+          if (Math.abs(sim.base) > 3) {                  // fold whole turns away (cos and sin are the same)
+            const k = Math.sign(sim.base) * 2 * Math.PI;
+            sim.base -= k; sim.th -= k; sim.thL -= k; sim.thT = sim.base;
+          }
+          flip = null; flipT = P.flipEvery * (0.8 + 0.4 * Math.random());
+        }
+      }
+    } else if (flip) { flip = null; }
+    if (P.rock && !lab.calm && !flip) {
+      smackT -= dt;
+      if (smackT <= 0) {
+        // a hit lands where the reaction kicks off and drives roughly at the centre; aimed a little off-centre,
+        // so it spins the vessel as well as shoving it, and the springs ring it home
+        const side = Math.random() < 0.5 ? -1 : 1, k = (0.8 + 0.4 * Math.random()) * sim.rockFade;
+        const [px, py] = wetPoint(side) ?? [side * W * 0.45, 0];
+        const c = Math.cos(sim.th), sn = Math.sin(sim.th), rx = c * px - sn * py, ry = sn * px + c * py;
+        const off = (0.17 + 0.28 * Math.random()) * (Math.random() < 0.5 ? -1 : 1);   // 10–26° off dead centre
+        const a = Math.atan2(-ry, -rx) + off, ux = Math.cos(a), uy = Math.sin(a);
+        sim.vx += ux * 3.2 * k; sim.vy += uy * 2.2 * k;
+        sim.om += 0.45 * (rx * uy - ry * ux) * k;           // torque r × F
+        pulse(px, py, k);
+        smackT = 1.6 + 3.2 * Math.random() ** 1.4;          // mostly a couple of seconds, now and then a longer lull
+      }
+    }
+  }
+  // the drift runs on a float so the surface glides; the slider only mirrors it in whole percent
+  let fillGoal = scripted ?? P.fill;
+  if (P.rock && !lab.calm && !pourT && !drainT) {
+    const mid = (DRIFT_LO + DRIFT_HI) / 2, amp = (DRIFT_HI - DRIFT_LO) / 2, speed = Math.PI / DRIFT_LEG;
+    if (Math.abs(P.fill - Math.round(driftFill)) > 0.5) { driftFill = P.fill; driftPh = null; }   // moved by hand, Pour or Drain
+    if (driftPh === null) {
+      const off = Math.abs(driftFill - mid) - amp;
+      if (off <= 0) driftPh = Math.acos((mid - driftFill) / amp);           // join the cosine where we are
+      else driftFill += Math.sign(mid - driftFill) * Math.min(off, dt * amp * speed);   // outside the band: glide in at full drift speed
+    }
+    if (driftPh !== null) { driftPh += dt * speed; driftFill = mid - amp * Math.cos(driftPh); }
+    fillGoal = driftFill;
+    if (Math.round(driftFill) !== P.fill) setParam('fill', Math.round(driftFill));
+  }
+  sim.fill += (fillGoal / 100 - sim.fill) * Math.min(1, dt * 5);
+
+  // the implicit damping step is only stable forward in time; a bad step must not poison the surface
+  dt = Math.max(0, dt);
+  if (sim.v.some(st => !st.a.every(Number.isFinite))) sim.v.forEach(st => { st.a.fill(0); st.v.fill(0); });
+  const thL0 = sim.thL, SUB = 4, h = dt / SUB;
+  // the liquid follows the vessel's angle through a damped spring, slower the thicker it is
+  const wl = 7 / (1 + 0.35 * P.viscosity), zl = 0.45;
+  for (let i = 0; i < SUB; i++) {
+    const wn = dragging ? 16 : flip ? 14 : 5.5, z = dragging ? 0.8 : flip ? 0.85 : 0.24;
+    const al = wn * wn * (sim.thT - sim.th) - 2 * z * wn * sim.om;
+    sim.om += al * h; sim.th += sim.om * h; sim.al = al;
+    sim.omL += (wl * wl * (sim.th - sim.thL) - 2 * zl * wl * sim.omL) * h; sim.thL += sim.omL * h;
+    const wt = dragging ? 14 : 9, zt = dragging ? 0.8 : 0.3;
+    const ax = wt * wt * (sim.xT + shakeX - sim.x) - 2 * zt * wt * sim.vx;
+    const ay = wt * wt * (sim.yT - sim.y) - 2 * zt * wt * sim.vy;
+    sim.vx += ax * h; sim.x += sim.vx * h; sim.ax = ax;
+    sim.vy += ay * h; sim.y += sim.vy * h; sim.ay = ay;
+    if (i === 0) hydrostatics(Math.min(1, h * 10));
+    slosh(h, i === 0 ? sim.thL - thL0 : 0);
+  }
+  hydrostatics(Math.min(1, h * 10));
+  sim.cx += (sim.cxT - sim.cx) * Math.min(1, dt * 4);
+  sim.cy += (sim.cyT - sim.cy) * Math.min(1, dt * 4);
+
+  // bubbles rise at Stokes speed, capped at a terminal speed for millimetre bubbles in water
+  const g = P.gravity, nu = 1e-6 * 10 ** P.viscosity, r = 0.9e-3;
+  const vRise = Math.min((2 / 9) * g * r * r / nu, 0.12 * Math.sqrt(g / 9.81)) / S;
+  if (!lab.calm) sim.rise += vRise * dt;
+  sim.burst = Math.max(0, sim.burst - dt);
+
+  // capillarity: ℓc = √(γ/ρg) for water, wall rise h = ℓc √(2(1 − sin θ)), sign of cos θ
+  const lc = Math.sqrt(0.072 / (1000 * g));
+  const ca = P.contact * Math.PI / 180;
+  const men = Math.sign(Math.cos(ca)) * lc * Math.sqrt(2 * (1 - Math.sin(ca)));
+
+  U.uRot.value.set(Math.cos(sim.th), Math.sin(sim.th));
+  U.uRotL.value.set(Math.cos(sim.thL), Math.sin(sim.thL));
+  U.uOff.value.set(sim.x, sim.y);
+  U.uCam.value.set(sim.cx, sim.cy, CAMZ);
+  sim.v.forEach((st, i) => {
+    U.uLevel.value[i] = st.level; U.uX0.value[i] = st.x0; U.uL.value[i] = st.L;
+    for (let m = 0; m < NMODES; m++) U.uModes.value[i * 6 + m] = st.a[m];
+  });
+  U.uMen.value = men / S; U.uCap.value = lc / S;
+  U.uIor.value = P.ior; U.uTint.value = P.tint; U.uGlow.value = P.glow;
+  U.uBub.value = Math.min(1, P.bubbles + (sim.burst > 0 ? 0.5 * sim.burst : 0));
+  U.uRise.value = sim.rise;
+  stepClock(dt);
+  bloom.strength = 0.3 * P.glow;
+  bloom.enabled = P.glow > 0;
+
+  if (++hudTick % 8 === 0) {
+    const big = sim.v.reduce((a, b) => (b.L > a.L ? b : a));
+    const live = Math.abs(big.level) < 900;
+    lab.hud(`tilt <b>${(sim.th * 180 / Math.PI).toFixed(1)}°</b> · fill <b>${Math.round(sim.fill * 100)}%</b>` +
+      (live ? ` · f₁ <b>${big.f1.toFixed(2)} Hz</b> · ζ₁ <b>${big.z1.toFixed(3)}</b>` : ` · <b>${sim.fill > 0.5 ? 'full, no free surface' : 'empty'}</b>`) +
+      ` · ℓc <b>${(lc * 1000).toFixed(1)} mm</b> · meniscus <b>${men >= 0 ? '+' : '−'}${Math.abs(men * 1000).toFixed(1)} mm</b>`);
+  }
+  composer.render();
+}
+
+// ---- clock reaction: fronts nucleate at a random point under the surface and sweep the whole vessel ----
+const chem = { clk: 0, next: 0.6, base: 0, fronts: [] };
+const MAX_R = W * 1.7;                         // past this every point of the mark has been swept
+// A point in the liquid (vessel coords). side −1/+1: near that wall in screen x, 0: anywhere. null if dry.
+function wetPoint(side) {
+  const cl = Math.cos(sim.thL), sl = Math.sin(sim.thL), c = Math.cos(sim.th), sn = Math.sin(sim.th), wet = [];
+  cavities.forEach((cav, i) => {
+    const lvl = sim.v[i].level - sim.y;
+    for (let j = 0; j < cav.xs.length; j += 5) if (sl * cav.xs[j] + cl * cav.ys[j] < lvl) wet.push([cav.xs[j], cav.ys[j], c * cav.xs[j] - sn * cav.ys[j]]);
+  });
+  if (!wet.length) return null;
+  let pool = wet;
+  if (side) {
+    wet.sort((a, b) => side * (b[2] - a[2]));             // that side first
+    pool = wet.slice(0, Math.max(1, Math.ceil(wet.length * 0.15)));
+  }
+  const [x, y] = pool[Math.floor(Math.random() * pool.length)];
+  return [x, y];
+}
+// Nucleate a front at (x, y) in vessel coords. A harder hit flips further.
+function pulse(x, y, k) {
+  if (!lab.params.chroma) return;
+  // every hit gets its front: when all six slots are busy the oldest (nearly done sweeping) folds into the base
+  if (chem.fronts.length >= 6) chem.base = (chem.base + chem.fronts.shift().step) % 2;
+  chem.fronts.push({ x, y, t0: chem.clk, step: 0.2 + 0.4 * k * (0.7 + 0.6 * Math.random()) });
+}
+function stepClock(dt) {
+  const P = lab.params;
+  if (!lab.calm) chem.clk += dt;
+  // with idle smacks on, every smack starts a front where it lands; otherwise they come on their own timer
+  if (P.chroma && !lab.calm && !P.rock && chem.clk >= chem.next) {
+    chem.next = chem.clk + P.waveEvery * (0.6 + 0.8 * Math.random());
+    const p = wetPoint(0);
+    if (p) pulse(p[0], p[1], 0.5 + Math.random() * 0.5);
+  }
+  // a front that has swept everything folds into the base colour
+  chem.fronts = chem.fronts.filter(f => {
+    if ((chem.clk - f.t0) * P.waveSpeed < MAX_R) return true;
+    chem.base = (chem.base + f.step) % 2; return false;
+  });
+  chem.fronts.forEach((f, i) => U.uFront.value[i].set(f.x, f.y, f.t0, f.step));
+  U.uFrontN.value = chem.fronts.length;
+  U.uClk.value = chem.clk; U.uWaveV.value = P.waveSpeed; U.uBase.value = chem.base;
+  U.uSheen.value = P.sheen; U.uChroma.value = P.chroma ? 1 : 0; U.uRag.value = P.ragged;
+}
+
+let lastT = 0;
+window.__lab = { renderOnce(t) { lastT = t ?? lastT + 1 / 60; step(1 / 60, lastT); }, flipNow() { flipT = 0; }, sim, U, renderer };
+// The vessel shader's first compile can take ~10 s on Windows (ANGLE → D3D), and a plain first render blocks the page
+// for all of it. compileAsync lets the GPU process compile it in the background (KHR_parallel_shader_compile);
+// the loop waits until it's ready. The site's feed reads window.labWarming before showing the lab.
+let warming = window.labWarming = true;
+lab.hud('compiling the shader…');
+// Compile the variant that's actually drawn: the scene renders into the composer's half-float target (linear output),
+// not straight to the canvas. compileAsync reads the current target synchronously, so set it only around the call.
+renderer.setRenderTarget(composer.renderTarget1);
+const compiled = renderer.compileAsync(scene, camera);
+renderer.setRenderTarget(null);
+compiled.catch(e => console.error(e)).finally(() => { warming = window.labWarming = false; });
+lab.loop((dt, t) => { if (warming) return; lastT = t; step(dt, t); });
+</script>

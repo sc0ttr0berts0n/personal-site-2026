@@ -1,0 +1,834 @@
+<meta charset="utf-8">
+<title>Pachinko</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@200;300&family=Familjen+Grotesk:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="shared/lab.css">
+<script type="module">
+import * as pl from 'https://cdn.jsdelivr.net/npm/planck@1.4.3/dist/planck.mjs';
+import { createLab } from './shared/lab.js';
+import { LOGO_PIECES, LOGO_FILL, logoPolygons, fitLogo } from './shared/logo.js';
+import { ramp, hex } from './shared/palettes.js';
+
+const Vec2 = pl.Vec2;
+
+// ---- units: logo units (1 = one logo width, y down). The board is the key square, ±HS around the mark. ----
+const MM = 400;                 // the mark is 40 cm wide, so 1 logo unit = 400 mm
+const S = 40;                   // solver units per logo unit: a 5 mm ball is 0.5 solver units, which Box2D likes
+const H = 1 / 120;              // fixed physics step, s
+const HS = 0.5 / LOGO_FILL;     // half the key square, logo units
+const DROP_Y = -HS + 0.03;      // balls enter here
+const PEG_TOP = -HS + 0.075;    // no pegs above this, so the drop line stays clear
+const BIN_H = 0.16;             // bins along the bottom, about this tall
+const IDLE = 2.2;               // s of no input before the board feeds itself
+
+// ---- the mark's lattice (derivation shared with maze.html) ----
+// Every straight edge of the mark runs along one of two directions (±42.8°, an 85.6° apex).
+// Read both from the path data; lattice point = s·A + t·B. An edge along A has constant t, along B constant s.
+const MARK = (() => {
+  const edges = [];
+  LOGO_PIECES.forEach((piece, k) => {
+    let cur = null, start = null;
+    for (const { cmd, pts } of piece) {
+      if (cmd === 'M') cur = start = pts[0];
+      else if (cmd === 'L') { edges.push({ k, p: cur, q: pts[0] }); cur = pts[0]; }
+      else if (cmd === 'C') cur = pts[2];
+      else if (cmd === 'Z') { if (Math.hypot(cur[0] - start[0], cur[1] - start[1]) > 1e-9) edges.push({ k, p: cur, q: start }); cur = start; }
+    }
+  });
+  // two direction families, each axis the length-weighted mean of its edges
+  const ang = e => { let a = Math.atan2(e.q[1] - e.p[1], e.q[0] - e.p[0]); return a < 0 ? a + Math.PI : a; };
+  const ref = ang(edges[0]);
+  const near = a => Math.min(Math.abs(a - ref), Math.PI - Math.abs(a - ref)) < 0.35;
+  const sum = [[0, 0], [0, 0]];
+  for (const e of edges) {
+    e.fam = near(ang(e)) ? 0 : 1;
+    let dx = e.q[0] - e.p[0], dy = e.q[1] - e.p[1];
+    if (dx < 0) { dx = -dx; dy = -dy; }
+    sum[e.fam][0] += dx; sum[e.fam][1] += dy;
+  }
+  let [A, B] = sum.map(([x, y]) => { const l = Math.hypot(x, y); return [x / l, y / l]; });
+  if (A[1] > B[1]) { [A, B] = [B, A]; for (const e of edges) e.fam ^= 1; }   // A runs up-right, B down-right
+  const det = A[0] * B[1] - A[1] * B[0];
+  const toST = (x, y) => [(x * B[1] - y * B[0]) / det, (A[0] * y - A[1] * x) / det];
+  const toXY = (s, t) => [s * A[0] + t * B[0], s * A[1] + t * B[1]];
+  // where the edges sit in lattice coordinates
+  const sv = [], tv = [];
+  for (const e of edges) {
+    const a = toST(...e.p), b = toST(...e.q);
+    e.pos = e.fam === 0 ? (a[1] + b[1]) / 2 : (a[0] + b[0]) / 2;
+    (e.fam === 0 ? tv : sv).push(e.pos);
+  }
+  const dedupe = v => v.sort((a, b) => a - b).filter((x, i, a) => i === 0 || x - a[i - 1] > 1e-5);
+  const s = dedupe(sv), t = dedupe(tv);
+  // the bands repeat as band, gap, band, gap…: the gap is the smallest spacing, the band the next size up
+  const diffs = [s, t].flatMap(v => v.slice(1).map((x, i) => x - v[i])).sort((a, b) => a - b);
+  const gap = diffs[0], band = diffs.find(x => x > 2 * gap), period = gap + band;
+  // Band centre lines: each arm is a pair of long edges one band apart (short caps ignored).
+  const len = e => Math.hypot(e.q[0] - e.p[0], e.q[1] - e.p[1]);
+  const centres = fam => {
+    const v = dedupe(edges.filter(e => e.fam === fam && len(e) > 1.5 * band).map(e => e.pos));
+    return v.filter(a => v.some(b => Math.abs(b - a - band) < 1e-3)).map(a => a + band / 2);
+  };
+  const sc = centres(1), tc = centres(0);
+  // The mark is drawn on a grid of period/9 (7.7 mm: 7 per band, 2 per gap). Along s the bands repeat every period,
+  // but along t the zig's lower arm sits a third of a period out of step with its upper arm. So the largest lattice
+  // step that holds every band centre in the same phase is a third of a period: the cell (23.2 mm).
+  const fits = Q => [sc, tc].every(c => c.every(x => { const r = (x - c[0]) / Q; return Math.abs(r - Math.round(r)) * Q < 0.004; }));
+  let steps = 1;
+  while (steps < 12 && !fits(period / steps)) steps++;
+  return { A, B, toST, toXY, s0: s[0], t0: t[0], gap, band, period, sc: sc[0], tc: tc[0], steps, cell: period / steps, sin: Math.abs(det),
+    apexDeg: Math.acos(A[0] * B[0] + A[1] * B[1]) * 180 / Math.PI, slopeDeg: Math.atan2(-A[1], A[0]) * 180 / Math.PI };
+})();
+
+const lab = createLab({
+  number: '08',
+  title: 'Pachinko',
+  blurb: 'A pegboard everywhere the mark isn’t. The lattice is cut from the mark itself, along its two edge directions and in step with the grid it was drawn on, so every peg beside an edge sits the same distance from it, and the walls zigzag along the same lines. The pegs double as a halftone screen that the mark and the balls light up. Tap anywhere to drop a ball at that point, or hold to pour.',
+  teaches: 'the Galton board: each peg is nearly a coin flip, so bins drift toward a binomial bell curve, and the mark carves a shadow in it; on an inclined board gravity is g·sin θ',
+  hint: 'tap to drop at that x · hold to pour<br>mark = 40 cm wide',
+  palettes: ['cmy', 'spectrum', 'synthwave', 'ember', 'reef', 'aurora', 'ultraviolet', 'gold'],
+  defaultPalette: 'cmy',
+  grid: false,                      // the pegs are the grid here; the bench grid behind a 45° dot screen only beats against it
+  params: {
+    board:      { type: 'heading', label: 'Board' },
+    pitch:      { type: 'range', label: 'Peg pitch', min: MARK.steps, max: 3 * MARK.steps, step: MARK.steps, value: 2 * MARK.steps, format: v => `${(MARK.period / v * MM).toFixed(1)} mm · ${v} per band`, unit: '' },
+    pegRadius:  { type: 'range', label: 'Peg radius', min: 0.8, max: 4, step: 0.1, value: 1.2, unit: ' mm' },
+    clearance:  { type: 'range', label: 'Clearance from the mark', min: 0, max: 30, step: 0.5, value: 12, unit: ' mm' },
+    incline:    { type: 'range', label: 'Board incline θ', min: 5, max: 90, step: 1, value: 30, unit: '°' },
+    ballsHead:  { type: 'heading', label: 'Balls' },
+    ballRadius: { type: 'range', label: 'Ball radius', min: 3, max: 9, step: 0.25, value: 4, unit: ' mm' },
+    restitution:{ type: 'range', label: 'Restitution', min: 0, max: 0.95, step: 0.05, value: 0.5 },
+    friction:   { type: 'range', label: 'Friction μ', min: 0, max: 1, step: 0.05, value: 0.1 },
+    rate:       { type: 'range', label: 'Drop rate', min: 1, max: 30, step: 1, value: 6, unit: ' balls/s' },
+    cap:        { type: 'range', label: 'Balls in play, max', min: 20, max: 400, step: 10, value: 200 },
+    look:       { type: 'heading', label: 'Look' },
+    glow:       { type: 'range', label: 'Halftone glow', min: 0, max: 1, step: 0.05, value: 0.85 },
+    reach:      { type: 'range', label: 'Glow reach', min: 20, max: 200, step: 5, value: 70, unit: ' mm' },
+    ballLight:  { type: 'range', label: 'Ball light', min: 0, max: 1, step: 0.05, value: 0.6 },
+    flash:      { type: 'range', label: 'Peg flash', min: 0, max: 1.5, step: 0.05, value: 0.5, unit: ' s' },
+    trails:     { type: 'toggle', label: 'Motion trails', value: true },
+    tint:       { type: 'toggle', label: 'Tint balls by drop point', value: true },
+    lattice:    { type: 'toggle', label: 'Show lattice lines', value: false },
+    counts:     { type: 'toggle', label: 'Bin counts', value: true }
+  },
+  actions: [
+    { label: 'Clear', primary: true, action: () => clear() },
+    { label: 'Drop ball', action: () => drop(gauss() * 0.15) },
+    { label: 'Pour 100', action: () => { burst += 100; idleT = 0; } }
+  ]
+});
+const P = lab.params;
+
+// ---- the mark: drawing paths, physics parts, distance field for the pegs ----
+const PIECE_PATHS = LOGO_PIECES.map(piece => {
+  const p = new Path2D();
+  for (const { cmd, pts } of piece) {
+    if (cmd === 'M') p.moveTo(...pts[0]);
+    else if (cmd === 'L') p.lineTo(...pts[0]);
+    else if (cmd === 'C') p.bezierCurveTo(...pts[0], ...pts[1], ...pts[2]);
+    else p.closePath();
+  }
+  return p;
+});
+const PIECE_T = [0.08, 0.92, 0.5];   // left "<", right ">", middle zig: coloured left to right, as in Knockout
+
+// convex decomposition (from knockout.html): ear clipping, then Hertel–Mehlhorn merging
+const turn = (a, b, c) => (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0]);
+const edgeFn = (a, b, p) => (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]);
+const signedArea = p => p.reduce((s, a, i) => { const b = p[(i + 1) % p.length]; return s + a[0] * b[1] - b[0] * a[1]; }, 0) / 2;
+function cleanPoly(poly) {
+  const p = poly.slice();
+  for (let changed = true; changed;) {
+    changed = false;
+    for (let i = 0; i < p.length; i++) {
+      const a = p[(i + p.length - 1) % p.length], b = p[i], c = p[(i + 1) % p.length];
+      if (Math.abs(turn(a, b, c)) < 1e-10 || Math.hypot(b[0] - a[0], b[1] - a[1]) < 1e-5) { p.splice(i, 1); changed = true; break; }
+    }
+  }
+  return p;
+}
+function decompose(input) {
+  const poly = cleanPoly(input), sg = Math.sign(signedArea(poly));
+  const idx = poly.map((_, i) => i), tris = [];
+  const angle = (a, b, c) => { const u = [a[0] - b[0], a[1] - b[1]], v = [c[0] - b[0], c[1] - b[1]]; return Math.acos(Math.max(-1, Math.min(1, (u[0] * v[0] + u[1] * v[1]) / Math.hypot(...u) / Math.hypot(...v)))); };
+  while (idx.length > 3) {
+    let best = -1, bestQ = -1;
+    for (let i = 0; i < idx.length; i++) {
+      const ia = idx[(i + idx.length - 1) % idx.length], ib = idx[i], ic = idx[(i + 1) % idx.length];
+      const a = poly[ia], b = poly[ib], c = poly[ic];
+      if (sg * turn(a, b, c) <= 1e-12) continue;
+      let ok = true;
+      for (const j of idx) {
+        if (j === ia || j === ib || j === ic) continue;
+        const p = poly[j];
+        if (sg * edgeFn(a, b, p) >= -1e-12 && sg * edgeFn(b, c, p) >= -1e-12 && sg * edgeFn(c, a, p) >= -1e-12) { ok = false; break; }
+      }
+      if (!ok) continue;
+      const q = Math.min(angle(c, a, b), angle(a, b, c), angle(b, c, a));
+      if (q > bestQ) { bestQ = q; best = i; }
+    }
+    if (best < 0) best = 0;
+    const n = idx.length;
+    tris.push([idx[(best + n - 1) % n], idx[best], idx[(best + 1) % n]]);
+    idx.splice(best, 1);
+  }
+  tris.push(idx.slice());
+  const parts = tris;
+  const convex = ix => ix.every((v, i) => sg * turn(poly[ix[(i + ix.length - 1) % ix.length]], poly[v], poly[ix[(i + 1) % ix.length]]) >= -1e-12);
+  for (let again = true; again;) {
+    again = false;
+    for (let i = 0; i < parts.length && !again; i++) for (let j = i + 1; j < parts.length && !again; j++) {
+      const A = parts[i], B = parts[j];
+      for (let k = 0; k < A.length && !again; k++) {
+        const u = A[k], v = A[(k + 1) % A.length];
+        const m = B.findIndex((x, q) => x === v && B[(q + 1) % B.length] === u);
+        if (m < 0) continue;
+        const a2 = A.map((_, s) => A[(k + 1 + s) % A.length]);
+        const b2 = B.map((_, s) => B[(m + 1 + s) % B.length]);
+        const M = a2.concat(b2.slice(1, -1));
+        if (M.length <= 8 && convex(M)) { parts[i] = M; parts.splice(j, 1); again = true; }
+      }
+    }
+  }
+  return parts.map(ix => ix.map(n => poly[n]));
+}
+const CONVEX = logoPolygons({ curveSegments: 3 }).map(decompose);
+
+// distance from a point to a set of polygons (0 inside) and which polygon is nearest; the mark uses finely split outlines
+const OUTLINES = logoPolygons({ curveSegments: 10 });
+function polyDist(polys, x, y) {
+  let best = Infinity, piece = -1;
+  polys.forEach((poly, k) => {
+    let inside = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      const [ax, ay] = poly[i], [bx, by] = poly[j];
+      if ((ay > y) !== (by > y) && x < (bx - ax) * (y - ay) / (by - ay) + ax) inside = !inside;
+      const dx = bx - ax, dy = by - ay, u = Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy)));
+      const d = Math.hypot(x - ax - u * dx, y - ay - u * dy);
+      if (d < best) { best = d; piece = k; }
+    }
+    if (inside) { best = -1; piece = k; }
+  });
+  return { d: Math.max(0, best), k: piece };
+}
+
+// ---- world ----
+let world, boardBody = null, balls = [];
+let pegs = [], dividers = [], edges = [], counts = [], shown = [], rowH = 0, binY = 0, pitchD = 0, minPegGap = 0;
+let sOrg = 0, tOrg = 0, walls = [], wallL = -HS, wallR = HS;     // lattice origin; wall outlines and innermost x
+let pegFlash = new Float32Array(0), pegCol = [], lit = new Set();
+const g = () => 9.81 * Math.sin(P.incline * Math.PI / 180) / (MM / 1000);   // along the board, logo units/s²
+
+function buildWorld() {
+  world = new pl.World({ gravity: Vec2(0, g() * S), allowSleep: true });
+  const frame = world.createBody({ type: 'static' });
+  const fd = { friction: P.friction, restitution: P.restitution };
+  frame.createFixture({ shape: pl.Box(4 * HS * S, 0.5 * S, Vec2(0, (HS + 0.5) * S), 0), ...fd, userData: { kind: 'floor' } });
+  const mark = world.createBody({ type: 'static' });
+  CONVEX.forEach((parts, i) => { for (const part of parts) mark.createFixture({ shape: pl.Polygon(part.map(([x, y]) => Vec2(x * S, y * S))), ...fd, userData: { kind: 'mark', i } }); });
+
+  world.on('begin-contact', c => {
+    const a = c.getFixtureA().getUserData(), b = c.getFixtureB().getUserData();
+    const [ball, other, bf] = a.kind === 'ball' ? [a, b, c.getFixtureA()] : b.kind === 'ball' ? [b, a, c.getFixtureB()] : [];
+    if (!ball) return;
+    const u = bf.getBody().getUserData();
+    if (other.kind === 'peg' && P.flash > 0) { pegFlash[other.i] = 1; pegCol[other.i] = u.col; lit.add(other.i); }
+    else if (other.kind === 'mark') {
+      u.mark = other.i;
+      const v = bf.getBody().getLinearVelocity().length() / S;
+      if (v > 0.5 && rings.length < 60) {
+        const wm = c.getWorldManifold(null);
+        if (wm && wm.pointCount) rings.push({ x: wm.points[0].x / S, y: wm.points[0].y / S, t: 0, dur: 0.35, col: pieceColor(other.i), R: 0.004 + Math.min(0.012, v * 0.004) });
+      }
+    }
+  });
+}
+
+// Walls: a zigzag on the mark's own edge lines. Every face lies on a lattice line in the phase of a band edge, with
+// the solid on the same side as the band's, so a peg beside a wall sits exactly as a peg beside the mark does, and the
+// rows never leave a ball-wide slot or a wedge at the wall. Teeth run TOOTH cells along each face. The lowest tip sits
+// at the divider row; below it the wall drops straight to the floor, so the outer bins are plain boxes.
+const TOOTH = 2;
+function buildWalls(d) {
+  const T = TOOTH * MARK.cell, Ax = (MARK.A[0] + MARK.B[0]) / 2, By = MARK.B[1], F = HS + 0.3, h = MARK.band / 2;
+  return [-1, 1].map(side => {
+    // left: upper faces on s-lines, undersides on t-lines, in the phase of a band's upper edges (centre + band/2);
+    // right: the mirror, in the phase of its lower edges (centre − band/2). p = s + t sets a tip's x, q = t − s its y.
+    const p0 = MARK.sc + MARK.tc - side * 2 * h, q0 = MARK.tc - MARK.sc;
+    const a = side < 0 ? Math.ceil((-HS / Ax + T - p0) / d) : Math.floor((HS / Ax - T - p0) / d);   // outer notches inside the square
+    let b = Math.floor((binY / By - q0) / d);                                                       // lowest tip at or above the divider row
+    if ((a - b) & 1) b--;                                                                           // s and t both on the lattice
+    const p = p0 + a * d, q = q0 + b * d, s = (p - q) / 2, t = (p + q) / 2;
+    const polys = [], line = [];
+    for (let k = 0; ; k++) {
+      const si = s + k * T, ti = t - k * T, tip = MARK.toXY(si, ti);
+      const top = side < 0 ? MARK.toXY(si, ti - T) : MARK.toXY(si + T, ti), bot = side < 0 ? MARK.toXY(si - T, ti) : MARK.toXY(si, ti + T);
+      const low = k ? bot : [tip[0], HS + 0.5];
+      polys.push([top, tip, low, [side * F, low[1]], [side * F, top[1]]]);
+      line.unshift(top, tip);
+      if (top[1] < -HS - 0.1) break;
+    }
+    line.push([line[line.length - 1][0], HS + 0.5]);
+    return { side, polys, line, x: MARK.toXY(s, t)[0] };
+  });
+}
+
+// Pegs: lattice points sOrg + i·d along A, tOrg + j·d along B. The step d is the mark's cell over a whole number, so
+// every band of the mark meets the lattice in the same phase; the origin sits on a band's centre line or half a step
+// off it, whichever brings the first row outside every edge closest to the clearance. So the rows run parallel to
+// each edge at one fixed distance, on all three chevrons. Row k = j − i is horizontal (the two axes mirror each other).
+// A point keeps its peg if it lies on the board, below the drop line, and clears both the mark and the walls.
+// The row nearest BIN_H above the floor becomes the divider tops, so the bins sit under the last row's gaps.
+function buildBoard() {
+  if (boardBody) world.destroyBody(boardBody);
+  const per = MARK.steps * Math.max(1, Math.round(P.pitch / MARK.steps));   // pegs per band period, kept in step with the cell
+  const d = MARK.period / per, pr = P.pegRadius / MM, keep = pr + P.clearance / MM;
+  pitchD = d;
+  rowH = (MARK.B[1] - MARK.A[1]) / 2 * d;
+  const need = keep / MARK.sin, half = MARK.band / 2;
+  const first = ph => (Math.ceil((need + half) / d - ph - 1e-9) + ph) * d - half;
+  const ph = first(0) <= first(0.5) ? 0 : 0.5;
+  sOrg = MARK.sc + ph * d; tOrg = MARK.tc + ph * d;
+  const st = [[-HS, -HS], [HS, -HS], [HS, HS], [-HS, HS]].map(([x, y]) => MARK.toST(x, y));
+  const i0 = Math.floor((Math.min(...st.map(p => p[0])) - sOrg) / d) - 1, i1 = Math.ceil((Math.max(...st.map(p => p[0])) - sOrg) / d) + 1;
+  const j0 = Math.floor((Math.min(...st.map(p => p[1])) - tOrg) / d) - 1, j1 = Math.ceil((Math.max(...st.map(p => p[1])) - tOrg) / d) + 1;
+  const rowY = k => MARK.toXY(sOrg, tOrg + k * d)[1];
+  const k00 = Math.round((0 - rowY(0)) / rowH);
+  const kb = k00 + Math.round((HS - BIN_H - rowY(k00)) / rowH);
+  binY = rowY(kb);
+  walls = buildWalls(d);
+  wallL = walls[0].x; wallR = walls[1].x;
+  const wallPolys = walls.flatMap(w => w.polys);
+  const hw = Math.max(pr, 0.0012), binKeep = hw + 2.2 * ballR();   // the outer bins stay wide enough for a ball
+  pegs = []; dividers = []; pegAt = new Map();
+  let gap = Infinity;
+  for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) {
+    const k = j - i, [x, y] = MARK.toXY(sOrg + i * d, tOrg + j * d);
+    if (k > kb || y < PEG_TOP || Math.abs(x) > HS) continue;
+    if (k === kb) { if (x > wallL + binKeep && x < wallR - binKeep) dividers.push(x); continue; }
+    const dw = polyDist(wallPolys, x, y).d;
+    if (dw < keep - 1e-7) continue;
+    const { d: dm, k: piece } = polyDist(OUTLINES, x, y);
+    if (dm < keep - 1e-7) continue;
+    gap = Math.min(gap, dm - pr, dw - pr);
+    pegAt.set(latKey(i, j), pegs.length);
+    pegs.push({ x, y, k, i, j, r: pr, dm: dm - keep, piece });
+  }
+  minPegGap = gap;
+  dividers.sort((a, b) => a - b);
+
+  boardBody = world.createBody({ type: 'static' });
+  const fd = { friction: P.friction, restitution: P.restitution };
+  pegs.forEach((p, i) => boardBody.createFixture({ shape: pl.Circle(Vec2(p.x * S, p.y * S), p.r * S), ...fd, userData: { kind: 'peg', i } }));
+  for (const poly of wallPolys) boardBody.createFixture({ shape: pl.Polygon(poly.map(([x, y]) => Vec2(x * S, y * S))), ...fd, userData: { kind: 'wall' } });
+  for (const x of dividers) {
+    boardBody.createFixture({ shape: pl.Box(hw * S, (HS - binY) / 2 * S, Vec2(x * S, (binY + HS) / 2 * S), 0), ...fd, userData: { kind: 'divider' } });
+    boardBody.createFixture({ shape: pl.Circle(Vec2(x * S, binY * S), hw * S), ...fd, userData: { kind: 'divider' } });
+  }
+  const nb = dividers.length + 1;
+  edges = [wallL, ...dividers, wallR];
+  if (counts.length !== nb) { counts = new Array(nb).fill(0); shown = new Array(nb).fill(0); }
+  pegFlash = new Float32Array(pegs.length); pegCol = new Array(pegs.length); lit = new Set();
+  const n = pegs.length;
+  glowW = new Float32Array(n); glowC = new Float32Array(n); glowRGB = new Float32Array(3 * n); glowAcc = new Float32Array(3 * n);
+  for (const b of balls) b.setAwake(true);
+}
+
+// Ball light: each ball lights the pegs within BALL_R of it with a (1 − r²/R²)² falloff, eased over GLOW_T so a
+// ball passing by brightens and dims its pegs smoothly instead of flickering them. Pegs are found by lattice index.
+const BALL_R = 0.1, GLOW_T = 0.12;     // 40 mm; s
+const latKey = (i, j) => (i + 2048) * 4096 + (j + 2048);
+let pegAt = new Map(), glowW = new Float32Array(0), glowC = new Float32Array(0), glowRGB = new Float32Array(0), glowAcc = new Float32Array(0);
+function lightPegs(dt) {
+  const n = pegs.length, d = pitchD, R = BALL_R / (d * MARK.sin), RR = BALL_R * BALL_R;
+  glowW.fill(0); glowAcc.fill(0);
+  if (P.ballLight > 0) for (const b of balls) {
+    const p = b.getPosition(), x = p.x / S, y = p.y / S, u = b.getUserData();
+    if (u.rgbOf !== u.col) { u.rgb = hex(u.col); u.rgbOf = u.col; }
+    const [s, t] = MARK.toST(x, y), ci = (s - sOrg) / d, cj = (t - tOrg) / d;
+    for (let i = Math.ceil(ci - R); i <= ci + R; i++) for (let j = Math.ceil(cj - R); j <= cj + R; j++) {
+      const q = pegAt.get(latKey(i, j));
+      if (q === undefined) continue;
+      const pg = pegs[q], r2 = ((pg.x - x) ** 2 + (pg.y - y) ** 2) / RR;
+      if (r2 >= 1) continue;
+      const w = (1 - r2) * (1 - r2);
+      glowW[q] += w; glowAcc[3 * q] += w * u.rgb[0]; glowAcc[3 * q + 1] += w * u.rgb[1]; glowAcc[3 * q + 2] += w * u.rgb[2];
+    }
+  }
+  const e = 1 - Math.exp(-dt / GLOW_T);
+  for (let q = 0; q < n; q++) {
+    const w = glowW[q];
+    if (w > 0) {
+      // the colour eases too, except on a dark peg, which simply takes the colour of the light reaching it
+      const k = glowC[q] < 0.01 ? 1 : e;
+      for (let c = 0; c < 3; c++) glowRGB[3 * q + c] += (glowAcc[3 * q + c] / w - glowRGB[3 * q + c]) * k;
+    }
+    glowC[q] += (Math.min(1, w) - glowC[q]) * e;
+    if (glowC[q] < 1e-4) glowC[q] = 0;
+  }
+}
+
+// ---- canvas & layout ----
+const { canvas, ctx } = lab.canvas();
+canvas.style.touchAction = 'none';
+let sq = lab.square(), fit = fitLogo(sq), dpr = Math.min(2, window.devicePixelRatio || 1);
+lab.on('resize', s => { sq = s; fit = fitLogo(s); dpr = Math.min(2, window.devicePixelRatio || 1); boardLayer = null; prevLayer = null; markLayer = null; sprites.clear(); render(); });
+const X = lx => fit.cx + lx * fit.scale, Y = ly => fit.cy + ly * fit.scale;
+// snap a coordinate so a line of CSS width lw lands on whole device pixels
+const crisp = (v, lw = 1) => { const w = Math.round(lw * dpr); return (Math.round(v * dpr - (w % 2) / 2) + (w % 2) / 2) / dpr; };
+// snap a dot's center to a device pixel center, so every peg rasterises the same
+const dot = v => (Math.floor(v * dpr) + 0.5) / dpr;
+
+// ---- state ----
+let clock = 0, acc = 0, idleT = IDLE, autoAcc = 0, burst = 0;
+let dropped = 0, binned = 0, caught = 0;
+let pour = null, hoverX = null, fading = [], rings = [];
+let fadeK = 1;                                     // board crossfade after a rebuild, 0 → 1
+
+function gauss() { let u = 0; for (let i = 0; i < 4; i++) u += Math.random(); return (u - 2) / 0.577; }
+// A ball must pass between two neighbouring pegs (one pitch apart, centre to centre), or the board clogs.
+// So the ball never grows past what the current pitch and peg radius leave room for.
+const fitR = () => 0.46 * (MARK.period / P.pitch - 2 * P.pegRadius / MM);
+const ballR = () => Math.min(P.ballRadius / MM, fitR());
+
+// ---- balls ----
+function drop(x, { force = false } = {}) {
+  const r = ballR();
+  x = Math.max(wallL + r + 0.004, Math.min(wallR - r - 0.004, x + (Math.random() - 0.5) * r * 0.3));
+  // the spout is busy: a ball still sits where this one would appear
+  if (!force) for (const b of balls) { const p = b.getPosition(); if (Math.hypot(p.x / S - x, p.y / S - DROP_Y) < 2.1 * Math.max(r, b.getUserData().r)) return false; }
+  const b = world.createBody({ type: 'dynamic', position: Vec2(x * S, DROP_Y * S), angularDamping: 0.1 });
+  b.createFixture({ shape: pl.Circle(r * S), density: 1, friction: P.friction, restitution: P.restitution, userData: { kind: 'ball' } });
+  b.setLinearVelocity(Vec2(0, 0.05 * S));
+  const col = P.tint && vivid() ? ramp(lab.palette, (x + HS) / (2 * HS)) : lab.palette.ink;
+  b.setUserData({ kind: 'ball', r, col, x0: x, prev: { x, y: DROP_Y }, trail: [], slow: 0, nudged: false, age: 0, mark: -1 });
+  balls.push(b);
+  dropped++;
+  while (balls.length > P.cap) retire(balls[0], 'cap');
+  return true;
+}
+function retire(b, why) {
+  const u = b.getUserData(), p = b.getPosition();
+  fading.push({ x: p.x / S, y: p.y / S, r: u.r, col: u.col, life: 1, sink: why === 'bin' });
+  if (why === 'caught' && rings.length < 80) rings.push({ x: p.x / S, y: p.y / S, t: 0, dur: 0.6, col: u.mark >= 0 ? pieceColor(u.mark) : lab.palette.ink, R: u.r * 2.4 });
+  world.destroyBody(b);
+  balls.splice(balls.indexOf(b), 1);
+}
+function clear() {
+  for (const b of balls.slice()) retire(b, 'clear');
+  counts.fill(0); dropped = 0; binned = 0; caught = 0; burst = 0; autoAcc = 0;
+  idleT = 0;
+}
+const binOf = x => { let i = 0; while (i < edges.length - 2 && x > edges[i + 1]) i++; return i; };
+
+// ---- params ----
+let boardTimer = 0;
+lab.on('change', key => {
+  // a settings code from before the lattice followed the mark's cell can carry a pitch off the cell; snap it
+  if (key === 'pitch' && P.pitch % MARK.steps) { lab.set('pitch', MARK.steps * Math.max(1, Math.round(P.pitch / MARK.steps))); return; }
+  if (key === 'pitch' || key === 'pegRadius' || key === 'clearance' || key === 'ballRadius') {
+    // rebuild now; the old pegs fade out over a moment so dragging a slider never pops
+    if (boardLayer && !lab.calm) { prevLayer = boardLayer; fadeK = 0; }
+    boardLayer = null; markLayer = null;
+    buildBoard();
+  }
+  if (key === 'lattice' || key === 'glow' || key === 'reach') boardLayer = null;
+  if (key === 'incline') { world.setGravity(Vec2(0, g() * S)); for (const b of balls) b.setAwake(true); }
+  if (key === 'friction' || key === 'restitution') {
+    for (let b = world.getBodyList(); b; b = b.getNext()) for (let f = b.getFixtureList(); f; f = f.getNext()) { f.setFriction(P.friction); f.setRestitution(P.restitution); }
+    for (let c = world.getContactList(); c; c = c.getNext()) { c.resetFriction(); c.resetRestitution(); }
+  }
+  if (key === 'cap') while (balls.length > P.cap) retire(balls[0], 'cap');
+  if (key === 'tint') for (const b of balls) { const u = b.getUserData(); u.col = P.tint && vivid() ? ramp(lab.palette, (u.x0 + HS) / (2 * HS)) : lab.palette.ink; }
+});
+lab.on('palette', () => {
+  boardLayer = null; prevLayer = null; markLayer = null; sprites.clear();
+  for (const b of balls) { const u = b.getUserData(); u.col = P.tint && vivid() ? ramp(lab.palette, (u.x0 + HS) / (2 * HS)) : lab.palette.ink; }
+  render();
+});
+
+// ---- pointer: tap drops, hold pours ----
+const toLogo = e => { const r = canvas.getBoundingClientRect(); return { x: (e.clientX - r.left - fit.cx) / fit.scale, y: (e.clientY - r.top - fit.cy) / fit.scale }; };
+canvas.addEventListener('pointerdown', e => {
+  if (e.button > 0) return;
+  const p = toLogo(e);
+  if (Math.abs(p.x) > HS + 0.05) return;
+  pour = { id: e.pointerId, x: p.x, t: 0, acc: 0 };
+  idleT = 0; autoAcc = 0;
+  drop(p.x, { force: true });
+  canvas.setPointerCapture(e.pointerId);
+});
+canvas.addEventListener('pointermove', e => {
+  const p = toLogo(e);
+  hoverX = Math.abs(p.x) <= HS && e.pointerType === 'mouse' ? p.x : null;
+  if (pour && e.pointerId === pour.id) pour.x = p.x;
+});
+canvas.addEventListener('pointerleave', () => { hoverX = null; });
+const release = e => { if (pour && e.pointerId === pour.id) { pour = null; idleT = 0; } };
+canvas.addEventListener('pointerup', release);
+canvas.addEventListener('pointercancel', release);
+
+// ---- simulation ----
+function physicsStep() {
+  for (const b of balls) { const p = b.getPosition(), u = b.getUserData(); u.prev = { x: p.x / S, y: p.y / S }; }
+  world.step(H, 8, 3);
+}
+
+function update(dt) {
+  clock += dt;
+  // feeding: a held pointer pours at the drop rate; idle boards feed themselves along a slow wander
+  if (pour) {
+    pour.t += dt;
+    if (pour.t > 0.25) { pour.acc = Math.min(3, pour.acc + dt * P.rate); while (pour.acc >= 1 && drop(pour.x)) pour.acc--; }
+  } else if (!lab.calm) idleT += dt;
+  if (!pour && !lab.calm && idleT > IDLE) {
+    autoAcc = Math.min(3, autoAcc + dt * P.rate);
+    while (autoAcc >= 1) {
+      const x = HS * 0.8 * Math.sin(clock * 0.21 + 1.6 * Math.sin(clock * 0.067)) + gauss() * 0.04;
+      if (!drop(x)) break;
+      autoAcc--;
+    }
+  }
+  if (burst > 0) { let n = Math.min(burst, Math.max(1, Math.round(dt * 40))); while (n-- > 0 && drop((Math.random() - 0.5) * 1.6 * HS)) burst--; }
+
+  acc += dt;
+  let n = 0;
+  while (acc >= H && n < 8) { physicsStep(); acc -= H; n++; }
+  if (n === 8) acc = 0;
+
+  // balls: bin them on the floor, nudge then remove the ones the mark or a jam has caught
+  for (const b of balls.slice()) {
+    const u = b.getUserData(), p = b.getPosition(), x = p.x / S, y = p.y / S;
+    u.age += dt;
+    if (y > binY && y > HS - u.r - 0.006) { counts[binOf(x)]++; binned++; retire(b, 'bin'); continue; }
+    if (y > HS + 0.1 || Math.abs(x) > HS + 0.1) { retire(b, 'lost'); continue; }
+    const v = b.getLinearVelocity().length() / S;
+    u.slow = !b.isAwake() || v < 0.04 ? u.slow + dt : Math.max(0, u.slow - dt * 2);
+    if (u.slow > 0.6 && !u.nudged) {
+      u.nudged = true; b.setAwake(true);
+      b.setLinearVelocity(Vec2((Math.random() < 0.5 ? -1 : 1) * 0.25 * S, -0.12 * S));
+    }
+    if (u.slow > 1.6 || u.age > 40) { caught++; retire(b, 'caught'); continue; }
+    if (P.trails) { u.trail.push({ x, y }); if (u.trail.length > 16) u.trail.shift(); }
+    else u.trail.length = 0;
+  }
+
+  lightPegs(dt);
+  // peg flashes decay
+  if (lit.size) {
+    const k = P.flash > 0 ? dt / P.flash : 1;
+    for (const i of lit) { pegFlash[i] -= k; if (pegFlash[i] <= 0) { pegFlash[i] = 0; lit.delete(i); } }
+  }
+  for (const r of rings) r.t += dt;
+  rings = rings.filter(r => r.t < r.dur);
+  for (const f of fading) { f.life -= dt * (f.sink ? 4 : 2.5); if (f.sink) f.y += dt * 0.05; }
+  fading = fading.filter(f => f.life > 0);
+  // histogram bars ease toward the counts
+  const e = 1 - Math.exp(-dt * 10);
+  for (let i = 0; i < counts.length; i++) shown[i] += (counts[i] - shown[i]) * e;
+  if (fadeK < 1) { fadeK = Math.min(1, fadeK + dt / 0.3); if (fadeK >= 1) prevLayer = null; }
+}
+
+// ---- drawing ----
+const vivid = () => lab.palette.key !== 'bench';
+const pieceColor = i => vivid() ? ramp(lab.palette, PIECE_T[i]) : lab.palette.ink;
+function rgba(hex, a) { const n = parseInt(hex.slice(1), 16); return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${a})`; }
+const binColor = i => vivid() ? ramp(lab.palette, ((edges[i] + edges[i + 1]) / 2 + HS) / (2 * HS)) : lab.palette.ink;
+
+function layerCanvas() {
+  const c = document.createElement('canvas');
+  c.width = canvas.width; c.height = canvas.height;
+  const o = c.getContext('2d'); o.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { c, o };
+}
+
+// ---- halftone ----
+// The pegs are a halftone screen: a dot's tone T in [0, 1] sets its area (radius ∝ √T) and its opacity, so light reads
+// as dot size, as in print. The mark is the light: a peg's tone falls off exponentially, over the glow reach, with its
+// distance past the clearance, so the row hugging each edge is the brightest and takes that chevron's colour.
+// Balls add light of their own on top (lightPegs). Dots never move off their device-pixel centres, only grow and fade.
+const FLAT = 0.45, DARK = 0.08;    // tone of every peg with the glow off; tone far from the mark with it full on
+const dotR = (T, rp) => Math.max(0.55, 1.45 * (rp + 0.35) * Math.sqrt(0.06 + 0.94 * T));
+const dotA = T => 0.2 + 0.8 * T;
+const dotStyle = (c, a) => `rgba(${c[0] | 0},${c[1] | 0},${c[2] | 0},${a.toFixed(3)})`;
+function tones() {
+  const reach = P.reach / MM, ink = hex(lab.palette.ink), cols = [0, 1, 2].map(i => hex(pieceColor(i)));
+  for (const p of pegs) {
+    const L = Math.exp(-p.dm / reach), w = vivid() ? 0.85 * P.glow * L : 0, c = cols[p.piece];
+    p.T = FLAT + P.glow * (DARK + (1 - DARK) * L - FLAT);
+    p.rgb = ink.map((v, i) => v + (c[i] - v) * w);
+  }
+}
+
+// Static board, in two layers so ball light can redraw pegs between them: the pegs at their mark-lit tones, then the
+// frame (lattice, walls, floor, drop line, dividers). Redrawn only when the board, size, palette or glow changes.
+let boardLayer = null, prevLayer = null, markLayer = null;
+function drawBoard() {
+  tones();
+  const pegsL = layerCanvas(), rp = P.pegRadius / MM * fit.scale;
+  for (const p of pegs) {
+    pegsL.o.fillStyle = dotStyle(p.rgb, dotA(p.T));
+    pegsL.o.beginPath(); pegsL.o.arc(dot(X(p.x)), dot(Y(p.y)), dotR(p.T, rp), 0, Math.PI * 2); pegsL.o.fill();
+  }
+  return { pegs: pegsL.c, frame: drawFrame() };
+}
+function drawFrame() {
+  const { c, o } = layerCanvas(), pal = lab.palette, s = fit.scale, pr = P.pegRadius / MM;
+  const L = X(-HS), R = X(HS), T = Y(-HS), B = Y(HS);
+  o.save(); o.beginPath(); o.rect(L, T, R - L, B - T); o.clip();
+  if (P.lattice) {
+    o.strokeStyle = rgba(pal.ink, 0.08); o.lineWidth = 1; o.beginPath();
+    const d = pitchD, ext = 3 * HS;
+    for (let i = -80; i <= 80; i++) {
+      for (const [dir, off] of [[MARK.A, MARK.toXY(0, tOrg + i * d)], [MARK.B, MARK.toXY(sOrg + i * d, 0)]]) {
+        o.moveTo(X(off[0] - dir[0] * ext), Y(off[1] - dir[1] * ext)); o.lineTo(X(off[0] + dir[0] * ext), Y(off[1] + dir[1] * ext));
+      }
+    }
+    o.stroke();
+  }
+  // walls: a faint fill behind a single line, nudged as a whole (under half a pixel) so the plumb drop to the floor is crisp
+  for (const w of walls) {
+    const dx = crisp(X(w.x)) - X(w.x), edge = new Path2D();
+    w.line.forEach(([x, y], i) => i ? edge.lineTo(X(x) + dx, Y(y)) : edge.moveTo(X(x) + dx, Y(y)));
+    const solid = new Path2D(edge), far = X(w.side * (HS + 0.3));
+    solid.lineTo(far, Y(HS + 0.5)); solid.lineTo(far, Y(w.line[0][1])); solid.closePath();
+    o.fillStyle = rgba(pal.ink, 0.05); o.fill(solid);
+    o.lineWidth = 1; o.lineJoin = 'miter'; o.strokeStyle = rgba(pal.ink, 0.3); o.stroke(edge);
+  }
+  o.restore();
+  // floor as a crisp line between the walls, the drop line dashed
+  o.lineWidth = 1; o.strokeStyle = rgba(pal.ink, 0.3);
+  o.beginPath(); o.moveTo(crisp(X(wallL)), crisp(B)); o.lineTo(crisp(X(wallR)), crisp(B)); o.stroke();
+  o.save(); o.setLineDash([2, 5]); o.strokeStyle = rgba(pal.ink, 0.18);
+  o.beginPath(); o.moveTo(X(wallL) + 14, crisp(Y(DROP_Y))); o.lineTo(X(wallR) - 14, crisp(Y(DROP_Y))); o.stroke(); o.restore();
+  // dividers: whole-device-pixel bars, a dot cap where the lattice row would have put a peg
+  const w = Math.max(1, Math.round(2 * Math.max(pr, 0.0012) * s * dpr)) / dpr, rc = Math.max(0.75, pr * s, w / 2);
+  o.fillStyle = rgba(pal.ink, 0.45);
+  const yt = Y(binY), yb = crisp(B);
+  for (const x of dividers) { const x0 = Math.round((X(x) - w / 2) * dpr) / dpr; o.fillRect(x0, yt, w, yb - yt); }
+  o.fillStyle = rgba(pal.ink, 0.85); o.beginPath();
+  for (const x of dividers) { const cx = dot(X(x)), cy = dot(Y(binY)); o.moveTo(cx + rc, cy); o.arc(cx, cy, rc, 0, Math.PI * 2); }
+  o.fill();
+  return c;
+}
+
+// Pegs lit by balls: punch out each one's static dot (a circle a pixel wider, so its antialiased rim goes too), then
+// draw it again at its lifted tone, leaning toward the light's colour. The two never stack, so nothing pops when a
+// peg starts or stops being lit; the frame goes on top afterwards, so the punch can never bite a wall.
+function drawBallLight() {
+  if (P.ballLight <= 0) return;
+  const rp = P.pegRadius / MM * fit.scale, on = [];
+  for (let q = 0; q < pegs.length; q++) if (glowC[q] * P.ballLight >= 0.002) on.push(q);
+  if (!on.length) return;
+  ctx.save();
+  ctx.globalCompositeOperation = 'destination-out'; ctx.fillStyle = '#000'; ctx.beginPath();
+  for (const q of on) { const p = pegs[q], x = dot(X(p.x)), y = dot(Y(p.y)), r = dotR(p.T, rp) + 1; ctx.moveTo(x + r, y); ctx.arc(x, y, r, 0, Math.PI * 2); }
+  ctx.fill();
+  ctx.globalCompositeOperation = 'source-over';
+  const tint = vivid() && P.tint, c = [0, 0, 0];
+  for (const q of on) {
+    const p = pegs[q], b = glowC[q] * P.ballLight, T = p.T + (1 - p.T) * b, m = tint ? 0.9 * Math.min(1, 1.2 * b) : 0;
+    for (let k = 0; k < 3; k++) c[k] = p.rgb[k] + (glowRGB[3 * q + k] - p.rgb[k]) * m;
+    ctx.fillStyle = dotStyle(c, dotA(T));
+    ctx.beginPath(); ctx.arc(dot(X(p.x)), dot(Y(p.y)), dotR(T, rp), 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.restore();
+}
+
+// The mark with its glow, over a faint keep-out band as wide as the clearance.
+function drawMark() {
+  const { c, o } = layerCanvas(), s = fit.scale, clr = P.clearance / MM;
+  o.translate(X(0), Y(0)); o.scale(s, s);
+  if (clr > 0) {
+    o.lineJoin = 'round'; o.lineWidth = 2 * clr; o.strokeStyle = rgba(lab.palette.ink, 0.045);
+    for (const p of PIECE_PATHS) o.stroke(p);
+  }
+  PIECE_PATHS.forEach((p, i) => {
+    o.save();
+    const col = pieceColor(i);
+    if (vivid()) { o.shadowColor = rgba(col, 0.55); o.shadowBlur = 22 * dpr; }
+    o.fillStyle = col; o.fill(p);
+    o.restore();
+  });
+  return c;
+}
+
+// Balls are sprites: a glow, the ball, a fixed highlight so it reads as a steel sphere. One per colour and size.
+const sprites = new Map();
+function sprite(col, r) {
+  const rpx = Math.max(1, r * fit.scale), key = col + '|' + rpx.toFixed(2);
+  let sp = sprites.get(key);
+  if (sp) return sp;
+  if (sprites.size > 300) sprites.clear();
+  const glow = vivid() ? rpx * 1.6 + 3 : 1, half = rpx + glow, n = Math.ceil(half * 2 * dpr) + 2;
+  const c = document.createElement('canvas'); c.width = c.height = n;
+  const o = c.getContext('2d'), m = n / 2;
+  o.scale(dpr, dpr);
+  const cm = m / dpr;
+  if (vivid()) {
+    const gr = o.createRadialGradient(cm, cm, rpx * 0.6, cm, cm, half);
+    gr.addColorStop(0, rgba(col, 0.45)); gr.addColorStop(1, rgba(col, 0));
+    o.fillStyle = gr; o.beginPath(); o.arc(cm, cm, half, 0, Math.PI * 2); o.fill();
+  }
+  const body = o.createRadialGradient(cm - rpx * 0.35, cm - rpx * 0.4, rpx * 0.05, cm, cm, rpx);
+  body.addColorStop(0, '#ffffff'); body.addColorStop(0.35, col); body.addColorStop(1, rgba(col, 0.85));
+  o.fillStyle = body; o.beginPath(); o.arc(cm, cm, rpx, 0, Math.PI * 2); o.fill();
+  sp = { c, half: n / 2 / dpr };
+  sprites.set(key, sp);
+  return sp;
+}
+function drawBall(x, y, r, col, alpha = 1, scale = 1) {
+  const sp = sprite(col, r);
+  ctx.globalAlpha = alpha;
+  const h = sp.half * scale;
+  ctx.drawImage(sp.c, X(x) - h, Y(y) - h, 2 * h, 2 * h);
+  ctx.globalAlpha = 1;
+}
+
+function render() {
+  const pal = lab.palette, s = fit.scale, alpha = acc / H;
+  ctx.clearRect(0, 0, sq.w, sq.h);
+
+  // histogram: bars rise from the floor in each bin, under the dividers
+  const top = Math.max(20, ...shown), maxH = (HS - binY) * 0.86 * s;
+  const pr = P.pegRadius / MM;
+  for (let i = 0; i < counts.length; i++) {
+    if (shown[i] < 0.01) continue;
+    const x0 = X(edges[i]) + (i ? pr * s + 1 : 1), x1 = X(edges[i + 1]) - (i < counts.length - 1 ? pr * s + 1 : 1);
+    const h = shown[i] / top * maxH, yb = crisp(Y(HS)), yt = crisp(yb - h);
+    const col = binColor(i);
+    ctx.fillStyle = rgba(col, 0.26); ctx.fillRect(x0, yt, x1 - x0, yb - yt);
+    ctx.strokeStyle = rgba(col, 0.95); ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(x0, yt); ctx.lineTo(x1, yt); ctx.stroke();
+  }
+
+  // static board, crossfading from the previous one after a rebuild ('lighter' sums the two exactly);
+  // otherwise pegs, then the ones balls light, then the frame
+  if (!boardLayer) boardLayer = drawBoard();
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0);
+  if (prevLayer && fadeK < 1) {
+    const k = fadeK * fadeK * (3 - 2 * fadeK);
+    ctx.globalAlpha = 1 - k; ctx.drawImage(prevLayer.pegs, 0, 0); ctx.drawImage(prevLayer.frame, 0, 0);
+    ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = k; ctx.drawImage(boardLayer.pegs, 0, 0); ctx.drawImage(boardLayer.frame, 0, 0);
+    ctx.restore();
+  } else {
+    ctx.drawImage(boardLayer.pegs, 0, 0);
+    ctx.restore();
+    drawBallLight();
+    ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(boardLayer.frame, 0, 0); ctx.restore();
+  }
+
+  // bin counts
+  if (P.counts) {
+    const bw = (X(edges[1]) - X(edges[0]));
+    if (bw > 14) {
+      ctx.font = `400 ${bw > 24 ? 10 : 9}px "JetBrains Mono", monospace`; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+      for (let i = 0; i < counts.length; i++) {
+        if (!counts[i]) continue;
+        ctx.fillStyle = rgba(pal.ink, 0.6);
+        ctx.fillText(String(counts[i]), (X(edges[i]) + X(edges[i + 1])) / 2, Y(binY) + 6);
+      }
+      ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+    }
+  }
+
+  // the mark
+  if (!markLayer) markLayer = drawMark();
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(markLayer, 0, 0); ctx.restore();
+
+  // lit pegs, additive
+  if (lit.size) {
+    ctx.save(); ctx.globalCompositeOperation = 'lighter';
+    const rp = Math.max(0.75, pr * s);
+    for (const i of lit) {
+      const f = pegFlash[i], p = pegs[i], col = pegCol[i] || pal.ink, x = dot(X(p.x)), y = dot(Y(p.y)), rp = Math.max(0.75, p.r * s);
+      ctx.fillStyle = rgba(col, 0.35 * f);
+      ctx.beginPath(); ctx.arc(x, y, rp + 5 * f, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = rgba(col, f);
+      ctx.beginPath(); ctx.arc(x, y, rp + 0.8, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  // trails, in three fading chunks per ball
+  if (P.trails) {
+    ctx.save(); ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    for (const b of balls) {
+      const u = b.getUserData(), tr = u.trail;
+      if (tr.length < 3) continue;
+      const n = tr.length, w = Math.max(1, u.r * s * 1.1);
+      for (let c = 0; c < 3; c++) {
+        const a = Math.floor(c * (n - 1) / 3), z = Math.floor((c + 1) * (n - 1) / 3);
+        if (z <= a) continue;
+        ctx.strokeStyle = rgba(u.col, 0.07 + 0.08 * c); ctx.lineWidth = w * (0.5 + 0.25 * c);
+        ctx.beginPath(); ctx.moveTo(X(tr[a].x), Y(tr[a].y));
+        for (let q = a + 1; q <= z; q++) ctx.lineTo(X(tr[q].x), Y(tr[q].y));
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+
+  // balls, interpolated between physics steps
+  for (const b of balls) {
+    const u = b.getUserData(), p = b.getPosition(), q = u.prev;
+    drawBall(q.x + (p.x / S - q.x) * alpha, q.y + (p.y / S - q.y) * alpha, u.r, u.col);
+  }
+  for (const f of fading) drawBall(f.x, f.y, f.r, f.col, Math.max(0, f.life), f.sink ? 0.6 + 0.4 * f.life : 1 + (1 - f.life) * 0.6);
+
+  // rings where balls strike or are caught by the mark
+  if (rings.length) {
+    ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.lineWidth = 1.2;
+    for (const r of rings) {
+      const k = r.t / r.dur;
+      ctx.strokeStyle = rgba(r.col, 0.85 * (1 - k));
+      ctx.beginPath(); ctx.arc(X(r.x), Y(r.y), r.R * s * (0.5 + k), 0, Math.PI * 2); ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // the spout under a hovering mouse
+  const sx = pour ? pour.x : hoverX;
+  if (sx !== null && sx !== undefined) {
+    const x = crisp(X(Math.max(-HS, Math.min(HS, sx)))), y = Y(DROP_Y), r = ballR() * s;
+    ctx.strokeStyle = rgba(pal.ink, 0.55); ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(x, y, r + 0.5, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x, Y(-HS) + 2); ctx.lineTo(x, y - r - 3); ctx.stroke();
+  }
+}
+
+let hudTick = 0;
+function hud() {
+  lab.hud(
+    `${ballR() < P.ballRadius / MM - 1e-9 ? `ball ⌀ <b>${(2 * ballR() * MM).toFixed(1)} mm</b> (pitch-limited) · ` : ''}balls <b>${balls.length}</b> · binned <b>${binned}</b> · caught <b>${caught}</b>` +
+    ` · lattice <b>±${MARK.slopeDeg.toFixed(1)}°</b> · g·sin θ <b>${(9.81 * Math.sin(P.incline * Math.PI / 180)).toFixed(2)} m/s²</b>`);
+}
+
+buildWorld();
+buildBoard();
+render();
+hud();
+
+lab.loop(dt => {
+  update(dt);
+  render();
+  if (++hudTick % 6 === 0) hud();
+});
+
+// test hooks: advance and draw without requestAnimationFrame
+window.__lab = {
+  step(n = 1) { for (let i = 0; i < n; i++) update(1 / 60); render(); hud(); return this.state(); },
+  drop: x => drop(x ?? 0, { force: true }), clear, reset: clear,
+  pour(n = 100) { burst += n; },
+  state: () => ({
+    balls: balls.length, dropped, binned, caught, pegs: pegs.length, bins: counts.length, counts: counts.slice(),
+    axesDeg: [MARK.A, MARK.B].map(v => +(Math.atan2(v[1], v[0]) * 180 / Math.PI).toFixed(3)), apexDeg: +MARK.apexDeg.toFixed(3),
+    pitchMM: +(pitchD * MM).toFixed(2), minPegGapMM: +(minPegGap * MM).toFixed(2), lit: lit.size,
+    cellMM: +(MARK.cell * MM).toFixed(2), steps: MARK.steps, walls: [wallL, wallR].map(x => +x.toFixed(4)),
+    ballLit: Array.from(glowC).filter(v => v > 0.002).length
+  }),
+  world: () => world, MARK
+};
+</script>

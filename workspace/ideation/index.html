@@ -1,0 +1,965 @@
+<title>Spectrum Bench</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@200;300;500&family=Familjen+Grotesk:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one dark optics bench. Thin spectrum hairlines divide sections; every concept is a live canvas, never a screenshot. Single deliberate dark look. */
+:root {
+  --void: #050508;
+  --panel: #0b0b12;
+  --ink: #eceaf4;
+  --dim: #8d8aa3;
+  --faint: #2a2838;
+  --glass: rgba(236, 234, 244, .06);
+  --r: #ff4053; --o: #ff9a2e; --y: #ffe03a; --g: #4dff8a; --c: #2fd8ff; --b: #5b72ff; --v: #b65bff;
+  --spectrum: linear-gradient(90deg, var(--r), var(--o), var(--y), var(--g), var(--c), var(--b), var(--v));
+  --display: "Unbounded", "Arial Narrow", system-ui, sans-serif;
+  --body: "Familjen Grotesk", "Helvetica Neue", Arial, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+  --step--1: .8125rem; --step-0: 1rem; --step-1: 1.25rem; --step-2: 1.75rem; --step-3: clamp(2rem, 5vw, 3.5rem);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--void); color: var(--ink);
+  font: 400 var(--step-0)/1.6 var(--body);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 0 64px;
+  -webkit-font-smoothing: antialiased;
+}
+.wrap { max-width: 1180px; margin: 0 auto; }
+a { color: var(--ink); text-decoration-color: var(--c); text-underline-offset: 3px; }
+a:focus-visible, button:focus-visible { outline: 1px solid var(--c); outline-offset: 3px; }
+.hair { height: 1px; background: var(--spectrum); opacity: .8; border: 0; margin: 0; }
+.eyebrow { font: 500 var(--step--1)/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--dim); }
+h1, h2, h3 { font-family: var(--display); font-weight: 200; text-wrap: balance; margin: 0; letter-spacing: -.01em; }
+h1 { font-size: var(--step-3); line-height: 1.05; }
+h2 { font-size: var(--step-2); line-height: 1.15; }
+h3 { font-size: var(--step-1); font-weight: 300; line-height: 1.2; }
+p { margin: 0; max-width: 65ch; }
+code, .mono { font-family: var(--mono); font-size: .875em; }
+
+header.top { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding-block: 20px; flex-wrap: wrap; }
+.mark { display: flex; align-items: center; gap: 12px; font: 300 1rem/1 var(--display); letter-spacing: .04em; }
+.mark svg { width: 28px; height: 28px; }
+
+.intro { display: grid; gap: 20px; padding-block: 48px 32px; }
+.intro p { color: var(--dim); font-size: var(--step-1); line-height: 1.5; }
+.intro p strong { color: var(--ink); font-weight: 500; }
+
+section { padding-block: 56px 0; display: grid; gap: 28px; }
+.sec-head { display: grid; gap: 10px; }
+.sec-head p { color: var(--dim); }
+
+/* concept cards */
+.concept { display: grid; gap: 0; border: 1px solid var(--faint); background: var(--panel); border-radius: 2px; overflow: hidden; }
+.stage { position: relative; background: var(--void); }
+.stage canvas { display: block; width: 100%; height: 100%; touch-action: pan-y; cursor: crosshair; }
+.stage.tall { height: clamp(360px, 52vw, 560px); }
+.stage.mid { height: 320px; }
+.hud { position: absolute; left: 14px; bottom: 12px; font: 400 .75rem/1.4 var(--mono); color: var(--dim); pointer-events: none; font-variant-numeric: tabular-nums; }
+.hud b { color: var(--ink); font-weight: 400; }
+.hint { position: absolute; right: 14px; top: 12px; font: 400 .75rem/1 var(--mono); color: var(--dim); pointer-events: none; }
+.copy { display: grid; gap: 14px; padding: 22px 22px 24px; align-content: start; }
+.copy .tag { display: flex; gap: 10px; align-items: baseline; justify-content: space-between; flex-wrap: wrap; }
+.copy ul { margin: 0; padding-left: 1.1em; color: var(--dim); display: grid; gap: 6px; }
+.copy ul li::marker { color: var(--c); }
+.copy .lesson { font: 400 .8125rem/1.5 var(--mono); color: var(--ink); border-top: 1px solid var(--faint); padding-top: 12px; }
+.copy .lesson span { color: var(--dim); }
+.letter { font: 200 1.75rem/1 var(--display); background: var(--spectrum); -webkit-background-clip: text; background-clip: text; color: transparent; }
+
+.hero-concept { grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); }
+.trio { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; }
+@media (max-width: 980px) {
+  .hero-concept { grid-template-columns: 1fr; }
+  .trio { grid-template-columns: 1fr; }
+}
+
+.controls { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { font: 400 .75rem/1 var(--mono); color: var(--dim); background: transparent; border: 1px solid var(--faint); padding: 7px 10px; border-radius: 99px; cursor: pointer; }
+.chip:hover { color: var(--ink); border-color: var(--dim); }
+.chip[aria-pressed="true"] { color: var(--void); background: var(--ink); border-color: var(--ink); }
+
+/* requirement map */
+.map { display: grid; border-top: 1px solid var(--faint); }
+.row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr) 120px; gap: 24px; padding-block: 18px; border-bottom: 1px solid var(--faint); align-items: start; }
+.row .ask { font-weight: 500; }
+.row .ask small { display: block; font: 400 .75rem/1.5 var(--mono); color: var(--dim); margin-top: 4px; }
+.row .proof { color: var(--dim); }
+.row .proof b { color: var(--ink); font-weight: 500; }
+.pill { justify-self: start; font: 500 .6875rem/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; padding: 6px 8px; border-radius: 2px; border: 1px solid; white-space: nowrap; }
+.pill.have { color: var(--g); border-color: color-mix(in srgb, var(--g) 50%, transparent); }
+.pill.build { color: var(--c); border-color: color-mix(in srgb, var(--c) 50%, transparent); }
+.pill.you { color: var(--o); border-color: color-mix(in srgb, var(--o) 50%, transparent); }
+.map-head { font: 500 .6875rem/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--dim); padding-block: 12px; }
+@media (max-width: 720px) {
+  .row { grid-template-columns: 1fr; gap: 8px; }
+  .map-head { display: none; }
+}
+
+.split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; }
+@media (max-width: 860px) { .split { grid-template-columns: 1fr; } }
+pre { margin: 0; overflow-x: auto; background: var(--panel); border: 1px solid var(--faint); padding: 18px; font: 400 .8125rem/1.65 var(--mono); color: var(--dim); }
+pre .k { color: var(--v); } pre .s { color: var(--g); } pre .c { color: #5d5a73; } pre .n { color: var(--ink); }
+
+.kit { display: grid; gap: 20px; }
+.swatches { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
+.sw { height: 56px; border-radius: 2px; position: relative; }
+.sw span { position: absolute; left: 6px; bottom: 5px; font: 400 .625rem/1 var(--mono); color: var(--void); }
+.typespec { display: grid; gap: 14px; border: 1px solid var(--faint); padding: 20px; background: var(--panel); }
+.typespec .d { font: 200 2.25rem/1.05 var(--display); }
+.typespec .b { font: 400 1rem/1.5 var(--body); color: var(--dim); }
+.typespec .m { font: 400 .8125rem/1.5 var(--mono); color: var(--dim); }
+
+.qs { display: grid; gap: 0; counter-reset: q; border-top: 1px solid var(--faint); }
+.qs li { list-style: none; display: grid; grid-template-columns: 40px minmax(0, 1fr); gap: 12px; padding-block: 14px; border-bottom: 1px solid var(--faint); counter-increment: q; }
+.qs li::before { content: counter(q, decimal-leading-zero); font: 400 .8125rem/1.6 var(--mono); color: var(--dim); }
+.qs { padding: 0; margin: 0; }
+
+.rec { border: 1px solid var(--faint); padding: 24px; display: grid; gap: 14px; background: radial-gradient(120% 140% at 0% 0%, rgba(91,114,255,.09), transparent 60%), var(--panel); }
+.rec p { color: var(--dim); }
+.rec p strong { color: var(--ink); font-weight: 500; }
+
+footer { padding-block: 56px 0; color: var(--dim); font: 400 .75rem/1.6 var(--mono); display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <div class="mark">
+      <svg viewBox="0 0 1024 1024" aria-hidden="true"><defs><linearGradient id="sg" x1="0" x2="1" y1="0" y2="1"><stop offset="0" stop-color="#ff4053"/><stop offset=".33" stop-color="#ffe03a"/><stop offset=".66" stop-color="#2fd8ff"/><stop offset="1" stop-color="#b65bff"/></linearGradient></defs><g fill="none" stroke="url(#sg)" stroke-width="28" stroke-linejoin="round"><polygon points="618,44 275,368 564,645 564,663 550,679 314,901 399,981 749,654 460,377 460,358 706,123"/><polygon points="358,43 16,368 404,735 489,654 211,390 199,367 209,348 447,123"/><polygon points="611,294 535,368 823,644 823,664 808,681 577,898 664,979 997,666 999,644 620,286"/></g></svg>
+      scott robertson
+    </div>
+    <span class="eyebrow">Design ideation · 27 Oct 2026</span>
+  </header>
+  <hr class="hair">
+
+  <div class="intro">
+    <span class="eyebrow">scottrobertson.dev, 2026 rebuild</span>
+    <h1>Four directions for a site that plays back</h1>
+    <p>The 2011 site said <strong>graphic designer</strong>. The 2026 one has to say <strong>I build the interactive web</strong>, and prove it before anyone scrolls. Target: Brilliant's Senior/Staff Engineer, Interactives. Every concept below is live. Move your pointer over them.</p>
+  </div>
+
+  <hr class="hair">
+
+  <!-- A+: LOGO BENCH (3D) -->
+  <section id="logo-bench">
+    <div class="sec-head">
+      <span class="eyebrow">Direction A+ · your mark, in glass</span>
+      <h2>Logo bench</h2>
+    </div>
+    <article class="concept hero-concept">
+      <div class="stage tall">
+        <canvas id="cv-logo3d" aria-label="3D optics bench: a laser refracts through Scott Robertson's chevron logo made of glass. Move the pointer to aim, click to change the glass."></canvas>
+        <div class="hint">aim with your pointer · click to swap glass</div>
+        <div class="hud" id="hud-logo3d">loading three.js…</div>
+      </div>
+      <div class="copy">
+        <div class="tag"><span class="letter">A+</span><span class="eyebrow">three.js · webgl</span></div>
+        <h3>The chevrons become optics</h3>
+        <p>Your triple-chevron mark is extruded as glass and laid flat on a bench. The beam is traced through its real outline. Each wavelength refracts on its own, and steep hits bounce inside the glass by total internal reflection. Then bloom turns the paths into laser light.</p>
+        <ul>
+          <li>Diamond glass traps light in the chevron arms. Try it.</li>
+          <li>Dispersion is turned up about 3× so the fan shows across the bench. Through parallel faces the colors would otherwise recombine.</li>
+          <li>On the real site, scroll moves the emitter along the bench.</li>
+        </ul>
+        <div class="lesson"><span>teaches →</span> refraction through any polygon, critical angle θc = asin(1/n)</div>
+      </div>
+    </article>
+  </section>
+
+  <!-- A: PRISM -->
+  <section id="prism">
+    <div class="sec-head">
+      <span class="eyebrow">Direction A · the flat version</span>
+      <h2>Optics bench</h2>
+    </div>
+    <article class="concept hero-concept">
+      <div class="stage tall">
+        <canvas id="cv-prism" aria-label="Interactive prism: a white laser refracts into a spectrum. Move the pointer to aim the beam."></canvas>
+        <div class="hint">aim with your pointer · click to swap glass</div>
+        <div class="hud" id="hud-prism">θᵢ <b>--</b> · n <b>1.48–1.58</b></div>
+      </div>
+      <div class="copy">
+        <div class="tag"><span class="letter">A</span><span class="eyebrow">laser line</span></div>
+        <h3>The brand is the physics</h3>
+        <p>A white beam hits a prism and splits into the thin rainbow. The aesthetic you like stops being decoration and becomes the result of a real simulation, Snell's law at seven wavelengths.</p>
+        <ul>
+          <li>Hero is this bench. Name set in thin Unbounded, the beam passes through it.</li>
+          <li>Each project section is a new optical element: mirror, lens, slit.</li>
+          <li>Scrolling rotates the prism, so the rainbow sweeps down the page with you.</li>
+        </ul>
+        <div class="lesson"><span>teaches →</span> n₁ sin θ₁ = n₂ sin θ₂, and why violet bends more than red</div>
+      </div>
+    </article>
+  </section>
+
+  <!-- B C D -->
+  <section id="alts">
+    <div class="sec-head">
+      <span class="eyebrow">Directions B–D</span>
+      <h2>Same black, same hairlines, different personality</h2>
+    </div>
+    <div class="trio">
+      <article class="concept">
+        <div class="stage mid">
+          <canvas id="cv-harmo" aria-label="Harmonograph drawing in rainbow lines. Click to draw a new figure."></canvas>
+          <div class="hud" id="hud-harmo">x <b>2.00</b> · y <b>3.00</b> Hz</div>
+        </div>
+        <div class="copy">
+          <div class="tag"><span class="letter">B</span><span class="eyebrow">pendulum lab</span></div>
+          <h3>Harmonograph</h3>
+          <p>Two damped pendulums draw your projects' "signatures". Calm, elegant, very plottable.</p>
+          <div class="controls" id="ratios" role="group" aria-label="Frequency ratio">
+            <button class="chip" data-r="1,2">1:2</button>
+            <button class="chip" data-r="2,3" aria-pressed="true">2:3</button>
+            <button class="chip" data-r="3,4">3:4</button>
+            <button class="chip" data-r="3,5">3:5</button>
+          </div>
+          <div class="lesson"><span>teaches →</span> frequency ratios, damping, Lissajous figures</div>
+        </div>
+      </article>
+
+      <article class="concept">
+        <div class="stage mid">
+          <canvas id="cv-wisp" aria-label="A small rainbow-line creature follows your pointer. Click to make it hop."></canvas>
+          <div class="hint">click to say hi</div>
+        </div>
+        <div class="copy">
+          <div class="tag"><span class="letter">C</span><span class="eyebrow">cute</span></div>
+          <h3>Pip, the site's guide</h3>
+          <p>A one-line creature made of the spectrum. It follows you, gets curious about links, and naps if you stop. The cute option.</p>
+          <ul><li>Pip points at the next thing to try on each demo.</li></ul>
+          <div class="lesson"><span>teaches →</span> follow-the-leader kinematics, easing</div>
+        </div>
+      </article>
+
+      <article class="concept">
+        <div class="stage mid">
+          <canvas id="cv-field" aria-label="A rainbow grid bends around masses. Click to drop a mass."></canvas>
+          <div class="hud" id="hud-field">masses <b>2</b></div>
+          <div class="hint">click to drop a mass</div>
+        </div>
+        <div class="copy">
+          <div class="tag"><span class="letter">D</span><span class="eyebrow">field lines</span></div>
+          <h3>Gravity grid</h3>
+          <p>The page background is a spacetime grid. Your cursor has weight. Projects orbit as bodies you can fling.</p>
+          <ul><li>Closest to your Smash Rockets physics work.</li></ul>
+          <div class="lesson"><span>teaches →</span> inverse-square fields, superposition</div>
+        </div>
+      </article>
+    </div>
+
+    <div class="rec">
+      <span class="eyebrow">Recommendation</span>
+      <h3>Lead with A, let Pip live in it, build every demo as a block</h3>
+      <p><strong>The optics bench is the strongest pitch</strong> because the rainbow is earned by physics, which is exactly Brilliant's job. Pip (C) adds the warmth a pure-physics site lacks. B and D become blocks inside the site, not competing homepages. Under the hood, every demo is defined by a small typed spec that a person or an AI can read and remix, which answers the listing's API line directly.</p>
+    </div>
+  </section>
+
+  <hr class="hair" style="margin-top:56px">
+
+  <!-- MAP -->
+  <section id="listing">
+    <div class="sec-head">
+      <span class="eyebrow">Brilliant · Interactives · $180–250k · remote</span>
+      <h2>How the site answers the listing</h2>
+      <p>Each line from the posting gets a place on the site where it is shown rather than claimed.</p>
+    </div>
+    <div>
+      <div class="row map-head"><span>They ask</span><span>The site shows</span><span>Status</span></div>
+      <div class="map">
+        <div class="row"><div class="ask">7+ years web, ideally games, animation, interactive media</div><div class="proof"><b>Playable shelf.</b> Smash Rockets Deluxe (Pixi 8, host-authoritative WebRTC, Zod-validated packets), Tunk from Global Game Jam 2020, Re-Entry VR from Philly Game Mechanics' Fear Jam, the Suika-style watermelon game, Hyper Tanks. Each one embedded and playable.</div><span class="pill have">have it</span></div>
+        <div class="row"><div class="ask">Craft interactive building blocks that make concepts addictive<small>"captivate learners"</small></div><div class="proof"><b>The site is made of blocks.</b> Prism, pendulum, field and Pip are each a reusable block with a one-line "teaches" caption. Hiring managers try the product, not a description of it.</div><span class="pill build">this site</span></div>
+        <div class="row"><div class="ask">Clear, expressive APIs for experts and AIs</div><div class="proof"><b>Spec toggle on every demo.</b> Flip a demo over to see its typed config. Ship <code>/blocks.json</code> and <code>/llms.txt</code> so an agent can list and drive them. Sketch below.</div><span class="pill build">this site</span></div>
+        <div class="row"><div class="ask">Simple code an intern could follow</div><div class="proof"><b>"Read the source" under each block</b>, with line counts. The prism is one ray tracer around 60 lines. Proof of restraint.</div><span class="pill build">this site</span></div>
+        <div class="row"><div class="ask">Right tool, even unglamorous ones</div><div class="proof"><b>Workbench drawer.</b> ESP32 weather servo, InkyPhat e-paper dashboard, lighthouse-from-sitemap, Supabase row-level security in Food by Photos, Sanity and Strapi CMS builds.</div><span class="pill have">have it</span></div>
+        <div class="row"><div class="ask">Thinks about impact on learners</div><div class="proof"><b>Accessibility as a feature.</b> Your PixiJS accessibility expansion is the lead story. Every canvas here gets keyboard control and a text description.</div><span class="pill have">have it</span></div>
+        <div class="row"><div class="ask">Elm, TS, JS, HTML, CSS, SVG<small>functional experience helps</small></div><div class="proof"><b>Port one block to Elm.</b> The prism in Elm, side by side with the TS version. Six years of Advent of Code backs up the puzzle-solving.</div><span class="pill build">build it</span></div>
+        <div class="row"><div class="ask">A favorite product and what makes it delightful</div><div class="proof">A short essay with an interactive teardown of the one moment that hooks you.</div><span class="pill you">need you</span></div>
+        <div class="row"><div class="ask">A considered view of AI-enabled engineering</div><div class="proof">A "how this site was built" page: what you delegated to AI, what you kept, what you'd never hand off.</div><span class="pill you">need you</span></div>
+      </div>
+    </div>
+
+    <div class="split">
+      <pre aria-label="Proposed block spec"><span class="c">// blocks/prism.ts · every interactive is data first</span>
+<span class="k">export const</span> <span class="n">prism</span> = block({
+  id: <span class="s">"prism-dispersion"</span>,
+  teaches: <span class="s">"n₁ sin θ₁ = n₂ sin θ₂"</span>,
+  params: {
+    glass:    oneOf([<span class="s">"crown"</span>, <span class="s">"flint"</span>, <span class="s">"diamond"</span>]),
+    rotation: angle({ min: -<span class="n">30</span>, max: <span class="n">30</span> }),
+    aim:      point(),
+  },
+  observe: [<span class="s">"incidence"</span>, <span class="s">"deviation"</span>],
+  describe: (s) =&gt;
+    <span class="s">`Beam enters at ${s.incidence}°, spreads ${s.spread}°`</span>,
+});</pre>
+      <div class="copy" style="padding:0">
+        <h3>Why a spec, and not just code</h3>
+        <p style="color:var(--dim)">Brilliant wants blocks experts and AIs can both compose. If every demo is a typed object with params, observable values and a plain-language <code>describe</code>, then the same spec drives the canvas, the screen-reader text, the keyboard controls and an agent's tool call. One source, four outputs. Your site becomes a small version of their platform.</p>
+      </div>
+    </div>
+  </section>
+
+  <hr class="hair" style="margin-top:56px">
+
+  <!-- KIT -->
+  <section id="kit">
+    <div class="sec-head">
+      <span class="eyebrow">Starter kit</span>
+      <h2>Black, hairline, spectrum</h2>
+    </div>
+    <div class="split">
+      <div class="kit">
+        <div class="swatches">
+          <div class="sw" style="background:var(--r)"><span>650nm</span></div>
+          <div class="sw" style="background:var(--o)"><span>600</span></div>
+          <div class="sw" style="background:var(--y)"><span>580</span></div>
+          <div class="sw" style="background:var(--g)"><span>530</span></div>
+          <div class="sw" style="background:var(--c)"><span>490</span></div>
+          <div class="sw" style="background:var(--b)"><span>460</span></div>
+          <div class="sw" style="background:var(--v)"><span>410</span></div>
+        </div>
+        <p style="color:var(--dim)">Seven spectrum colors labelled by wavelength, used only as 1px lines and light. Never as fills behind text. Ground is <code>#050508</code>, a black tipped toward violet.</p>
+      </div>
+      <div class="typespec">
+        <div class="d">Light bends here</div>
+        <div class="b">Familjen Grotesk carries the body. Warm, slightly quirky, easy to read at length.</div>
+        <div class="m">JetBrains Mono · readouts, θᵢ = 34.2°, n = 1.52</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- QUESTIONS -->
+  <section id="next">
+    <div class="sec-head">
+      <span class="eyebrow">To decide next</span>
+      <h2>What I need from you</h2>
+    </div>
+    <ol class="qs">
+      <li><span>Which direction leads? My pick is A with Pip from C.</span></li>
+      <li><span>Your favorite product and the one moment that makes it delightful. The listing asks directly.</span></li>
+      <li><span>Your take on AI-enabled engineering, in your own words. I'll shape it, not write it.</span></li>
+      <li><span>Which games can go public and playable: Smash Rockets Deluxe, Tunk, Hyper Tanks, the watermelon game?</span></li>
+      <li><span>Bluesky handle and any other links for the footer.</span></li>
+      <li><span>Stack: Vue 3 + Vite to match your work, plus one Elm block as a deliberate signal?</span></li>
+    </ol>
+  </section>
+
+  <footer>
+    <span>scottrobertson.dev · ideation board v1</span>
+    <a href="https://jobs.lever.co/brilliant/abe6c8d6-d0f5-47d6-9d6e-f7b762b64ba2">The listing ↗</a>
+  </footer>
+</div>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+
+const canvas = document.getElementById('cv-logo3d');
+const hud = document.getElementById('hud-logo3d');
+const CALM = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// Logo corners in the original 1024×1024 artwork (y down), traced from the site's SVG.
+const LOGO = [
+  [[618,44],[275,368],[564,645],[564,663],[550,679],[314,901],[399,981],[749,654],[460,377],[460,358],[706,123]],
+  [[358,43],[16,368],[404,735],[489,654],[211,390],[199,367],[209,348],[447,123]],
+  [[611,294],[535,368],[823,644],[823,664],[808,681],[577,898],[664,979],[997,666],[999,644],[620,286]]
+];
+const SCALE = 4.6 / 1024, CX = 0.6;
+const toBench = ([x, y]) => ({ x: (x - 512) * SCALE + CX, z: (y - 512) * SCALE });
+const pieces = LOGO.map(poly => poly.map(toBench));
+
+const WAVES = [
+  ['#ff4053', 0.000], ['#ff9a2e', 0.016], ['#ffe03a', 0.030], ['#4dff8a', 0.046],
+  ['#2fd8ff', 0.062], ['#5b72ff', 0.080], ['#b65bff', 0.100]
+].map(([c, n]) => ({ color: new THREE.Color(c), n }));
+const GLASS = [
+  { name: 'crown', base: 1.50, k: 2.4 },
+  { name: 'flint', base: 1.62, k: 3.6 },
+  { name: 'diamond', base: 2.42, k: 4.4 }
+];
+let gi = 1;
+
+// ---- 2D optics on the bench plane (x, z) ----
+const BOUND = { x0: -7, x1: 7, z0: -4.2, z1: 4.2 };
+const dot = (a, b) => a.x * b.x + a.z * b.z;
+const add = (a, b) => ({ x: a.x + b.x, z: a.z + b.z });
+const mul = (a, k) => ({ x: a.x * k, z: a.z * k });
+const norm = a => { const l = Math.hypot(a.x, a.z) || 1; return { x: a.x / l, z: a.z / l }; };
+
+function inside(p, poly) {
+  let c = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const a = poly[i], b = poly[j];
+    if ((a.z > p.z) !== (b.z > p.z) && p.x < (b.x - a.x) * (p.z - a.z) / (b.z - a.z) + a.x) c = !c;
+  }
+  return c;
+}
+const edges = pieces.flatMap(poly => poly.map((a, i) => {
+  const b = poly[(i + 1) % poly.length];
+  let n = norm({ x: b.z - a.z, z: -(b.x - a.x) });
+  const mid = mul(add(a, b), 0.5);
+  if (inside(add(mid, mul(n, 0.01)), poly)) n = mul(n, -1); // keep normals pointing out of the glass
+  return { a, b, n };
+}));
+
+function hit(o, d) {
+  let best = null;
+  for (const e of edges) {
+    const ex = e.b.x - e.a.x, ez = e.b.z - e.a.z;
+    const den = d.x * ez - d.z * ex;
+    if (Math.abs(den) < 1e-9) continue;
+    const ax = e.a.x - o.x, az = e.a.z - o.z;
+    const t = (ax * ez - az * ex) / den, u = (ax * d.z - az * d.x) / den;
+    if (t > 1e-4 && u >= 0 && u <= 1 && (!best || t < best.t)) best = { t, e };
+  }
+  return best;
+}
+function toBounds(o, d) {
+  const tx = d.x > 0 ? (BOUND.x1 - o.x) / d.x : d.x < 0 ? (BOUND.x0 - o.x) / d.x : Infinity;
+  const tz = d.z > 0 ? (BOUND.z1 - o.z) / d.z : d.z < 0 ? (BOUND.z0 - o.z) / d.z : Infinity;
+  return add(o, mul(d, Math.max(0, Math.min(tx, tz))));
+}
+function refract(d, n, eta) {
+  const ci = -dot(n, d), k = 1 - eta * eta * (1 - ci * ci);
+  return k < 0 ? null : norm(add(mul(d, eta), mul(n, eta * ci - Math.sqrt(k))));
+}
+const reflect = (d, n) => add(d, mul(n, -2 * dot(d, n)));
+
+// Follows one wavelength until it leaves the bench. Returns TIR count.
+function trace(o, d, ior, color, segs, spots, depth = 0) {
+  const h = hit(o, d);
+  if (!h || depth > 24) { const end = toBounds(o, d); segs.push([o, end, color, 1]); spots.push([end, color]); return 0; }
+  const p = add(o, mul(d, h.t));
+  segs.push([o, p, color, 1]);
+  const entering = dot(d, h.e.n) < 0;
+  const n = entering ? h.e.n : mul(h.e.n, -1);
+  const r = refract(d, n, entering ? 1 / ior : ior);
+  if (r) return trace(p, r, ior, color, segs, spots, depth + 1);
+  return 1 + trace(p, reflect(d, n), ior, color, segs, spots, depth + 1);
+}
+
+// ---- three.js scene ----
+let renderer;
+try { renderer = new THREE.WebGLRenderer({ canvas, antialias: true }); }
+catch (e) { hud.textContent = 'WebGL is not available in this browser.'; throw e; }
+renderer.setClearColor(0x050508, 1);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+const scene = new THREE.Scene();
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(renderer), 0.04).texture;
+const camera = new THREE.PerspectiveCamera(32, 2, 0.1, 100);
+
+const BEAM_Y = 0.28, THICK = 0.56;
+
+const grid = new THREE.GridHelper(14, 28, 0x24223a, 0x14131f);
+grid.scale.z = 8.4 / 14;
+scene.add(grid);
+const frame = new THREE.LineSegments(
+  new THREE.EdgesGeometry(new THREE.BoxGeometry(14, 0.001, 8.4)),
+  new THREE.LineBasicMaterial({ color: 0x3a3852 })
+);
+scene.add(frame);
+
+const glassMat = new THREE.MeshPhysicalMaterial({
+  color: 0xdfe6ff, roughness: 0.04, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.05,
+  transparent: true, opacity: 0.06, envMapIntensity: 0.12, side: THREE.DoubleSide, depthWrite: false
+});
+const edgeMat = new THREE.LineBasicMaterial({ color: 0xeceaf4, transparent: true, opacity: 0.45 });
+for (const poly of pieces) {
+  const shape = new THREE.Shape(poly.map(p => new THREE.Vector2(p.x, -p.z)));
+  const geo = new THREE.ExtrudeGeometry(shape, { depth: THICK, bevelEnabled: true, bevelThickness: 0.02, bevelSize: 0.012, bevelSegments: 2 });
+  geo.rotateX(-Math.PI / 2);
+  scene.add(new THREE.Mesh(geo, glassMat));
+  scene.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo, 25), edgeMat));
+}
+scene.add(new THREE.AmbientLight(0xffffff, 0.08));
+
+const emitter = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.22, 0.22), new THREE.MeshStandardMaterial({ color: 0x8d8aa3, roughness: 0.5, metalness: 0.6, envMapIntensity: 0.2 }));
+scene.add(emitter);
+
+const MAX = 2400;
+const beamGeo = new THREE.BufferGeometry();
+beamGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(MAX * 6), 3));
+beamGeo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(MAX * 6), 3));
+const beams = new THREE.LineSegments(beamGeo, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
+beams.renderOrder = 2;
+scene.add(beams);
+
+const dotTex = (() => {
+  const c = document.createElement('canvas'); c.width = c.height = 64;
+  const g = c.getContext('2d'), r = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  r.addColorStop(0, 'rgba(255,255,255,1)'); r.addColorStop(0.25, 'rgba(255,255,255,.5)'); r.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = r; g.fillRect(0, 0, 64, 64);
+  return new THREE.CanvasTexture(c);
+})();
+const spotGeo = new THREE.BufferGeometry();
+spotGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(400 * 3), 3));
+spotGeo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(400 * 3), 3));
+const spots3 = new THREE.Points(spotGeo, new THREE.PointsMaterial({ size: 0.22, map: dotTex, vertexColors: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
+spots3.renderOrder = 3;
+scene.add(spots3);
+
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.7, 0.35, 0.15);
+composer.addPass(bloom);
+composer.addPass(new OutputPass());
+
+function resize() {
+  const r = canvas.getBoundingClientRect();
+  if (!r.width) return;
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  renderer.setPixelRatio(dpr);
+  renderer.setSize(r.width, r.height, false);
+  composer.setPixelRatio(dpr);
+  composer.setSize(r.width, r.height);
+  camera.aspect = r.width / r.height;
+  camera.fov = camera.aspect < 1 ? 52 : 32;
+  camera.updateProjectionMatrix();
+}
+new ResizeObserver(resize).observe(canvas);
+let visible = true;
+new IntersectionObserver(es => { visible = es[0].isIntersecting; }).observe(canvas);
+
+// pointer → point on the beam plane
+const ray = new THREE.Raycaster(), ndc = new THREE.Vector2(), plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -BEAM_Y);
+let aim = null;
+function pointer(e) {
+  const r = canvas.getBoundingClientRect();
+  ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+  ray.setFromCamera(ndc, camera);
+  const p = new THREE.Vector3();
+  aim = ray.ray.intersectPlane(plane, p) ? { x: p.x, z: p.z } : null;
+}
+canvas.addEventListener('pointermove', pointer);
+canvas.addEventListener('pointerleave', () => { aim = null; });
+canvas.addEventListener('pointerdown', e => { pointer(e); gi = (gi + 1) % GLASS.length; });
+
+const WHITE = new THREE.Color(1, 1, 1);
+let t = 0, last = performance.now(), tick = 0;
+function render(now) {
+  requestAnimationFrame(render);
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (!visible) return;
+  if (!CALM) t += dt;
+
+  const sway = Math.sin(t * 0.18) * 1.6;
+  camera.position.set(sway, 8.2, 8.6);
+  camera.lookAt(0.3, 0, 0.4);
+
+  const S = { x: -6.4, z: 1.6 };
+  emitter.position.set(S.x - 0.25, BEAM_Y, S.z);
+  // idle sweep stays in the angle range where the chevron arms split the colors hardest
+  const idle = -0.37 + 0.13 * Math.sin(t * 0.35);
+  const target = aim || { x: S.x + Math.cos(idle) * 10, z: S.z + Math.sin(idle) * 10 };
+  const d = norm({ x: target.x - S.x, z: target.z - S.z });
+  emitter.rotation.y = -Math.atan2(d.z, d.x);
+
+  const segs = [], spots = [];
+  const G = GLASS[gi];
+  let tir = 0;
+  const h0 = hit(S, d);
+  if (!h0) {
+    const end = toBounds(S, d); segs.push([S, end, WHITE, 1]); spots.push([end, WHITE]);
+  } else {
+    const p = add(S, mul(d, h0.t));
+    segs.push([S, p, WHITE, 1]);
+    const n = h0.e.n;
+    const refl = toBounds(p, reflect(d, n));
+    segs.push([p, refl, WHITE, 0.12]);
+    for (const w of WAVES) {
+      const ior = G.base + w.n * G.k;
+      const r = refract(d, n, 1 / ior);
+      if (r) tir += trace(p, r, ior, w.color, segs, spots);
+    }
+  }
+
+  const pos = beamGeo.attributes.position.array, col = beamGeo.attributes.color.array;
+  let i = 0;
+  for (const [a, b, c, k] of segs) {
+    if (i >= MAX) break;
+    pos.set([a.x, BEAM_Y, a.z, b.x, BEAM_Y, b.z], i * 6);
+    col.set([c.r * k, c.g * k, c.b * k, c.r * k, c.g * k, c.b * k], i * 6);
+    i++;
+  }
+  beamGeo.setDrawRange(0, i * 2);
+  beamGeo.attributes.position.needsUpdate = beamGeo.attributes.color.needsUpdate = true;
+
+  const sp = spotGeo.attributes.position.array, sc = spotGeo.attributes.color.array;
+  let j = 0;
+  for (const [p, c] of spots.slice(0, 400)) { sp.set([p.x, BEAM_Y, p.z], j * 3); sc.set([c.r * .6, c.g * .6, c.b * .6], j * 3); j++; }
+  spotGeo.setDrawRange(0, j);
+  spotGeo.attributes.position.needsUpdate = spotGeo.attributes.color.needsUpdate = true;
+
+  if (++tick % 6 === 0) {
+    const crit = Math.asin(1 / G.base) * 180 / Math.PI;
+    hud.innerHTML = h0
+      ? `glass <b>${G.name}</b> · n <b>${G.base.toFixed(2)}–${(G.base + 0.1 * G.k).toFixed(2)}</b> · θc <b>${crit.toFixed(1)}°</b> · internal reflections <b>${tir}</b>`
+      : `glass <b>${G.name}</b> · beam misses the mark`;
+  }
+  composer.render();
+}
+resize();
+requestAnimationFrame(render);
+</script>
+
+<script>
+(() => {
+  const CALM = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const WAVES = [
+    { c: '#ff4053', n: 0.000 }, { c: '#ff9a2e', n: 0.016 }, { c: '#ffe03a', n: 0.030 },
+    { c: '#4dff8a', n: 0.046 }, { c: '#2fd8ff', n: 0.062 }, { c: '#5b72ff', n: 0.080 }, { c: '#b65bff', n: 0.100 }
+  ];
+  const SPEC = WAVES.map(w => w.c);
+
+  function stage(canvas, s) {
+    const ctx = canvas.getContext('2d');
+    const P = { x: 0, y: 0, active: false };
+    let w = 0, h = 0, visible = true, last = performance.now(), time = 0;
+    function resize() {
+      const r = canvas.getBoundingClientRect();
+      const dpr = Math.min(2, window.devicePixelRatio || 1);
+      w = r.width; h = r.height;
+      canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      s.init && s.init(w, h);
+    }
+    const local = e => { const r = canvas.getBoundingClientRect(); P.x = e.clientX - r.left; P.y = e.clientY - r.top; };
+    canvas.addEventListener('pointermove', e => { local(e); P.active = true; });
+    canvas.addEventListener('pointerleave', () => { P.active = false; });
+    canvas.addEventListener('pointerdown', e => { local(e); P.active = true; s.click && s.click(P.x, P.y); });
+    new ResizeObserver(resize).observe(canvas);
+    new IntersectionObserver(es => { visible = es[0].isIntersecting; }).observe(canvas);
+    resize();
+    function loop(t) {
+      const dt = Math.min(0.05, (t - last) / 1000); last = t;
+      if (!CALM) time += dt;
+      if (visible && w > 0) s.frame(ctx, w, h, dt, time, P);
+      requestAnimationFrame(loop);
+    }
+    requestAnimationFrame(loop);
+  }
+
+  const add = (a, b) => ({ x: a.x + b.x, y: a.y + b.y });
+  const mul = (a, k) => ({ x: a.x * k, y: a.y * k });
+  const dot = (a, b) => a.x * b.x + a.y * b.y;
+  const norm = a => { const l = Math.hypot(a.x, a.y) || 1; return { x: a.x / l, y: a.y / l }; };
+
+  function glowLine(ctx, pts, color, a = 1) {
+    ctx.strokeStyle = color;
+    ctx.globalAlpha = 0.14 * a; ctx.lineWidth = 5;
+    ctx.beginPath(); pts.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); ctx.stroke();
+    ctx.globalAlpha = 0.95 * a; ctx.lineWidth = 1.1;
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  /* ---------- A: prism ---------- */
+  (() => {
+    const hud = document.getElementById('hud-prism');
+    const GLASS = [
+      { name: 'crown', base: 1.48, k: 0.8 },
+      { name: 'flint', base: 1.58, k: 1.4 },
+      { name: 'diamond', base: 2.0, k: 1.9 }
+    ];
+    let gi = 1, edges = [], tri = [], hudTick = 0;
+
+    function build(w, h, rot) {
+      const cx = w * 0.56, cy = h * 0.52, R = Math.min(w * 0.22, h * 0.36);
+      tri = [0, 1, 2].map(i => {
+        const a = rot - Math.PI / 2 + i * 2 * Math.PI / 3;
+        return { x: cx + R * Math.cos(a), y: cy + R * Math.sin(a) };
+      });
+      edges = [0, 1, 2].map(i => {
+        const a = tri[i], b = tri[(i + 1) % 3];
+        let n = norm({ x: b.y - a.y, y: -(b.x - a.x) });
+        const mid = mul(add(a, b), 0.5);
+        if (dot(n, { x: mid.x - cx, y: mid.y - cy }) < 0) n = mul(n, -1);
+        return { a, b, n };
+      });
+      return { cx, cy, R };
+    }
+    function hit(o, d) {
+      let best = null;
+      for (const e of edges) {
+        const ex = e.b.x - e.a.x, ey = e.b.y - e.a.y;
+        const den = d.x * ey - d.y * ex;
+        if (Math.abs(den) < 1e-9) continue;
+        const ax = e.a.x - o.x, ay = e.a.y - o.y;
+        const t = (ax * ey - ay * ex) / den, u = (ax * d.y - ay * d.x) / den;
+        if (t > 1e-3 && u >= 0 && u <= 1 && (!best || t < best.t)) best = { t, e };
+      }
+      return best;
+    }
+    function refract(d, n, eta) {
+      const ci = -dot(n, d), k = 1 - eta * eta * (1 - ci * ci);
+      if (k < 0) return null;
+      return norm(add(mul(d, eta), mul(n, eta * ci - Math.sqrt(k))));
+    }
+    const reflect = (d, n) => add(d, mul(n, -2 * dot(d, n)));
+    function traceInside(o, d, ior, depth, pts) {
+      const h = hit(o, d);
+      if (!h) { pts.push(add(o, mul(d, 3000))); return; }
+      const p = add(o, mul(d, h.t)); pts.push(p);
+      if (depth > 7) return;
+      const n = mul(h.e.n, -1);
+      const out = refract(d, n, ior);
+      if (out) pts.push(add(p, mul(out, 3000)));
+      else traceInside(p, reflect(d, n), ior, depth + 1, pts);
+    }
+
+    stage(document.getElementById('cv-prism'), {
+      click() { gi = (gi + 1) % GLASS.length; },
+      frame(ctx, w, h, dt, t, P) {
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.fillStyle = '#050508'; ctx.fillRect(0, 0, w, h);
+        // faint bench grid
+        ctx.strokeStyle = 'rgba(236,234,244,.035)'; ctx.lineWidth = 1;
+        for (let x = 0; x < w; x += 32) { ctx.beginPath(); ctx.moveTo(x + .5, 0); ctx.lineTo(x + .5, h); ctx.stroke(); }
+        for (let y = 0; y < h; y += 32) { ctx.beginPath(); ctx.moveTo(0, y + .5); ctx.lineTo(w, y + .5); ctx.stroke(); }
+
+        const g = build(w, h, 0.12 * Math.sin(t * 0.35));
+        const S = { x: w * 0.04, y: h * 0.66 };
+        const target = P.active ? { x: P.x, y: P.y } : { x: g.cx - g.R * 0.25, y: g.cy + g.R * 0.15 * Math.sin(t * 0.6) };
+        let d = norm({ x: target.x - S.x, y: target.y - S.y });
+
+        // emitter
+        ctx.fillStyle = '#eceaf4'; ctx.fillRect(S.x - 10, S.y - 3, 14, 6);
+
+        ctx.globalCompositeOperation = 'lighter';
+        const h0 = hit(S, d);
+        if (!h0) {
+          glowLine(ctx, [S, add(S, mul(d, 3000))], '#eceaf4');
+          if (++hudTick % 6 === 0) hud.innerHTML = `θᵢ <b>--</b> · glass <b>${GLASS[gi].name}</b> · beam misses`;
+        } else {
+          const p = add(S, mul(d, h0.t));
+          glowLine(ctx, [S, p], '#eceaf4');
+          const n = h0.e.n;
+          // faint surface reflection
+          glowLine(ctx, [p, add(p, mul(reflect(d, n), 3000))], '#eceaf4', 0.12);
+          const G = GLASS[gi];
+          let lo = null, hi = null;
+          WAVES.forEach((wv, i) => {
+            const ior = G.base + wv.n * G.k;
+            const din = refract(d, n, 1 / ior);
+            if (!din) return;
+            const pts = [p];
+            traceInside(p, din, ior, 0, pts);
+            glowLine(ctx, pts, wv.c);
+            const last = norm({ x: pts[pts.length - 1].x - pts[pts.length - 2].x, y: pts[pts.length - 1].y - pts[pts.length - 2].y });
+            const ang = Math.atan2(last.y, last.x);
+            if (i === 0) lo = ang; if (i === WAVES.length - 1) hi = ang;
+          });
+          // spark at entry
+          ctx.fillStyle = '#fff'; ctx.globalAlpha = .9;
+          ctx.beginPath(); ctx.arc(p.x, p.y, 1.8, 0, Math.PI * 2); ctx.fill(); ctx.globalAlpha = 1;
+          if (++hudTick % 6 === 0) {
+            const inc = Math.acos(Math.min(1, Math.abs(dot(d, n)))) * 180 / Math.PI;
+            const spread = lo != null && hi != null ? Math.abs(hi - lo) * 180 / Math.PI : 0;
+            hud.innerHTML = `θᵢ <b>${inc.toFixed(1)}°</b> · glass <b>${G.name}</b> · n <b>${G.base.toFixed(2)}–${(G.base + .1 * G.k).toFixed(2)}</b> · spread <b>${spread.toFixed(1)}°</b>`;
+          }
+        }
+        ctx.globalCompositeOperation = 'source-over';
+        // prism
+        ctx.beginPath(); tri.forEach((v, i) => i ? ctx.lineTo(v.x, v.y) : ctx.moveTo(v.x, v.y)); ctx.closePath();
+        ctx.fillStyle = 'rgba(236,234,244,.035)'; ctx.fill();
+        ctx.strokeStyle = 'rgba(236,234,244,.55)'; ctx.lineWidth = 1; ctx.stroke();
+      }
+    });
+  })();
+
+  /* ---------- B: harmonograph ---------- */
+  (() => {
+    const hud = document.getElementById('hud-harmo');
+    let ratio = [2, 3], prm, prog = 0, hold = 0;
+    function roll() {
+      const j = () => (Math.random() - .5) * 0.02;
+      prm = {
+        fx: ratio[0] + j(), fy: ratio[1] + j(), fx2: ratio[0] * 1.0 + j(), fy2: ratio[1] + j(),
+        px: Math.random() * 6.28, py: Math.random() * 6.28, px2: Math.random() * 6.28, py2: Math.random() * 6.28,
+        d: 0.0035 + Math.random() * 0.004
+      };
+      prog = CALM ? 1 : 0; hold = 0;
+      hud.innerHTML = `x <b>${prm.fx.toFixed(3)}</b> · y <b>${prm.fy.toFixed(3)}</b> Hz · decay <b>${prm.d.toFixed(4)}</b>`;
+    }
+    roll();
+    document.querySelectorAll('#ratios .chip').forEach(b => b.addEventListener('click', () => {
+      document.querySelectorAll('#ratios .chip').forEach(x => x.setAttribute('aria-pressed', 'false'));
+      b.setAttribute('aria-pressed', 'true');
+      ratio = b.dataset.r.split(',').map(Number); roll();
+    }));
+    const N = 2400, T = 260;
+    stage(document.getElementById('cv-harmo'), {
+      click: roll,
+      frame(ctx, w, h, dt) {
+        ctx.fillStyle = '#050508'; ctx.fillRect(0, 0, w, h);
+        if (prog < 1) prog = Math.min(1, prog + dt * 0.18); else if (!CALM && (hold += dt) > 4) roll();
+        const A = Math.min(w, h) * 0.22, cx = w / 2, cy = h / 2;
+        const pt = i => {
+          const t = i / N * T, e = Math.exp(-prm.d * t);
+          return {
+            x: cx + A * e * (Math.sin(prm.fx * t * 0.1 + prm.px) + Math.sin(prm.fx2 * t * 0.1 + prm.px2) * .6),
+            y: cy + A * e * (Math.sin(prm.fy * t * 0.1 + prm.py) + Math.sin(prm.fy2 * t * 0.1 + prm.py2) * .6)
+          };
+        };
+        const upto = Math.floor(N * prog), B = 24;
+        ctx.globalCompositeOperation = 'lighter'; ctx.lineWidth = 0.9;
+        for (let s = 0; s < upto; s += B) {
+          ctx.strokeStyle = `hsl(${(s / N) * 290},100%,62%)`;
+          ctx.globalAlpha = 0.75;
+          ctx.beginPath();
+          for (let i = s; i <= Math.min(upto, s + B); i++) { const p = pt(i); i === s ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y); }
+          ctx.stroke();
+        }
+        if (upto > 0 && prog < 1) { const p = pt(upto); ctx.globalAlpha = 1; ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(p.x, p.y, 2, 0, 6.28); ctx.fill(); }
+        ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+      }
+    });
+  })();
+
+  /* ---------- C: Pip ---------- */
+  (() => {
+    const L = 22, SEG = 7;
+    let body = [], vel = { x: 0, y: 0 }, blink = 0, nextBlink = 2, still = 0, hop = 0, rings = [], last = null;
+    stage(document.getElementById('cv-wisp'), {
+      init(w, h) { if (!body.length) body = Array.from({ length: L }, (_, i) => ({ x: w / 2 - i * SEG, y: h / 2 })); },
+      click(x, y) { hop = 1; rings.push({ x: body[0].x, y: body[0].y, r: 4, a: 1 }); },
+      frame(ctx, w, h, dt, t, P) {
+        ctx.fillStyle = '#050508'; ctx.fillRect(0, 0, w, h);
+        const head = body[0];
+        const target = P.active ? { x: P.x, y: P.y } : { x: w / 2 + Math.cos(t * 0.7) * w * 0.28, y: h / 2 + Math.sin(t * 1.3) * h * 0.22 };
+        const dx = target.x - head.x, dy = target.y - head.y, dist = Math.hypot(dx, dy);
+        const want = dist > 26 ? Math.min(240, dist * 2.2) : 0;
+        const dir = norm({ x: dx, y: dy });
+        vel.x += (dir.x * want - vel.x) * Math.min(1, dt * 4);
+        vel.y += (dir.y * want - vel.y) * Math.min(1, dt * 4);
+        head.x += vel.x * dt; head.y += vel.y * dt;
+        if (hop > 0) { hop = Math.max(0, hop - dt * 2.2); }
+        const lift = Math.sin(hop * Math.PI) * 18;
+        for (let i = 1; i < L; i++) {
+          const a = body[i - 1], b = body[i];
+          const v = norm({ x: b.x - a.x, y: b.y - a.y });
+          const wig = Math.sin(t * 6 - i * .55) * 0.12 * Math.min(1, Math.hypot(vel.x, vel.y) / 80);
+          const c = Math.cos(wig), s = Math.sin(wig);
+          const r = { x: v.x * c - v.y * s, y: v.x * s + v.y * c };
+          b.x = a.x + r.x * SEG; b.y = a.y + r.y * SEG;
+        }
+        const speed = Math.hypot(vel.x, vel.y);
+        still = speed < 8 ? still + dt : 0;
+        // rings
+        ctx.globalCompositeOperation = 'lighter';
+        rings = rings.filter(r => (r.a -= dt * 1.4) > 0);
+        rings.forEach((r, k) => { r.r += dt * 90; SPEC.forEach((c, i) => { ctx.strokeStyle = c; ctx.globalAlpha = r.a * .5; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(r.x, r.y, r.r + i * 3, 0, 6.28); ctx.stroke(); }); });
+        ctx.globalAlpha = 1;
+        // body
+        ctx.lineCap = 'round';
+        for (let i = L - 1; i > 0; i--) {
+          const a = body[i - 1], b = body[i];
+          const k = i / L;
+          ctx.strokeStyle = SPEC[Math.floor(k * SPEC.length) % SPEC.length];
+          ctx.lineWidth = 2.6 * (1 - k) + 0.6;
+          ctx.globalAlpha = 0.95;
+          ctx.beginPath(); ctx.moveTo(a.x, a.y - lift * (1 - k)); ctx.lineTo(b.x, b.y - lift * (1 - (i + 1) / L)); ctx.stroke();
+        }
+        ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
+        // head
+        const hx = head.x, hy = head.y - lift, R = 11;
+        ctx.fillStyle = '#050508'; ctx.strokeStyle = '#eceaf4'; ctx.lineWidth = 1.2;
+        ctx.beginPath(); ctx.arc(hx, hy, R, 0, 6.28); ctx.fill(); ctx.stroke();
+        // eyes
+        const look = speed > 10 ? norm(vel) : norm({ x: dx || 1, y: dy });
+        const ex = look.x * 3, ey = look.y * 3;
+        if ((nextBlink -= dt) < 0) { blink = 0.14; nextBlink = 2 + Math.random() * 3; }
+        blink = Math.max(0, blink - dt);
+        const sleepy = still > 6 && !P.active;
+        const happy = P.active && dist < 40;
+        ctx.strokeStyle = '#eceaf4'; ctx.fillStyle = '#eceaf4'; ctx.lineWidth = 1.3;
+        [-4.2, 4.2].forEach(o => {
+          const x = hx + ex + o, y = hy + ey - 1;
+          if (happy) { ctx.beginPath(); ctx.arc(x, y + 1.5, 2.4, Math.PI * 1.1, Math.PI * 1.9); ctx.stroke(); }
+          else if (sleepy || blink > 0) { ctx.beginPath(); ctx.moveTo(x - 2, y); ctx.lineTo(x + 2, y); ctx.stroke(); }
+          else { ctx.beginPath(); ctx.ellipse(x, y, 1.5, 2.3, 0, 0, 6.28); ctx.fill(); }
+        });
+        // cheeks
+        ctx.fillStyle = 'rgba(255,64,83,.45)';
+        [-7, 7].forEach(o => { ctx.beginPath(); ctx.arc(hx + ex * .6 + o, hy + ey + 3.5, 1.6, 0, 6.28); ctx.fill(); });
+        if (sleepy) {
+          ctx.fillStyle = '#8d8aa3'; ctx.font = '400 11px "JetBrains Mono", monospace';
+          const z = (t * 0.8) % 1;
+          ctx.globalAlpha = 1 - z; ctx.fillText('z', hx + 12 + z * 8, hy - 12 - z * 16); ctx.globalAlpha = 1;
+        }
+      }
+    });
+  })();
+
+  /* ---------- D: gravity grid ---------- */
+  (() => {
+    const hud = document.getElementById('hud-field');
+    let masses = [];
+    const MAX = 6;
+    stage(document.getElementById('cv-field'), {
+      click(x, y) {
+        masses.push({ x, y, m: 1, fixed: true });
+        if (masses.filter(m => m.fixed).length > MAX) masses.splice(masses.findIndex(m => m.fixed), 1);
+      },
+      frame(ctx, w, h, dt, t, P) {
+        ctx.fillStyle = '#050508'; ctx.fillRect(0, 0, w, h);
+        const orbit = [
+          { x: w / 2 + Math.cos(t * .5) * w * .22, y: h / 2 + Math.sin(t * .5) * h * .22, m: .8 },
+          { x: w / 2 + Math.cos(t * .5 + Math.PI) * w * .22, y: h / 2 + Math.sin(t * .5 + Math.PI) * h * .22, m: .8 }
+        ];
+        const all = orbit.concat(masses);
+        if (P.active) all.push({ x: P.x, y: P.y, m: 1.3 });
+        hud.innerHTML = `masses <b>${all.length}</b> · click adds one (max ${MAX})`;
+        const K = Math.min(w, h) * 22;
+        const warp = (x, y) => {
+          let ox = 0, oy = 0;
+          for (const m of all) {
+            const dx = m.x - x, dy = m.y - y, d2 = dx * dx + dy * dy + 900;
+            // pull toward each mass, falling off with distance
+            const f = Math.min(0.9, K * m.m / d2) * 0.6 / (1 + Math.sqrt(d2) / 60);
+            ox += dx * f;
+            oy += dy * f;
+          }
+          return { x: x + ox, y: y + oy };
+        };
+        const step = 22, sub = 8;
+        ctx.globalCompositeOperation = 'lighter'; ctx.lineWidth = 0.9;
+        const rows = Math.ceil(h / step) + 1;
+        for (let r = 0; r <= rows; r++) {
+          const y = r * step;
+          ctx.strokeStyle = `hsl(${(r / rows) * 290},100%,62%)`; ctx.globalAlpha = .7;
+          ctx.beginPath();
+          for (let x = -step; x <= w + step; x += sub) { const p = warp(x, y); x === -step ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y); }
+          ctx.stroke();
+        }
+        ctx.strokeStyle = 'rgba(236,234,244,1)'; ctx.globalAlpha = .12;
+        for (let x = 0; x <= w + step; x += step) {
+          ctx.beginPath();
+          for (let y = -step; y <= h + step; y += sub) { const p = warp(x, y); y === -step ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y); }
+          ctx.stroke();
+        }
+        ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+        for (const m of all) { ctx.fillStyle = '#eceaf4'; ctx.beginPath(); ctx.arc(m.x, m.y, 2.2 * m.m, 0, 6.28); ctx.fill(); }
+      }
+    });
+  })();
+})();
+</script>
