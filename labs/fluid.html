@@ -539,11 +539,33 @@ composer.addPass(new OutputPass());
 const fxaa = new ShaderPass(FXAAShader);
 composer.addPass(fxaa);
 
+// Adaptive resolution, for a GPU that can't keep up (a phone at 3× renders as many pixels as a desktop at High):
+// when frames run slow for a second, render fewer pixels, down to 2× (still retina). Quality stays the ceiling, and
+// it only ever steps down, so a device that holds its frame rate keeps exactly the chosen Quality.
+const PR_STEP = 0.5, PR_FLOOR = 2;      // a cut takes the pixel ratio down this much (3× → 2.5× → 2×), never below the floor
+const SLOW = 1000 / 45;                 // median frame interval (ms) that counts as slow
+let cut = 0, gaps = [], judgeFrom = 0, lastNow = 0;
+function adapt() {
+  // real intervals (lab.loop's dt is clamped), skipping the first second after a resize and any long gap
+  // (paused in the feed, off screen, a hitch), which says nothing about the GPU
+  const now = performance.now(), gap = now - lastNow; lastNow = now;
+  if (!judgeFrom) judgeFrom = now + 1000;
+  if (now < judgeFrom || gap > 1500) return;
+  gaps.push(gap);
+  if (gaps.length < 30 && !(gaps.length >= 4 && now - judgeFrom > 2000)) return;
+  const med = gaps.sort((a, b) => a - b)[gaps.length >> 1];
+  gaps = [];
+  if (med > SLOW && qualityPR() - (cut + 1) * PR_STEP >= PR_FLOOR) { cut++; resize(sq); judgeFrom = 0; }
+  else judgeFrom = now;
+}
+
+const qualityPR = () => Math.min(3, Math.min(2, window.devicePixelRatio || 1) * (QUALITY[lab.params.quality] || QUALITY.balanced).scale);
+
 let sq = lab.square(), k = SQ / sq.size;
 function resize(s) {
   sq = s; k = SQ / s.size;
   const q = QUALITY[lab.params.quality] || QUALITY.balanced;
-  const pr = Math.min(3, Math.min(2, window.devicePixelRatio || 1) * q.scale);
+  const pr = qualityPR() - cut * PR_STEP;
   renderer.setPixelRatio(pr); renderer.setSize(s.w, s.h, false);
   composer.setPixelRatio(pr); composer.setSize(s.w, s.h);
   const buf = renderer.getDrawingBufferSize(new THREE.Vector2());
@@ -568,7 +590,7 @@ function applyPalette(p) {
 }
 lab.on('palette', applyPalette);
 applyPalette(lab.palette);
-lab.on('change', key => { if (key === 'quality') resize(sq); });
+lab.on('change', key => { if (key === 'quality') { cut = 0; gaps = []; judgeFrom = 0; resize(sq); } });
 
 // The vessel shader's first compile can take ~10 s on Windows (ANGLE → D3D), and a plain first render blocks the page
 // for all of it. compileAsync lets the GPU process compile it in the background (KHR_parallel_shader_compile);
@@ -948,5 +970,5 @@ function stepClock(dt) {
 
 let lastT = 0;
 window.__lab = { renderOnce(t) { lastT = t ?? lastT + 1 / 60; step(1 / 60, lastT); }, flipNow() { flipT = 0; }, sim, U, renderer };
-lab.loop((dt, t) => { if (warming) return; lastT = t; step(dt, t); });
+lab.loop((dt, t) => { if (warming) return; lastT = t; step(dt, t); adapt(); });
 </script>
