@@ -46,6 +46,18 @@ const fx = calm || new URLSearchParams(location.search).get('fx') === 'off' ? nu
 if (fx) { metrics.fx = fx.stats; window.requestIdleCallback ? requestIdleCallback(() => fx.prepare()) : fx.prepare(); }
 
 // ---- posters: a small snapshot of each toy, for the overview grid and as an underlay while a toy loads ----
+// Under a loading toy: its first frame from npm run posters (what it looks like as it starts, so the live toy
+// carries on from much the same picture), then this browser's own snapshot; until one of them has loaded, the
+// breathing mark. The ripple uses the same underlay for a toy that hasn't drawn yet.
+const firstFrame = t => `posters/first/${t.slug}-${innerHeight > innerWidth ? 'tall' : 'wide'}.jpg`;
+// the stills two toys either way are fetched ahead, so even a fast swipe to a toy with no slide yet has its picture
+const fetched = new Map();
+function prefetchAround() {
+  for (const d of [1, -1, 2, -2]) {
+    const u = firstFrame(toys[wrap(cur + d)]);
+    if (!fetched.has(u)) { const im = new Image(); im.decoding = 'async'; im.src = u; fetched.set(u, im); }
+  }
+}
 const posters = new Map();
 for (const t of toys) { try { const u = localStorage.getItem('feed-poster:' + t.slug); if (u) posters.set(t.slug, u); } catch (e) {} }
 function savePoster(slug, url) {
@@ -94,8 +106,11 @@ function makeSlide(t, play, defer = false) {
       <a class="btn primary play" href="${esc(pageHref(t))}">Play with this <span aria-hidden="true">→</span></a>
     </div>`;
   const s = { toy: t, el, iframe: null, ready: false, playing: play, offset: 0, born: performance.now() };
-  const poster = posters.get(t.slug);
-  if (poster) { const img = el.querySelector('.poster'); img.src = poster; img.hidden = false; el.classList.add('has-poster'); }
+  const img = el.querySelector('.poster');
+  img.onload = () => { img.hidden = false; el.classList.add('has-poster'); };
+  img.onerror = () => { const own = posters.get(t.slug); if (own && img.src !== own) img.src = own; };
+  img.src = firstFrame(t);
+  if (img.complete && img.naturalWidth) img.onload();   // fetched ahead: there now, not a frame later
   el.querySelector('.cap').addEventListener('click', () => openSheet(t));
   slidesEl.appendChild(el);
   slides.set(t.slug, s);
@@ -185,6 +200,7 @@ function becameCurrent(s, t0, held = false) {
   clearTimeout(snapTimer);
   snapTimer = setTimeout(() => send(s, 'snap', { width: 540 }), 2600);
   updateCurrentTile();
+  prefetchAround();
 }
 
 // Move by one toy (dir ±1). ms: slide duration, shorter after a fast flick.
@@ -560,4 +576,5 @@ writeHash();
 renderTiles();
 clearTimeout(snapTimer);
 snapTimer = setTimeout(() => send(first, 'snap', { width: 540 }), 2600);
+prefetchAround();
 scheduleNeighbours();

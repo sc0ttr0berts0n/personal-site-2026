@@ -143,7 +143,7 @@ export function createTransitions(host) {
     for (let x = (w / 2) % gs; x < w; x += gs) g.fillRect(Math.round(x), 0, 1, h);
     for (let y = (h / 2) % gs; y < h; y += gs) g.fillRect(0, Math.round(y), w, 1);
     const img = slide?.el.querySelector('.poster');
-    if (img && !img.hidden && img.complete && img.naturalWidth) {
+    if (img?.complete && img.naturalWidth) {
       const sc = Math.max(w / img.naturalWidth, h / img.naturalHeight);
       g.drawImage(img, (w - img.naturalWidth * sc) / 2, (h - img.naturalHeight * sc) / 2, img.naturalWidth * sc, img.naturalHeight * sc);
     } else {
