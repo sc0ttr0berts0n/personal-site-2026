@@ -352,19 +352,19 @@ function allocate() {
   type = new Uint8Array(N); shade = new Uint8Array(N); aux = new Uint8Array(N); life = new Uint16Array(N);
   stamp = new Uint8Array(N); hold = new Uint8Array(N); holdT = new Uint32Array(N);
   gcv = document.createElement('canvas'); gcv.width = W; gcv.height = H; gctx = gcv.getContext('2d');
-  img = gctx.createImageData(W, H); px = new Uint32Array(img.data.buffer);
+  img = gctx.createImageData(W, H); px = new Int32Array(img.data.buffer);
   fadeCv = document.createElement('canvas'); fadeCv.width = W; fadeCv.height = H; fadeCtx = fadeCv.getContext('2d');
   gw = Math.ceil(W / 4); gh = Math.ceil(H / 4);
   glowCv = document.createElement('canvas'); glowCv.width = gw; glowCv.height = gh; glowCtx = glowCv.getContext('2d');
-  glowImg = glowCtx.createImageData(gw, gh); gpx = new Uint32Array(glowImg.data.buffer);
+  glowImg = glowCtx.createImageData(gw, gh); gpx = new Int32Array(glowImg.data.buffer);
   glowA = new Uint16Array(gw * gh); glowB = new Uint16Array(gw * gh);
 }
 
 // ---- RNG: xorshift32, seeded per reset so a loop replays exactly (until you paint) ----
-let rs = 1;
-const rnd = () => { rs ^= rs << 13; rs ^= rs >>> 17; rs ^= rs << 5; return (rs >>> 0) / 4294967296; };
+const RS = new Int32Array([1]);   // the state, unboxed (a plain let was boxed past 2^30 on every store)
+const rnd = () => { let r = RS[0]; r ^= r << 13; r ^= r >>> 17; r ^= r << 5; RS[0] = r; return (r >>> 0) / 4294967296; };
 const rint = (a, b) => a + Math.floor(rnd() * (b - a + 1));
-function reseed(n) { rs = (Math.imul(n | 0, 2654435761) ^ 0x5bd1e995) | 0 || 1; for (let i = 0; i < 8; i++) rnd(); }
+function reseed(n) { RS[0] = (Math.imul(n | 0, 2654435761) ^ 0x5bd1e995) | 0 || 1; for (let i = 0; i < 8; i++) rnd(); }
 
 // ---- the mark ----
 function rasterLogo() {
@@ -917,11 +917,12 @@ let mono = false;
 const cl = v => v < 0 ? 0 : v > 255 ? 255 : v | 0;
 function pack(r, g, b, a = 255) {
   if (mono) { const l = 0.3 * r + 0.59 * g + 0.11 * b; r = g = b = l; }
-  return ((cl(a) << 24) | (cl(b) << 16) | (cl(g) << 8) | cl(r)) >>> 0;
+  return (cl(a) << 24) | (cl(b) << 16) | (cl(g) << 8) | cl(r);   // signed: opaque colours stay small integers (see render)
 }
 const mix3 = (p, q, k) => [p[0] + (q[0] - p[0]) * k, p[1] + (q[1] - p[1]) * k, p[2] + (q[2] - p[2]) * k];
 function ramp3(stops, k) { const x = Math.min(0.9999, Math.max(0, k)) * (stops.length - 1), n = x | 0; return mix3(stops[n], stops[n + 1], x - n); }
 const WOOD_RGB = [[96, 56, 28], [156, 100, 54]], EMBER = [255, 110, 28], TIP_RGB = [130, 214, 96];
+const WOOD_BASE = Array.from({ length: 16 }, (_, s) => mix3(WOOD_RGB[0], WOOD_RGB[1], s / 15));   // hot wood starts from these
 const ROCK_STEPS = 5;
 // the band edges roll like hills: a per-column offset (rows) from three sines, plus a cell or so of grit
 let rockWave = new Float32Array(0);
@@ -933,7 +934,7 @@ function makeRockWave() {
     rockWave[x] = amp * (0.55 * Math.sin(u * 1.3 + ph[0]) + 0.3 * Math.sin(u * 3.1 + ph[1]) + 0.15 * Math.sin(u * 7.3 + ph[2]));
   }
 }
-let BONE = new Uint32Array(ROCK_STEPS * 8), ROCK = new Uint32Array(ROCK_STEPS * 8), LUT = new Uint32Array(256), EMB = new Uint32Array(16), PET = new Uint32Array(1024), GLOW_C = 0, WATER_HI = 0;
+let BONE = new Int32Array(ROCK_STEPS * 8), ROCK = new Int32Array(ROCK_STEPS * 8), LUT = new Int32Array(256), EMB = new Int32Array(16), PET = new Int32Array(1024), GLOW_C = 0, WATER_HI = 0;
 function buildColors() {
   mono = lab.palette.key === 'bench';
   const L = (t, f) => { for (let s = 0; s < 16; s++) LUT[t * 16 + s] = f(s / 15, s); };
@@ -1028,10 +1029,8 @@ function render() {
           const l = life[i];
           if (!l) { c = LUT[48 + (sh & 15)]; break; }
           if (!lab.calm && (fr & 3) === 0) life[i] = l - 1;     // heat is only a look: it fades once the lava stops chewing
-          const k = Math.min(1, l / bite), base = mix3(WOOD_RGB[0], WOOD_RGB[1], (sh & 15) / 15);
-          const fl = shim ? 0.85 + 0.15 * Math.sin(fr * 0.4 + sh) : 1;
-          const e = mix3(base, EMBER, k * fl);
-          c = pack(e[0], e[1], e[2]); glowA[grow + (x >> 2)] += 1; break;
+          const k = Math.min(1, l / bite) * (shim ? 0.85 + 0.15 * Math.sin(fr * 0.4 + sh) : 1), b = WOOD_BASE[sh & 15];
+          c = pack(b[0] + (EMBER[0] - b[0]) * k, b[1] + (EMBER[1] - b[1]) * k, b[2] + (EMBER[2] - b[2]) * k); glowA[grow + (x >> 2)] += 1; break;
         }
         case SMOKE:
           if (aux[i] === EMBER_AUX) { c = EMB[(sh + (shim ? fr * 3 : 0) + (life[i] >> 3)) & 15]; glowA[grow + (x >> 2)] += 1; break; }
@@ -1041,8 +1040,8 @@ function render() {
         case PETAL: c = PET[(aux[i] << 2) | (sh & 3)]; break;
         case BUD: {
           const s = SPECIES[aux[i] >> 3], v = s.variants[aux[i] & 7], k = Math.min(1, (life[i] & 63) / BUD_WAIT);
-          const e = mix3(TIP_RGB, v.b || v.a, k * 0.9);
-          c = pack(e[0], e[1], e[2]); break;
+          const q = v.b || v.a, m = k * 0.9;
+          c = pack(TIP_RGB[0] + (q[0] - TIP_RGB[0]) * m, TIP_RGB[1] + (q[1] - TIP_RGB[1]) * m, TIP_RGB[2] + (q[2] - TIP_RGB[2]) * m); break;
         }
         default: c = LUT[t * 16 + (sh & 15)];
       }
@@ -1149,6 +1148,9 @@ function clearAll() { type.fill(EMPTY); hold.fill(0); life.fill(0); aux.fill(0);
 function rebuild() { geometry(); allocate(); built = false; reset({ crossfade: false }); built = true; layoutTools(); }
 function touch() { quietT = 0; sinceInput = 0; runT = 0; handT = 0; engaged = marked = true; }
 
+// ms of sim per frame at most: past it the sim runs slow for a moment, rather than each frame falling further
+// behind on a slow phone (at 11 fps it was doing 6 ticks a frame, which made the next frame slow too)
+const TICK_BUDGET = 9;
 function frame(dt) {
   if (fade) { fade.t += dt; if (fade.t >= FADE) fade = null; }
   if (lab.calm) return;
@@ -1160,7 +1162,8 @@ function frame(dt) {
     const n = Math.min(acc | 0, P.speed * 3);
     acc = Math.min(acc - n, P.speed);
     let left = 1;
-    for (let k = 0; k < n && left; k++) left = drainTick();
+    const t0 = performance.now();
+    for (let k = 0; k < n && left; k++) { left = drainTick(); if (performance.now() - t0 > TICK_BUDGET) { acc = 0; break; } }
     if (!left || drain.t > DRAIN_MAX) { drain = null; reset({ crossfade: !!left }); }
     return;
   }
@@ -1170,8 +1173,10 @@ function frame(dt) {
   const n = Math.min(acc | 0, P.speed * 3);
   acc = Math.min(acc - n, P.speed);
   act = 0; burning = 0;
-  for (let k = 0; k < n; k++) tick();
-  if (n) actAvg = actAvg * 0.92 + (act / n) * 0.08;
+  const t0 = performance.now();
+  let done = 0;
+  while (done < n) { tick(); done++; if (performance.now() - t0 > TICK_BUDGET) { acc = 0; break; } }
+  if (done) actAvg = actAvg * 0.92 + (act / done) * 0.08;
   const share = actAvg / N, thawed = T > thawDone;
   quietT = thawed && !paint.on && !burning && share < (quietT > 0 ? BUSY_ACT : QUIET_ACT) ? quietT + dt : 0;
   if (thawed) runT += dt;
