@@ -76,12 +76,24 @@ button { font: inherit; color: inherit; }
 html[data-axis="y"] .slide .edge { left: 0; right: 0; top: auto; bottom: auto; width: auto; height: var(--edge-y); }
 html[data-axis="y"] .edge.lo { top: 0; }
 html[data-axis="y"] .edge.hi { bottom: 0; }
-html[data-axis="y"] .edge::before { width: 40px; height: 3px; }
+html[data-axis="y"] .edge::before { display: none; }   /* the swipe cues mark them instead */
 html[data-axis="y"] .edge.lo::after { background: linear-gradient(to bottom, rgb(244 244 246 / .22), transparent); }
 html[data-axis="y"] .edge.hi::after { background: linear-gradient(to top, rgb(244 244 246 / .22), transparent); }
 /* the top grip sits at the foot of its zone, clear of the top bar; the bottom one is under the caption, which swipes too */
 html[data-axis="y"] .edge.lo { align-items: end; padding-bottom: 10px; }
 html[data-axis="y"] .toyhint { top: calc(var(--edge-y) + 14px); }
+
+/* Swipe cues (feed.js): drawn like the labs' corner brackets (1px, dim, .55) until a swipe starts, then lit,
+   and the one the swipe heads away from leans into it. Over the ripple (z 3). Tall screens only. */
+.cues { display: none; }
+html[data-axis="y"] .cues { display: block; position: absolute; inset: 0; z-index: 4; pointer-events: none; }
+.cue { position: absolute; left: 50%; width: 10px; height: 10px; margin-left: -5px; border: solid var(--dim); border-width: 1px 0 0 1px; opacity: .55;
+  transition: opacity .5s, border-color .5s, filter .5s, translate .5s; }
+.cue.lo { top: calc(var(--edge-y) - 18px); rotate: 225deg; }
+.cue.hi { top: calc(var(--cap-top, calc(100% - var(--edge-y))) + 30px); rotate: 45deg; }
+.swiping .cue { opacity: 1; border-color: var(--ink); filter: drop-shadow(0 0 4px rgb(244 244 246 / .75)); transition-duration: .12s; }
+.swiping[data-swipe="on"] .cue.hi { translate: 0 -6px; }
+.swiping[data-swipe="back"] .cue.lo { translate: 0 6px; }
 
 /* what a finger does to the toy, over it as it arrives */
 .toyhint { position: absolute; z-index: 1; left: 50%; top: calc(max(12px, env(safe-area-inset-top, 0px)) + 58px); translate: -50% 0; pointer-events: none;
@@ -201,7 +213,7 @@ dialog.open::backdrop { opacity: 1; }
   .cap .title { font-size: 23px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .slide.anim, .sheet, .overview, dialog::backdrop, .toyhint, .edge::before, .edge::after { transition: none; }
+  .slide.anim, .sheet, .overview, dialog::backdrop, .toyhint, .edge::before, .edge::after, .cue { transition: none; }
   .loader svg { animation: none; }
   .slide.entering { animation-duration: .12s; }
 }

@@ -48,6 +48,19 @@ const solo = new URLSearchParams(location.search).has('solo');   // measuring on
 
 // ---- the ripple transition over the slides (site/transition.js); ?fx=off, reduced motion or no WebGL keep the CSS slide ----
 const fx = calm || new URLSearchParams(location.search).get('fx') === 'off' ? null : createTransitions(feed);
+// Swipe cues, on a tall screen: a chevron at the foot of the top edge zone and one over the caption, as quiet as
+// the labs' corner brackets until a swipe starts, so there's always a mark for where a swipe down or up begins.
+// They sit over the ripple, so they stay in sight through a move. (Wide screens have the ‹ › buttons.)
+const cues = document.createElement('div');
+cues.className = 'cues'; cues.setAttribute('aria-hidden', 'true');
+cues.innerHTML = '<i class="cue lo"></i><i class="cue hi"></i>';
+feed.appendChild(cues);
+const swiping = on => feed.classList.toggle('swiping', on);
+function placeCues() {
+  const cap = slides.get(toys[cur].slug)?.el.querySelector('.caption');
+  if (cap) feed.style.setProperty('--cap-top', `${cap.offsetTop}px`);
+}
+addEventListener('resize', placeCues);
 if (fx) { metrics.fx = fx.stats; window.requestIdleCallback ? requestIdleCallback(() => fx.prepare()) : fx.prepare(); }
 
 // ---- posters: a small snapshot of each toy, for the overview grid and as an underlay while a toy loads ----
@@ -166,14 +179,19 @@ function animate(on, ms) {
 }
 
 // Neighbours load once the current toy has drawn, so they never compete with it for the first frame.
+// Until it has, they get their slide (still or loader) and no frame: a toy still compiling its shaders (Goop takes
+// many seconds) holds the GPU, and a neighbour starting up behind it would wait on it with the page's main thread,
+// which every toy shares, so the feed froze and couldn't be swiped. They load when it draws ('ready').
 let neighbourTimer = 0;
 function loadNeighbours() {
   clearTimeout(neighbourTimer);
   if (solo) return;
+  const wait = !slides.get(toys[cur].slug)?.ready;
   for (const d of [1, -1]) {
-    const t = toys[wrap(cur + d)];
+    const t = toys[wrap(cur + d)], s = slides.get(t.slug);
     // a heavy toy still gets its slide (poster or loader), just no frame until someone stops on it
-    if (!slides.has(t.slug)) { const s = makeSlide(t, false, heavy(t)); s.offset = d; place(s); }
+    if (!s) { const n = makeSlide(t, false, heavy(t) || wait); n.offset = d; place(n); }
+    else if (!s.iframe && !heavy(t) && !wait) mount(s);
   }
 }
 function scheduleNeighbours() {
@@ -208,6 +226,7 @@ function becameCurrent(s, t0, held = false) {
   snapTimer = setTimeout(() => send(s, 'snap', { width: 540 }), 2600);
   updateCurrentTile();
   prefetchAround();
+  placeCues();
   setLive();
   showHint(s);
 }
@@ -324,7 +343,7 @@ const SLOP = 8;
 // that and it shrinks back out. Reset on every visit.
 const HARD = 0.45;
 const touchedCurrent = () => { const c = slides.get(toys[cur].slug); if (c) c.touched = true; };
-const clearCue = () => { cue?.classList.remove('pressed'); cue = null; };
+const clearCue = () => { cue?.classList.remove('pressed'); cue = null; swiping(false); };
 feed.addEventListener('pointerdown', e => {
   if (e.button !== 0 || dialogOpen()) return;
   // positions are along the swipe axis (x0, dx) and across it (y0); the axis is fixed for the life of a drag
@@ -334,6 +353,7 @@ feed.addEventListener('pointerdown', e => {
   clearCue();
   cue = e.target.closest('.edge');
   cue?.classList.add('pressed');
+  if (cue) swiping(true);
 });
 addEventListener('pointerup', clearCue);
 addEventListener('pointercancel', clearCue);
@@ -343,6 +363,7 @@ feed.addEventListener('pointermove', e => {
   if (!drag.active) {
     if (Math.abs(dx) > SLOP && Math.abs(dx) > Math.abs(dy)) {
       drag.active = true;
+      swiping(true);
       // pick up from where the slides are now: mid-slide after a quick second swipe, at rest otherwise
       const c = slides.get(toys[cur].slug);
       drag.hard = !!c?.touched;
@@ -361,6 +382,7 @@ feed.addEventListener('pointermove', e => {
     return;
   }
   drag.dx = along(e, a) - drag.x0;
+  feed.dataset.swipe = drag.dx < 0 ? 'on' : 'back';
   drag.samples.push([e.timeStamp, along(e, a)]);
   while (drag.samples.length > 2 && e.timeStamp - drag.samples[0][0] > 90) drag.samples.shift();
   const L = a === 'y' ? feed.clientHeight : feed.clientWidth;
@@ -632,5 +654,6 @@ renderTiles();
 clearTimeout(snapTimer);
 snapTimer = setTimeout(() => send(first, 'snap', { width: 540 }), 2600);
 prefetchAround();
+placeCues();
 setLive();
 scheduleNeighbours();
