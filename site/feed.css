@@ -95,7 +95,12 @@ html[data-axis="y"] .cues { display: block; position: absolute; inset: 0; z-inde
 .swiping .cue { opacity: 1; border-color: var(--ink); filter: drop-shadow(0 0 4px rgb(244 244 246 / .75)); transition-duration: .12s; }
 .cues .ring { position: absolute; left: 50%; width: 22px; height: 22px; margin-left: -11px; border: 1px solid var(--ink); border-radius: 50%;
   opacity: 0; transition: opacity .3s, box-shadow .15s; }
-.guiding .cue, .guiding .ring { transition: opacity .12s, border-color .12s, filter .12s, box-shadow .15s; }   /* following: no easing */
+.cues .slot { position: absolute; left: 50%; top: 0; width: 30px; height: 30px; margin-left: -15px; border-radius: 15px; opacity: 0; transition: opacity .3s;
+  border: 1px solid rgb(244 244 246 / .07); box-shadow: inset 0 1px 0 rgb(244 244 246 / .06), inset 0 -8px 14px rgb(0 0 0 / .12);
+  background: linear-gradient(to right, rgb(244 244 246 / .04), rgb(244 244 246 / .01) 45%, rgb(244 244 246 / .03));
+  -webkit-backdrop-filter: blur(2.5px) saturate(1.1); backdrop-filter: blur(2.5px) saturate(1.1); }
+.guiding .slot { opacity: 1; }
+.guiding .cue, .guiding .ring, .guiding .slot { transition: opacity .12s, border-color .12s, filter .12s, box-shadow .15s; }   /* following: no easing */
 .guiding .ring { opacity: .5; }
 .guiding.armed .ring { opacity: 1; box-shadow: 0 0 10px rgb(244 244 246 / .55); }
 
@@ -217,7 +222,7 @@ dialog.open::backdrop { opacity: 1; }
   .cap .title { font-size: 23px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .slide.anim, .sheet, .overview, dialog::backdrop, .toyhint, .edge::before, .edge::after, .cue, .cues .ring { transition: none; }
+  .slide.anim, .sheet, .overview, dialog::backdrop, .toyhint, .edge::before, .edge::after, .cue, .cues .ring, .cues .slot { transition: none; }
   .loader svg { animation: none; }
   .slide.entering { animation-duration: .12s; }
 }

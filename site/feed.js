@@ -53,14 +53,15 @@ const fx = calm || new URLSearchParams(location.search).get('fx') === 'off' ? nu
 // They sit over the ripple, so they stay in sight through a move. (Wide screens have the ‹ › buttons.)
 const cues = document.createElement('div');
 cues.className = 'cues'; cues.setAttribute('aria-hidden', 'true');
-cues.innerHTML = '<i class="cue lo"></i><i class="cue hi"></i><i class="ring"></i>';
+cues.innerHTML = '<i class="slot"></i><i class="cue lo"></i><i class="cue hi"></i><i class="ring"></i>';
 feed.appendChild(cues);
-const [cueLo, cueHi, ring] = cues.children;
+const [slot, cueLo, cueHi, ring] = cues.children;
 const swiping = on => feed.classList.toggle('swiping', on);
 // While a drag is on, the chevron it pulls from rides just ahead of the finger, and a ring waits where the drag
 // counts: letting go there moves on (EASY of the screen), or, for a touched toy, getting there does (HARD). Reach
 // it and the chevron sits in the ring, and the two carry on with the finger; pull back short and the chevron leaves.
-const LEAD = 44;      // px from the finger to the chevron
+// A faint glass slot runs from where the chevron started to the ring, like a slide-to-unlock track.
+const LEAD = 84;      // px from the finger to the chevron, clear of a thumb
 function guide(d, e) {
   if (d.axis !== 'y') return;
   const r = feed.getBoundingClientRect(), x = e.clientX - r.left;
@@ -73,11 +74,13 @@ function guide(d, e) {
   on.style.cssText = `top: ${cy - 5}px; left: ${x}px`;
   off.style.cssText = '';
   ring.style.cssText = `top: ${ry - 11}px; left: ${x}px`;
+  const y0 = d.x0 - r.top + s * LEAD;                // where the chevron set off
+  slot.style.cssText = `top: ${Math.min(y0, ry) - 15}px; height: ${Math.abs(ry - y0) + 30}px; left: ${x}px`;
   feed.classList.add('guiding');
   feed.classList.toggle('armed', armed);
 }
 function unguide() {
-  for (const el of [cueLo, cueHi, ring]) el.style.cssText = '';
+  for (const el of [slot, cueLo, cueHi, ring]) el.style.cssText = '';
   feed.classList.remove('guiding', 'armed');
 }
 function placeCues() {
