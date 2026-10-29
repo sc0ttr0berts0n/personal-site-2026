@@ -258,9 +258,12 @@ const crisp = (v, lw = 1) => { const w = Math.round(lw * dpr); return (Math.roun
 // ---- state ----
 let simTime = 0, acc = 0, lastHit = 0, lastHitAge = 1e9;
 let phase = 'rest', idleT = 0, settledFor = 0, liveT = 0, demoReset = false;
+let engaged = false, handT = 0;   // someone is playing: every wait before a reset doubles and the volley no longer bursts
+const HAND_IDLE = 20;              // s without input before they count as gone: reset, back to the full demo
 let trans = null, fading = [], sparks = [], flashes = [], quake = null;
 let drag = null, demo = null, volley = null, readyT = 1, splits = null;
 const VOLLEY = 5, VOLLEY_GAP = 0.75;   // idle demo: shots per volley, seconds between them
+const DEMO_WAIT = 0.6;                // idle demo: quiet seconds before a volley; its first shot winds up in half a gap
 const SPLIT_AT = [0.5, 1.6];         // after the last shot: balls burst into 5, then each of those into 5
 
 function xfOf(b, alpha) {
@@ -389,7 +392,7 @@ function pullOf(d) {
 canvas.addEventListener('pointerdown', e => {
   if (e.button > 0) return;
   const p = toLogo(e);
-  finishTransition(); demo = null; volley = null; idleT = 0;
+  finishTransition(); demo = null; volley = null; splits = null; idleT = 0; engaged = true; handT = 0;
   const near = Math.hypot(p.x - SPAWN.x, p.y - SPAWN.y) < Math.max(0.09, P.ballRadius / 100 * 2);
   drag = { id: e.pointerId, mode: near ? 'ball' : 'free', down: p, cur: p };
   canvas.setPointerCapture(e.pointerId);
@@ -398,7 +401,7 @@ canvas.addEventListener('pointermove', e => { if (drag && e.pointerId === drag.i
 const release = cancel => e => {
   if (!drag || e.pointerId !== drag.id) return;
   const pull = pullOf(drag);
-  drag = null; idleT = 0;
+  drag = null; idleT = 0; handT = 0;
   if (!cancel && Math.hypot(pull.x, pull.y) > 0.03) fling(pull.x * K_PULL, pull.y * K_PULL);
 };
 canvas.addEventListener('pointerup', release(false));
@@ -480,11 +483,12 @@ function update(dt) {
     if (n === 16) acc = 0;
   }
   lastHitAge += dt;
+  if (engaged && !drag && (handT += dt) > HAND_IDLE) { engaged = false; if (phase === 'live') reset(); }
 
   // idle demo: after a few quiet seconds, a volley of shots from alternating sides, then settle and reset
   if (!lab.calm && phase === 'rest' && !drag && !trans) {
     idleT += dt;
-    if (!volley && idleT > 1.2) volley = { left: VOLLEY };
+    if (!volley && idleT > DEMO_WAIT * (engaged ? 2 : 1)) volley = { left: VOLLEY };
   }
   if (volley && !demo && !drag) {
     // aim at where a piece is now, so later shots chase the ones already knocked about
@@ -493,13 +497,13 @@ function update(dt) {
     if (Math.abs(to.x) > 0.6 || Math.abs(to.y) > 0.6) to = { x: COM[i][0], y: COM[i][1] };
     // each shot in the volley hits harder than the last: 5, 7, 9, 11, 13 m/s floors
     const shot = VOLLEY - volley.left;
-    demo = { t: 0, dur: VOLLEY_GAP, pull: solveLaunch({ x: to.x + (Math.random() - 0.5) * 0.1, y: to.y - 0.06 }, 5 + shot * 2) };
+    demo = { t: 0, dur: shot ? VOLLEY_GAP : VOLLEY_GAP / 2, pull: solveLaunch({ x: to.x + (Math.random() - 0.5) * 0.1, y: to.y - 0.06 }, 5 + shot * 2) };
   }
   if (demo) {
     demo.t += dt;
     if (demo.t > demo.dur) {
       const p = demo.pull; demo = null; fling(p.x * K_PULL, p.y * K_PULL); demoReset = true;
-      if (--volley.left <= 0) { volley = null; if (P.split) splits = { t: 0, stage: 0 }; }
+      if (--volley.left <= 0) { volley = null; if (P.split && !engaged) splits = { t: 0, stage: 0 }; }
     }
   }
   if (splits) {
@@ -514,7 +518,8 @@ function update(dt) {
       && balls.every(b => !b.isAwake() || b.getLinearVelocity().length() / S < 0.05);
     settledFor = calm && !quake ? settledFor + dt : 0;
     // a demo volley gets a short beat after its last shot; a hand-thrown shot waits until things are still
-    if (!volley && !splits && (P.autoReset || demoReset) && (settledFor > 0.8 || liveT > (demoReset ? 2.5 : 16))) reset();
+    const wait = engaged ? 2 : 1;
+    if (!volley && !splits && (P.autoReset || demoReset) && (settledFor > 0.8 * wait || liveT > (demoReset ? 2.5 : 16) * wait)) reset();
   }
 
   // balls: trails, age out the ones resting on the floor
