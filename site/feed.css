@@ -38,6 +38,7 @@ button { font: inherit; color: inherit; }
 .slide { position: absolute; inset: 0; will-change: transform; backface-visibility: hidden; contain: strict; background: var(--bg); }
 .slide.anim { transition: transform var(--slide-ms) var(--ease); }
 .slide.pinned { z-index: 0; }
+.slide.parked { z-index: -1; }   /* a resting neighbour, under the toy on screen (feed.js park()) */
 .slide.entering { z-index: 2; animation: enter .22s ease-out both; }
 @keyframes enter { from { opacity: 0; } }
 .slide .stage { position: absolute; inset: 0; overflow: hidden;

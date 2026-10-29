@@ -270,11 +270,30 @@ function waiting() {
   }
 }
 
+// At rest, the neighbours are parked: on screen, under the toy on screen (.parked), not beside it. Safari barely
+// runs animation frames in an iframe outside the viewport, so a neighbour waiting beside the screen didn't draw
+// its first frame (a phone trace: not until a swipe brought it into view, or ~20 s). Any move unparks them first,
+// back to their places beside the screen, with no transition; they park again once it has settled.
+let parked = true;
 function place(s, dx = 0) {
-  const d = `calc(${s.offset * 100}% + ${dx}px)`;
+  const park = parked && !!s.offset && !s.pinned;
+  s.el.classList.toggle('parked', park);
+  const d = park ? '0px' : `calc(${s.offset * 100}% + ${dx}px)`;
   s.el.style.transform = s.pinned ? 'none' : axis() === 'y' ? `translate3d(0, ${d}, 0)` : `translate3d(${d}, 0, 0)`;
 }
 function placeAll(dx = 0) { for (const s of slides.values()) place(s, dx); }
+function unpark() {
+  if (!parked) return;
+  parked = false;
+  animate(false);
+  placeAll();
+  for (const s of slides.values()) s.el.getBoundingClientRect();   // there now, so a slide that follows starts from there
+}
+function park() {
+  if (parked || drag?.active) return;
+  parked = true;
+  placeAll();
+}
 function animate(on, ms) {
   for (const s of slides.values()) s.el.classList.toggle('anim', on && !calm);
   if (ms) document.documentElement.style.setProperty('--slide-ms', ms + 'ms');
@@ -327,6 +346,7 @@ function settle(ms) {
     if (c && !c.iframe) mount(c);
     for (const s of [...slides.values()]) if (s.pinned || Math.abs(rel(indexOf(s.toy.slug))) > 1) dispose(s);
     animate(false);
+    park();
     scheduleNeighbours();
   }, ms + 40);
 }
@@ -365,6 +385,7 @@ function showHint(s) {
 
 // Move by one toy (dir ±1). ms: slide duration, shorter after a fast flick.
 function go(dir, { ms = 420, t0 = performance.now() } = {}) {
+  unpark();
   const from = slides.get(toys[cur].slug);
   cur = wrap(cur + dir);
   const t = toys[cur];
@@ -387,6 +408,7 @@ function go(dir, { ms = 420, t0 = performance.now() } = {}) {
 // Jump anywhere (overview, URL). Neighbours slide; anything further cuts with a short fade over the old toy.
 function jump(i) {
   if (i === cur) return;
+  unpark();
   const d = rel(i);
   if (Math.abs(d) === 1) return go(d);
   const old = slides.get(toys[cur].slug);
@@ -493,6 +515,7 @@ feed.addEventListener('pointermove', e => {
       drag.x0 = along(e, a) - at;               // no jump at the slop either
       feed.setPointerCapture(e.pointerId);
       clearTimeout(settleTimer); clearTimeout(neighbourTimer);
+      unpark();
       animate(false);
       placeAll(at);
       // a neighbour that isn't mounted yet (fast swiping) gets mounted now, frozen
