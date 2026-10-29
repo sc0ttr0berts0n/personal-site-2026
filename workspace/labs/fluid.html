@@ -146,6 +146,9 @@ uniform float uClk, uWaveV, uBase, uSheen, uChroma, uRag;
 uniform int uRampN, uSteps, uVSteps, uGSteps;
 uniform vec3 uBg, uGrid, uInk, uTintCol;
 
+// A loop bound the compiler can't see through, so ANGLE → D3D keeps small fixed loops as loops instead of pasting
+// their bodies (and everything they call) in again and again. uFrontN is never negative, so this is always 0.
+#define ZERO min(uFrontN, 0)
 const float LIQ_N = 1.333;   // liquid refractive index
 const float SIGMA = 2.6;     // liquid extinction per world unit
 
@@ -180,20 +183,21 @@ vec3 evalP(vec3 p) {
 }
 float outerD(vec3 p) { vec3 d = sdf2(p.xy); return extr(min(d.x, min(d.y, d.z)), p.z + uD * 0.5, uD * 0.5, uBevel); }
 float cavD(vec3 p) { vec3 d = sdf2(p.xy); return extr(min(d.x, min(d.y, d.z)) + uWall, p.z + uD * 0.5, uD * 0.5 - uWall, uBevel * 1.6); }
-vec3 nOuter(vec3 p) {
-  const vec2 k = vec2(1.0, -1.0); const float e = 0.012;
-  return normalize(k.xyy * outerD(p + k.xyy * e) + k.yyx * outerD(p + k.yyx * e) + k.yxy * outerD(p + k.yxy * e) + k.xxx * outerD(p + k.xxx * e));
-}
-vec3 nCav(vec3 p) {
-  const vec2 k = vec2(1.0, -1.0); const float e = 0.012;
-  return normalize(k.xyy * cavD(p + k.xyy * e) + k.yyx * cavD(p + k.yyx * e) + k.yxy * cavD(p + k.yxy * e) + k.xxx * cavD(p + k.xxx * e));
+// either surface of the glass: wall 0, bevel 1 is the outside (outerD); wall uWall, bevel 1.6 the cavity (cavD)
+float shellD(vec3 p, float wall, float bev) { vec3 d = sdf2(p.xy); return extr(min(d.x, min(d.y, d.z)) + wall, p.z + uD * 0.5, uD * 0.5 - wall, uBevel * bev); }
+// tetrahedral normal, as a loop over the four corners (in the same order, so the sum is the same)
+const vec3 TET[4] = vec3[4](vec3(1, -1, -1), vec3(-1, -1, 1), vec3(-1, 1, -1), vec3(1, 1, 1));
+vec3 nShell(vec3 p, float wall, float bev) {
+  vec3 n = vec3(0.0);
+  for (int i = ZERO; i < 4; i++) n += TET[i] * shellD(p + TET[i] * 0.012, wall, bev);
+  return normalize(n);
 }
 
 // free surface of chevron i at x in the liquid's frame (liqF): hydrostatic level + standing-wave modes
 float surfY(int i, float x) {
   float u = clamp((x - uX0[i]) / uL[i], 0.0, 1.0);
   float c1 = cos(3.14159265 * u), cp = 1.0, cn = c1, h = uLevel[i];
-  for (int n = 0; n < 6; n++) { h += uModes[i * 6 + n] * cn; float nx = 2.0 * c1 * cn - cp; cp = cn; cn = nx; }
+  for (int n = ZERO; n < 6; n++) { h += uModes[i * 6 + n] * cn; float nx = 2.0 * c1 * cn - cp; cp = cn; cn = nx; }
   return h;
 }
 bool liq(vec3 pl, int pid, float cd) {
@@ -265,7 +269,7 @@ vec3 benchGlow(vec2 bw) {
   vec2 pl = rotI(bw - uOff), lw = liqF(pl);
   vec3 d = sdf2(pl) + uWall;
   vec3 acc = vec3(0.0);
-  for (int i = 0; i < 3; i++) {
+  for (int i = ZERO; i < 3; i++) {
     float di = d[i];
     if (di > 2.5) continue;
     float Y = surfY(i, lw.x);
@@ -287,12 +291,12 @@ vec3 glassT(float len) { return exp(-len * uTint * 2.2 * (1.05 - uTintCol)); }
 // rising bubbles, drawn in the plane of the front cavity wall
 vec2 bubbles(vec2 pw, int pid) {
   vec2 res = vec2(0.0);
-  for (int layer = 0; layer < 2; layer++) {
+  for (int layer = ZERO; layer < 2; layer++) {
     float cw = layer == 0 ? 0.34 : 0.23;
     float cx = floor(pw.x / cw);
-    for (int dx = -1; dx <= 1; dx++) {
+    for (int dx = ZERO - 1; dx <= 1; dx++) {
       float col = cx + float(dx) + float(layer) * 517.0;
-      for (int b = 0; b < 2; b++) {
+      for (int b = ZERO; b < 2; b++) {
         vec4 h = fract(sin(vec4(col, col + 1.7, col + 3.1, col + 5.3) * (12.9898 + float(b) * 7.13)) * 43758.5453);
         if (h.x > uBub) continue;
         float r = mix(0.025, 0.06, h.y) * (layer == 0 ? 1.0 : 0.75);
@@ -342,93 +346,105 @@ void main() {
     t += d;
     if (t > tEnd) break;
   }
-  if (!hit) { gl_FragColor = vec4(bench(ro, rd), 1.0); return; }
+  // Every path ends on the bench seen along one ray, so bench() is called once, at the end: the colour is
+  // col + kB * bench(bRo, bRd). (Called from each branch, the compiler pasted it and its glow in four times.)
+  vec3 col = vec3(0.0), kB = vec3(1.0), bRo = ro, bRd = rd;
+  if (hit) {
+    vec3 n = nShell(p, 0.0, 1.0);
+    float F = fresnel(-dot(rdl, n), 1.0 / uIor);
+    col = F * env(toWorldDir(reflect(rdl, n)));
+    vec3 T = refract(rdl, n, 1.0 / uIor);
+    if (dot(T, T) < 0.5) T = rdl;
 
-  vec3 n = nOuter(p);
-  float F = fresnel(-dot(rdl, n), 1.0 / uIor);
-  vec3 col = F * env(toWorldDir(reflect(rdl, n)));
-  vec3 T = refract(rdl, n, 1.0 / uIor);
-  if (dot(T, T) < 0.5) T = rdl;
-
-  // walk through the glass until we reach the cavity or leave the solid
-  vec3 q = p - n * 0.004;
-  float glassLen = 0.0; int state = 0; vec3 e;
-  for (int k = 0; k < uGSteps; k++) {
-    e = evalP(q);
-    float g = min(-e.x, e.y);
-    if (g < 0.0015) { state = e.y < -e.x ? 1 : 2; break; }
-    float h = max(g, 0.004);
-    q += T * h; glassLen += h;
-  }
-
-  vec3 body;
-  if (state != 1) {
-    // passed through solid glass only (rims, side walls)
-    vec3 n2 = nOuter(q);
-    vec3 o = refract(T, -n2, uIor);
-    if (dot(o, o) < 0.5) {
-      body = env(toWorldDir(reflect(T, -n2))) * 0.6 + bench(toWorld(q), toWorldDir(T)) * 0.25;
-    } else {
-      float F2 = fresnel(dot(T, n2), uIor);
-      body = (1.0 - F2) * bench(toWorld(q), toWorldDir(o));
+    // walk through the glass until we reach the cavity or leave the solid
+    vec3 q = p - n * 0.004;
+    float glassLen = 0.0; int state = 0; vec3 e;
+    for (int k = 0; k < uGSteps; k++) {
+      e = evalP(q);
+      float g = min(-e.x, e.y);
+      if (g < 0.0015) { state = e.y < -e.x ? 1 : 2; break; }
+      float h = max(g, 0.004);
+      q += T * h; glassLen += h;
     }
-    body *= glassT(glassLen);
-  } else {
-    // into the cavity: glass to air at the inner wall
-    vec3 nc = nCav(q);
-    float Fi = fresnel(-dot(T, nc), uIor);
-    vec3 Dc = refract(T, nc, uIor);
-    vec3 inner = Fi * env(toWorldDir(reflect(T, nc))) * 0.7;
-    if (dot(Dc, Dc) < 0.5) { Dc = rdl; inner += env(toWorldDir(reflect(T, nc))) * 0.3; }
 
-    int pid = int(e.z);
-    vec3 c = q + Dc * 0.002;
-    float cd = cavD(c);
-    bool inL = liq(c, pid, cd);
-    vec2 bub = vec2(0.0);
-    vec2 frontW = rotF(c.xy) + uOff;
-    if (inL && uBub > 0.0) bub = bubbles(frontW, pid);
-    Tr = vec3(1.0); Lc = vec3(0.0);
-    for (int k = 0; k < uVSteps; k++) {
-      float h = clamp(-cd, 0.025, 0.09);
-      vec3 c2 = c + Dc * h;
-      float cd2 = cavD(c2);
-      bool out2 = cd2 > 0.0;
-      if (out2) { h *= clamp(-cd / (cd2 - cd + 1e-5), 0.0, 1.0); c2 = c + Dc * h; }
-      bool inL2 = out2 ? inL : liq(c2, pid, cd2);
-      if (inL2 != inL) {
-        vec3 a = c, b = c2;
-        for (int i = 0; i < 4; i++) { vec3 mm = (a + b) * 0.5; if (liq(mm, pid, cavD(mm)) == inL) a = mm; else b = mm; }
-        vec3 s = (a + b) * 0.5;
-        if (inL) absorb(length(s - c), (s + c) * 0.5, pid);
-        vec2 sw = liqF(s.xy);
-        float dy = (surfY(pid, sw.x + 0.02) - surfY(pid, sw.x - 0.02)) / 0.04;
-        vec3 nl = vec3(rotLI(normalize(vec2(-dy, 1.0))), 0.0);
-        vec3 nf = dot(Dc, nl) < 0.0 ? nl : -nl;
-        float eta = inL ? LIQ_N : 1.0 / LIQ_N;
-        float Fs = fresnel(-dot(Dc, nf), eta);
-        if (inL) {
-          // underside of the surface: a mirror of the liquid, total internal reflection at grazing view
-          Lc += Tr * Fs * liqC(0.0, s.xy) * (0.4 + 0.6 * uGlow);
-          vec3 r = refract(Dc, nf, eta);
-          if (dot(r, r) < 0.5) { Dc = reflect(Dc, nf); inL2 = true; } else { Tr *= 1.0 - Fs; Dc = r; }
-        } else {
-          Lc += Tr * Fs * env(toWorldDir(reflect(Dc, nf))) * 1.4;
-          Tr *= 1.0 - Fs;
-          Dc = refract(Dc, nf, eta);
-        }
-        c = s + Dc * 0.003; cd = cavD(c); inL = inL2;
-        continue;
+    // body = bodyA + bodyK * bench(bRo, bRd)
+    vec3 bodyA, bodyK;
+    // the normal where the walk stopped, on the cavity wall (state 1) or the outside: one call for both
+    vec3 n2 = nShell(q, state == 1 ? uWall : 0.0, state == 1 ? 1.6 : 1.0);
+    if (state != 1) {
+      // passed through solid glass only (rims, side walls)
+      vec3 o = refract(T, -n2, uIor);
+      vec3 gt = glassT(glassLen);
+      bRo = toWorld(q);
+      if (dot(o, o) < 0.5) {
+        bodyA = env(toWorldDir(reflect(T, -n2))) * 0.6 * gt; bodyK = 0.25 * gt; bRd = toWorldDir(T);
+      } else {
+        float F2 = fresnel(dot(T, n2), uIor);
+        bodyA = vec3(0.0); bodyK = (1.0 - F2) * gt; bRd = toWorldDir(o);
       }
-      if (inL) absorb(h, (c + c2) * 0.5, pid);
-      c = c2; cd = cd2;
-      if (out2) break;
+    } else {
+      // into the cavity: glass to air at the inner wall
+      vec3 nc = n2;
+      float Fi = fresnel(-dot(T, nc), uIor);
+      vec3 Dc = refract(T, nc, uIor);
+      vec3 inner = Fi * env(toWorldDir(reflect(T, nc))) * 0.7;
+      if (dot(Dc, Dc) < 0.5) { Dc = rdl; inner += env(toWorldDir(reflect(T, nc))) * 0.3; }
+
+      int pid = int(e.z);
+      vec3 c = q + Dc * 0.002;
+      float cd = cavD(c);
+      bool inL = liq(c, pid, cd);
+      vec2 bub = vec2(0.0);
+      vec2 frontW = rotF(c.xy) + uOff;
+      if (inL && uBub > 0.0) bub = bubbles(frontW, pid);
+      Tr = vec3(1.0); Lc = vec3(0.0);
+      for (int k = 0; k < uVSteps; k++) {
+        float h = clamp(-cd, 0.025, 0.09);
+        vec3 c2 = c + Dc * h;
+        float cd2 = cavD(c2);
+        bool out2 = cd2 > 0.0;
+        if (out2) { h *= clamp(-cd / (cd2 - cd + 1e-5), 0.0, 1.0); c2 = c + Dc * h; }
+        bool inL2 = out2 ? inL : liq(c2, pid, cd2);
+        bool cross = inL2 != inL;
+        vec3 s = c2;
+        if (cross) {
+          vec3 a = c, b = c2;
+          for (int i = ZERO; i < 4; i++) { vec3 mm = (a + b) * 0.5; if (liq(mm, pid, cavD(mm)) == inL) a = mm; else b = mm; }
+          s = (a + b) * 0.5;
+        }
+        // one absorb() for both cases, up to the surface or across the whole step
+        if (inL) absorb(cross ? length(s - c) : h, (s + c) * 0.5, pid);
+        if (cross) {
+          vec2 sw = liqF(s.xy);
+          float dy = (surfY(pid, sw.x + 0.02) - surfY(pid, sw.x - 0.02)) / 0.04;
+          vec3 nl = vec3(rotLI(normalize(vec2(-dy, 1.0))), 0.0);
+          vec3 nf = dot(Dc, nl) < 0.0 ? nl : -nl;
+          float eta = inL ? LIQ_N : 1.0 / LIQ_N;
+          float Fs = fresnel(-dot(Dc, nf), eta);
+          if (inL) {
+            // underside of the surface: a mirror of the liquid, total internal reflection at grazing view
+            Lc += Tr * Fs * liqC(0.0, s.xy) * (0.4 + 0.6 * uGlow);
+            vec3 r = refract(Dc, nf, eta);
+            if (dot(r, r) < 0.5) { Dc = reflect(Dc, nf); inL2 = true; } else { Tr *= 1.0 - Fs; Dc = r; }
+          } else {
+            Lc += Tr * Fs * env(toWorldDir(reflect(Dc, nf))) * 1.4;
+            Tr *= 1.0 - Fs;
+            Dc = refract(Dc, nf, eta);
+          }
+          c = s + Dc * 0.003; cd = cavD(c); inL = inL2;
+          continue;
+        }
+        c = c2; cd = cd2;
+        if (out2) break;
+      }
+      Lc = mix(Lc, Lc * 0.4, bub.y) + bub.x * mix(uInk, rampC(0.0), 0.35) * 0.6;
+      float back = uWall / max(abs(Dc.z), 0.3);
+      vec3 gt = glassT(glassLen + back);
+      bodyA = inner + gt * Lc; bodyK = gt * Tr; bRo = toWorld(c); bRd = toWorldDir(Dc);
     }
-    Lc = mix(Lc, Lc * 0.4, bub.y) + bub.x * mix(uInk, rampC(0.0), 0.35) * 0.6;
-    float back = uWall / max(abs(Dc.z), 0.3);
-    body = inner + glassT(glassLen + back) * (Lc + Tr * bench(toWorld(c), toWorldDir(Dc)));
+    col += (1.0 - F) * bodyA; kB = (1.0 - F) * bodyK;
   }
-  col += (1.0 - F) * body;
+  col += kB * bench(bRo, bRd);
   gl_FragColor = vec4(col, 1.0);
 }`;
 
