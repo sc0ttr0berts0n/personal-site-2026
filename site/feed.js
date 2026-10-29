@@ -101,6 +101,14 @@ function mount(s) {
   s.iframe = f;
 }
 
+// reload a resting neighbour from scratch; it comes back frozen on its first frame, like any preload
+function restart(s) {
+  s.peeked = false;
+  if (!s.iframe) return;
+  s.ready = false; s.el.classList.remove('ready'); s.born = performance.now();
+  s.iframe.src = frameSrc(s.toy, false);
+}
+
 function dispose(s) {
   slides.delete(s.toy.slug);
   // unloading the document releases its WebGL contexts right away
@@ -157,6 +165,7 @@ function settle(ms) {
 let snapTimer = 0;
 function becameCurrent(s, t0) {
   for (const o of slides.values()) if (o !== s) pause(o);
+  s.peeked = false;
   if (s.playing) {} else { play(s); s.swipeAt = t0; }
   clearTimeout(snapTimer);
   snapTimer = setTimeout(() => send(s, 'snap', { width: 540 }), 2600);
@@ -259,7 +268,7 @@ feed.addEventListener('pointermove', e => {
   placeAll(drag.dx);
   // the toy coming into view is live as soon as any of it shows; the one on the other side rests
   if (drag.dx) for (const s of slides.values()) {
-    if (s.offset === (drag.dx < 0 ? 1 : -1)) play(s);
+    if (s.offset === (drag.dx < 0 ? 1 : -1)) { play(s); s.peeked = true; }
     else if (s.offset === (drag.dx < 0 ? -1 : 1)) pause(s);
   }
 });
@@ -280,6 +289,10 @@ function endDrag(e, cancelled) {
   } else {
     animate(true, 300); placeAll(0); settle(300);
     for (const s of slides.values()) if (s.offset) pause(s);
+    // a toy that was peeked at and sent back starts over next time, not from where the peek left it
+    setTimeout(() => {
+      for (const s of slides.values()) if (s.peeked && s.offset && !s.playing && !drag?.active) restart(s);
+    }, 320);
   }
 }
 feed.addEventListener('pointerup', e => endDrag(e, false));
