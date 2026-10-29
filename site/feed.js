@@ -4,9 +4,12 @@
 // frames, so a swipe never lands on a blank stage). Anything further away is disposed, which keeps live
 // WebGL contexts at three or fewer. Toys are iframes of the lab pages in ?embed mode (embed/lab-embed.js).
 //
+// Touch: the middle of the screen belongs to the toy on it (its iframe takes pointers directly); a drag that
+// starts at the edges of the screen, across the swipe axis, moves between toys. See "gestures" below.
+//
 // URL: #slug, or #slug/settings-code to carry a lab's settings (e.g. #prism/glass_diamond~pal_reef).
 import { LABS } from '../labs/manifest.js';
-import { ORDER, START, ARTIST, NO_PRELOAD } from './config.js';
+import { ORDER, START, ARTIST, NO_PRELOAD, TOUCH } from './config.js';
 import { logoSVG } from '../labs/shared/logo.js';
 import { createTransitions } from './transition.js';
 
@@ -33,6 +36,8 @@ const codes = new Map();          // slug → settings code from the URL
 const slides = new Map();         // slug → slide
 const warmed = new Set();         // toys that have drawn once this visit, so their shaders are compiled
 const heavy = t => NO_PRELOAD.includes(t.slug) && !warmed.has(t.slug);
+const touchedToys = new Set();    // toys someone has pressed on this visit, so their hint stops showing
+const finePointer = matchMedia('(hover: hover) and (pointer: fine)').matches;
 let cur = 0;
 
 // ---- metrics (window.feedMetrics; ?stats shows a readout) ----
@@ -95,6 +100,8 @@ function makeSlide(t, play, defer = false) {
     <div class="stage">
       <img class="poster" alt="" hidden>
       <div class="loader" aria-hidden="true">${logoSVG({ size: 56 })}</div>
+      <div class="edge lo" aria-hidden="true"></div><div class="edge hi" aria-hidden="true"></div>
+      <span class="toyhint" aria-hidden="true"></span>
     </div>
     <div class="caption">
       <button type="button" class="cap" aria-haspopup="dialog">
@@ -103,9 +110,9 @@ function makeSlide(t, play, defer = false) {
         <span class="blurb">${esc(t.blurb)}</span>
         <span class="more">more <span class="arr" aria-hidden="true"></span></span>
       </button>
-      <a class="btn primary play" href="${esc(pageHref(t))}">Play with this <span aria-hidden="true">→</span></a>
+      <a class="btn primary play" href="${esc(pageHref(t))}">Change This <span aria-hidden="true">→</span></a>
     </div>`;
-  const s = { toy: t, el, iframe: null, ready: false, playing: play, offset: 0, born: performance.now() };
+  const s = { toy: t, el, iframe: null, ready: false, playing: play, offset: 0, born: performance.now(), touch: TOUCH[t.slug]?.touch || 'none', hint: TOUCH[t.slug]?.hint || '' };
   const img = el.querySelector('.poster');
   img.onload = () => { img.hidden = false; el.classList.add('has-poster'); };
   img.onerror = () => { const own = posters.get(t.slug); if (own && img.src !== own) img.src = own; };
@@ -201,6 +208,24 @@ function becameCurrent(s, t0, held = false) {
   snapTimer = setTimeout(() => send(s, 'snap', { width: 540 }), 2600);
   updateCurrentTile();
   prefetchAround();
+  setLive();
+  showHint(s);
+}
+
+// Only the toy on screen takes pointers, and only if it does something with them; otherwise its whole slide swipes.
+function setLive() {
+  const c = slides.get(toys[cur].slug);
+  for (const s of slides.values()) s.el.classList.toggle('live', s === c && s.touch !== 'none');
+}
+// A few words over a toy that arrives, saying what a finger does to it, until it's pressed (or a few seconds pass).
+// It waits for the toy's first frame. Mice get the lab's own hint, written for a pointer that hovers and clicks.
+function showHint(s) {
+  clearTimeout(s.hintTimer);
+  const text = finePointer && s.toy.hint ? stripTags(s.toy.hint).split(' · ').slice(0, 2).join(' · ') : s.hint;
+  if (!s.ready || s.touch === 'none' || !text || touchedToys.has(s.toy.slug)) { s.el.classList.remove('hinting'); return; }
+  s.el.querySelector('.toyhint').textContent = text;
+  s.el.classList.add('hinting');
+  s.hintTimer = setTimeout(() => s.el.classList.remove('hinting'), 4200);
 }
 
 // Move by one toy (dir ±1). ms: slide duration, shorter after a fast flick.
@@ -251,7 +276,11 @@ addEventListener('message', e => {
   if (!s) return;
   const m = e.data, now = performance.now();
   if (m.feed === 'ready') {
+    // the lab's own word on what it does with a finger beats the feed's table
+    if (m.touch) s.touch = m.touch;
+    if (m.hint) s.hint = m.hint;
     s.ready = true; s.el.classList.add('ready'); warmed.add(s.toy.slug);
+    if (s.toy === toys[cur]) { setLive(); showHint(s); }
     metrics.loads.push({ slug: s.toy.slug, ms: Math.round(now - s.born), asNeighbour: !s.playing && !s.swipeAt });
     if (s.swipeAt) { metrics.swipes.push({ slug: s.toy.slug, msToLive: Math.round(now - s.swipeAt), wasPreloaded: false }); s.swipeAt = 0; }
     if (s.toy === toys[cur]) scheduleNeighbours();
@@ -263,6 +292,11 @@ addEventListener('message', e => {
     if (showStats && s.toy === toys[cur]) renderStats(s.toy.slug);
   } else if (m.feed === 'frozen') fx?.keep(s);
   else if (m.feed === 'snap' && m.url) savePoster(s.toy.slug, m.url);
+  else if (m.feed === 'touched') { if (s.toy === toys[cur]) s.touched = true; touchedToys.add(s.toy.slug); clearTimeout(s.hintTimer); s.el.classList.remove('hinting'); }
+  // a toy under the pointer gets the wheel, and one that was pressed keeps the focus (even once swiped away),
+  // so they pass the feed's own back up
+  else if (m.feed === 'wheel') wheel(m.dx, m.dy, m.mode);
+  else if (m.feed === 'key') navKey(m.key);
 });
 
 function renderStats(slug) {
@@ -276,22 +310,33 @@ function renderStats(slug) {
 }
 
 // ---- gestures: drag, wheel/trackpad, keys, buttons ----
+// Pointers in the middle of a live toy go straight into its iframe and never reach the feed. What the feed sees
+// is everything else: the edge zones (.edge, a strip at each end of the swipe axis), the caption, and the whole
+// slide of a toy that takes no input. A press on an edge zone lights it, so it's plain from the first touch that
+// this drag leaves the toy rather than playing with it.
 const dialogOpen = () => !!document.querySelector('dialog[open]');
-let drag = null;
+let drag = null, cue = null;
 const SLOP = 8;
 // Two tiers of swiping. Until someone touches the toy on screen, a swipe moves on easily (18% of the screen, or a
-// flick). Once they have touched it (a tap, or a stroke that isn't a swipe; live touching will call touchedCurrent
-// too), leaving takes a long pull: a bubble of the toy itself forms at the entering edge and only breaks through
-// to the next toy at HARD of the screen; let go before that and it shrinks back out. Reset on every visit.
+// flick). Once they have touched it (a press that reaches the toy, which its embed reports as 'touched', or a tap or
+// stray stroke on a slide the feed handles), a drag that starts on the toy takes a long pull: a bubble of the toy
+// itself forms at the entering edge and only breaks through to the next toy at HARD of the screen; let go before
+// that and it shrinks back out. Drags from the edge zones always move on easily. Reset on every visit.
 const HARD = 0.45;
 const touchedCurrent = () => { const c = slides.get(toys[cur].slug); if (c) c.touched = true; };
+const clearCue = () => { cue?.classList.remove('pressed'); cue = null; };
 feed.addEventListener('pointerdown', e => {
   if (e.button !== 0 || dialogOpen()) return;
   // positions are along the swipe axis (x0, dx) and across it (y0); the axis is fixed for the life of a drag
   const a = axis();
   drag = { id: e.pointerId, axis: a, x0: along(e, a), y0: across(e, a), dx: 0, active: false, samples: [[e.timeStamp, along(e, a)]],
-    onToy: !e.target.closest('.caption, a, button') };
+    onToy: !e.target.closest('.caption, a, button, .edge') };
+  clearCue();
+  cue = e.target.closest('.edge');
+  cue?.classList.add('pressed');
 });
+addEventListener('pointerup', clearCue);
+addEventListener('pointercancel', clearCue);
 feed.addEventListener('pointermove', e => {
   if (!drag || e.pointerId !== drag.id) return;
   const a = drag.axis, dx = along(e, a) - drag.x0, dy = across(e, a) - drag.y0;
@@ -300,7 +345,7 @@ feed.addEventListener('pointermove', e => {
       drag.active = true;
       // pick up from where the slides are now: mid-slide after a quick second swipe, at rest otherwise
       const c = slides.get(toys[cur].slug);
-      drag.hard = !!c?.touched;
+      drag.hard = drag.onToy && !!c?.touched;
       const m = c && !c.pinned ? new DOMMatrix(getComputedStyle(c.el).transform) : null;
       const at = m ? (a === 'y' ? m.m42 : m.m41) : 0;
       drag.x0 = along(e, a) - at;               // no jump at the slop either
@@ -383,21 +428,31 @@ let wheelAcc = 0, wheelLock = false, wheelTimer = 0;
 addEventListener('wheel', e => {
   if (dialogOpen()) return;
   e.preventDefault();
-  const d = (Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY) * (e.deltaMode === 1 ? 16 : 1);
+  wheel(e.deltaX, e.deltaY, e.deltaMode);
+}, { passive: false });
+function wheel(dx, dy, mode) {
+  if (dialogOpen()) return;
+  const d = (Math.abs(dx) > Math.abs(dy) ? dx : dy) * (mode === 1 ? 16 : 1);
   clearTimeout(wheelTimer);
   // one move per gesture: a trackpad's inertia keeps sending events, so wait for a quiet gap before the next
   wheelTimer = setTimeout(() => { wheelLock = false; wheelAcc = 0; }, 160);
   if (wheelLock) return;
   wheelAcc += d;
   if (Math.abs(wheelAcc) > 40) { wheelLock = true; go(Math.sign(wheelAcc)); wheelAcc = 0; }
-}, { passive: false });
+}
 
 addEventListener('keydown', e => {
   if (dialogOpen() || e.altKey || e.ctrlKey || e.metaKey) return;
-  if (e.key === 'ArrowRight' || e.key === 'ArrowDown' || e.key === 'PageDown') { e.preventDefault(); go(1); }
-  else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp' || e.key === 'PageUp') { e.preventDefault(); go(-1); }
-  else if (e.key === 'g') openOverview();
+  if (navKey(e.key)) e.preventDefault();
 });
+function navKey(key) {
+  if (dialogOpen()) return false;
+  if (key === 'ArrowRight' || key === 'ArrowDown' || key === 'PageDown') go(1);
+  else if (key === 'ArrowLeft' || key === 'ArrowUp' || key === 'PageUp') go(-1);
+  else if (key === 'g') openOverview();
+  else return false;
+  return true;
+}
 $('prev').addEventListener('click', () => go(-1));
 $('next').addEventListener('click', () => go(1));
 addEventListener('hashchange', () => { const slug = readHash(); if (slug) { const i = indexOf(slug); if (i === cur) reloadCurrent(); else jump(i); } });
@@ -494,11 +549,11 @@ function openSheet(t) {
     <span class="num">lab ${t.number}</span>
     <h2 id="sheet-title">${esc(t.title)}</h2>
     <p class="blurb">${esc(t.blurb)}</p>
-    <p class="teaches"><span>teaches →</span> ${esc(t.teaches)}</p>
+    <p class="teaches"><span>demonstrates →</span> ${esc(t.teaches)}</p>
     ${t.hint ? `<p class="hint"><span>on its own page →</span> ${esc(stripTags(t.hint))}</p>` : ''}
-    <div class="row"><a class="btn primary" href="${esc(pageHref(t))}">Play with this <span aria-hidden="true">→</span></a></div>
+    <div class="row"><a class="btn primary" href="${esc(pageHref(t))}">Change This <span aria-hidden="true">→</span></a></div>
     ${motion ? `<section><span class="label">Motion</span>
-      <p class="stub">${forced ? 'Toys play full motion even though your system asks for reduced motion.' : 'Your system asks for reduced motion, so the toys hold still.'}</p>
+      <p class="stub">${forced ? 'Labs play full motion even though your system asks for reduced motion.' : 'Your system asks for reduced motion, so the labs hold still.'}</p>
       <div class="row"><button type="button" class="btn" id="motion-toggle">${forced ? 'Reduce motion again' : 'Play motion anyway'}</button></div></section>` : ''}
     <section>
       <span class="label">Process</span>
@@ -532,7 +587,7 @@ $('artist-btn').addEventListener('click', () => {
 // ---- overview ----
 let overviewWasPlaying = null;
 function renderTiles() {
-  $('ov-count').textContent = `${N} toys`;
+  $('ov-count').textContent = `${N} labs`;
   // the still from npm run posters, then this browser's own snapshot, then the mark
   $('tiles').innerHTML = toys.map((t, i) => `<li><button type="button" class="tile" data-slug="${t.slug}" data-i="${i}"${i === cur ? ' aria-current="true"' : ''}>
       <span class="mark">${logoSVG({ size: 32 })}</span><img src="posters/${t.slug}.jpg" alt="" loading="lazy" decoding="async">
@@ -577,4 +632,5 @@ renderTiles();
 clearTimeout(snapTimer);
 snapTimer = setTimeout(() => send(first, 'snap', { width: 540 }), 2600);
 prefetchAround();
+setLive();
 scheduleNeighbours();

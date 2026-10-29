@@ -13,13 +13,17 @@
 // the feed holds both toys paused while the ripple runs (see cover's `done`) and starts the incoming one as it
 // lifts, so the picture under the ripple is exactly where the toy carries on. A toy that hasn't drawn yet shows
 // its poster, or the bench with the mark.
+//
+// The pictures are of the toy's frame, which isn't the screen: on a tall screen it runs up behind the top bar, on a
+// wide one it stops above the caption and fades out there (feed.css, --toy-top / --toy-cut). The shader puts them
+// back in that box and draws the bench grid around it.
 import { logoPath2D } from '../labs/shared/logo.js';
 
 const MS = 800;      // a full transition from rest
 
 const VERT = `attribute vec2 aPos; void main() { gl_Position = vec4(aPos, 0.0, 1.0); }`;
-// uv (0..1, y down); dir: unit, the way the content travels; snapshots are uploaded top row first, so uv samples
-// them as is, and past the edge repeats the edge
+// uv (0..1, y down); dir: unit, the way the content travels; snapshots are uploaded top row first and fill
+// uBox (x, y, w, h in uv), fading out over the last uFade of its height; outside it is the bench
 const FRAG = `#ifdef GL_FRAGMENT_PRECISION_HIGH
 precision highp float;
 #else
@@ -27,9 +31,21 @@ precision mediump float;
 #endif
 uniform sampler2D uFrom, uTo;
 uniform vec2 uRes, uDir;
-uniform float uP, uAspect, uReveal;
-vec4 A(vec2 uv) { return texture2D(uFrom, clamp(uv, 0.0, 1.0)); }
-vec4 B(vec2 uv) { return texture2D(uTo, clamp(uv, 0.0, 1.0)); }
+uniform float uP, uAspect, uReveal, uFade, uGrid, uLine;
+uniform vec4 uBox;
+uniform vec3 uBg, uGridColor;
+vec4 bench(vec2 uv) {
+  vec2 g = mod(uv * uRes - uRes * 0.5, uGrid);
+  return vec4(g.x < uLine || g.y < uLine ? uGridColor : uBg, 1.0);
+}
+vec4 boxed(sampler2D t, vec2 uv) {
+  vec2 q = (uv - uBox.xy) / uBox.zw;
+  float m = step(0.0, q.x) * step(q.x, 1.0) * step(0.0, q.y) * step(q.y, 1.0);
+  if (uFade > 0.0) m *= clamp((1.0 - q.y) / uFade, 0.0, 1.0);
+  return mix(bench(uv), texture2D(t, clamp(q, 0.0, 1.0)), m);
+}
+vec4 A(vec2 uv) { return boxed(uFrom, uv); }
+vec4 B(vec2 uv) { return boxed(uTo, uv); }
 // with red and blue pulled apart by o
 vec4 Ac(vec2 uv, vec2 o) { return vec4(A(uv + o).r, A(uv).g, A(uv - o).b, 1.0); }
 vec4 Bc(vec2 uv, vec2 o) { return vec4(B(uv + o).r, B(uv).g, B(uv - o).b, 1.0); }
@@ -92,7 +108,7 @@ export function createTransitions(host) {
     gl.bindAttribLocation(pr, 0, 'aPos');
     gl.linkProgram(pr);
     const u = {};
-    for (const k of ['uFrom', 'uTo', 'uRes', 'uDir', 'uP', 'uAspect', 'uReveal']) u[k] = gl.getUniformLocation(pr, k);
+    for (const k of ['uFrom', 'uTo', 'uRes', 'uDir', 'uP', 'uAspect', 'uReveal', 'uFade', 'uGrid', 'uLine', 'uBox', 'uBg', 'uGridColor']) u[k] = gl.getUniformLocation(pr, k);
     return (prog = { pr, u });
   }
   const texture = () => {
@@ -106,10 +122,20 @@ export function createTransitions(host) {
   const upload = (t, img) => { gl.bindTexture(gl.TEXTURE_2D, t); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img); };
 
   let dpr = 1, W = 0, H = 0;
+  // the toy's frame in CSS px within the host (top, height), the fade at its foot, and the bench's colours
+  let box = { top: 0, h: 1, fade: 0 }, bench = null;
+  const FADE = 72;     // px, as the mask in feed.css
   function resize() {
     dpr = Math.min(devicePixelRatio || 1, 1.5);
     W = Math.max(1, Math.round(host.clientWidth * dpr)); H = Math.max(1, Math.round(host.clientHeight * dpr));
     if (canvas.width !== W || canvas.height !== H) { canvas.width = W; canvas.height = H; }
+    const slide = host.querySelector('.slide'), hc = host.clientHeight;
+    const v = k => (slide && parseFloat(getComputedStyle(slide).getPropertyValue(k))) || 0;
+    const top = v('--toy-top'), cut = v('--toy-cut'), h = Math.max(1, hc - top - cut);
+    box = { top, h, fade: cut > 0 ? FADE / h : 0 };
+    const cs = getComputedStyle(document.documentElement);
+    const rgb = (k, d) => { const g = document.createElement('canvas').getContext('2d'); g.fillStyle = d; g.fillStyle = cs.getPropertyValue(k).trim() || d; const x = parseInt(g.fillStyle.slice(1), 16); return isNaN(x) ? [0, 0, 0] : [x >> 16 & 255, x >> 8 & 255, x & 255].map(c => c / 255); };
+    bench = { bg: rgb('--bg', '#000'), grid: rgb('--grid', '#1c1c22'), size: parseFloat(cs.getPropertyValue('--grid-size')) || 16 };
   }
   const grabWidth = () => Math.min(1280, Math.round(host.clientWidth * dpr));
 
@@ -135,20 +161,23 @@ export function createTransitions(host) {
   }
   // what a toy that hasn't drawn shows: its poster over the bench, or the bench with the mark
   function stand(slide) {
-    const c = document.createElement('canvas'), w = c.width = Math.min(W, 900), h = c.height = Math.round(H * w / W);
-    const g = c.getContext('2d'), cs = getComputedStyle(document.documentElement), k = w / host.clientWidth;
+    // the size of the toy's frame, with the bench grid lined up with the one around it
+    const k = Math.min(W, 900) / host.clientWidth;
+    const c = document.createElement('canvas'), w = c.width = Math.round(host.clientWidth * k), h = c.height = Math.round(box.h * k);
+    const g = c.getContext('2d'), cs = getComputedStyle(document.documentElement);
     g.fillStyle = cs.getPropertyValue('--bg') || '#000'; g.fillRect(0, 0, w, h);
-    const gs = (parseFloat(cs.getPropertyValue('--grid-size')) || 16) * k;
+    const gs = bench.size * k, mod = (a, b) => ((a % b) + b) % b;
     g.fillStyle = cs.getPropertyValue('--grid') || '#1c1c22';
-    for (let x = (w / 2) % gs; x < w; x += gs) g.fillRect(Math.round(x), 0, 1, h);
-    for (let y = (h / 2) % gs; y < h; y += gs) g.fillRect(0, Math.round(y), w, 1);
+    for (let x = mod(w / 2, gs); x < w; x += gs) g.fillRect(Math.round(x), 0, 1, h);
+    for (let y = mod((host.clientHeight / 2 - box.top) * k, gs); y < h; y += gs) g.fillRect(0, Math.round(y), w, 1);
     const img = slide?.el.querySelector('.poster');
     if (img?.complete && img.naturalWidth) {
       const sc = Math.max(w / img.naturalWidth, h / img.naturalHeight);
       g.drawImage(img, (w - img.naturalWidth * sc) / 2, (h - img.naturalHeight * sc) / 2, img.naturalWidth * sc, img.naturalHeight * sc);
     } else {
+      // the loader's mark sits mid-screen, not mid-frame
       const sz = 56 * k;
-      g.translate(w / 2, h / 2); g.scale(sz, sz); g.fillStyle = cs.getPropertyValue('--dim') || '#8b8b98'; g.fill(logoPath2D());
+      g.translate(w / 2, (host.clientHeight / 2 - box.top) * k); g.scale(sz, sz); g.fillStyle = cs.getPropertyValue('--dim') || '#8b8b98'; g.fill(logoPath2D());
     }
     return c;
   }
@@ -208,6 +237,10 @@ export function createTransitions(host) {
     gl.uniform1f(pr.u.uP, Math.max(0, Math.min(1, st.p)));
     gl.uniform1f(pr.u.uAspect, W / H);
     gl.uniform1f(pr.u.uReveal, st.reveal ?? 1);
+    gl.uniform4f(pr.u.uBox, 0, box.top / host.clientHeight, 1, box.h / host.clientHeight);
+    gl.uniform1f(pr.u.uFade, box.fade);
+    gl.uniform3f(pr.u.uBg, ...bench.bg); gl.uniform3f(pr.u.uGridColor, ...bench.grid);
+    gl.uniform1f(pr.u.uGrid, bench.size * dpr); gl.uniform1f(pr.u.uLine, Math.max(1, Math.round(dpr)));
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 
