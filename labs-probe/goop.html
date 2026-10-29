@@ -1,0 +1,1122 @@
+<meta charset="utf-8"><base href="/labs/"><script src="/labs-probe/probe-hook.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<script src="../embed/lab-embed.js"></script>
+<script src="../embed/lab-page.js"></script>
+<title>Out of the Goop</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@200;300&family=Familjen+Grotesk:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="shared/lab.css">
+<script type="module">
+import { createLab } from './shared/lab.js';
+import { logoPolygons, LOGO_FILL, LOGO_DEPTH, LOGO_ASPECT } from './shared/logo.js';
+
+// ---- liquids: each palette is a liquid. `liq` drives the shader; `colors` is only the swatch bar. ----
+// body: the liquid's own color (oil is near black), diffuse: how much light it scatters back (oil ≈ 0),
+// key / fill / rim: the three studio lights it reflects, f0: reflectance at normal incidence (oil n ≈ 1.5 → 4%).
+const OIL   = { key: 'oil',   name: 'Black Oil', bg: '#000000', grid: '#151311', ink: '#f3ede4', colors: ['#000000', '#16130f', '#4a4038', '#b5a692', '#fff4e6'],
+  liq: { body: '#010101', diffuse: 0.0,  key: '#fff0dc', fill: '#ffe8cc', rim: '#ffffff', f0: 0.045, mark: '#ffb35c' } };
+const HONEY = { key: 'honey', name: 'Honey',     bg: '#040200', grid: '#22160a', ink: '#fff6e6', colors: ['#3a1600', '#a84a00', '#ff9a00', '#ffd36b', '#fff6dc'],
+  liq: { body: '#c45400', diffuse: 0.55, key: '#fff4dc', fill: '#ffd88a', rim: '#ffe7b0', f0: 0.045, mark: '#fff1c0' } };
+const SLIME = { key: 'slime', name: 'Slime',     bg: '#000302', grid: '#0c1d12', ink: '#effff2', colors: ['#021a00', '#1f8a00', '#5cff1f', '#d4ff00', '#f0ffe0'],
+  liq: { body: '#2fb000', diffuse: 0.5,  key: '#efffe0', fill: '#d4ff00', rim: '#c8ffd8', f0: 0.04, mark: '#e8ff7a' } };
+const GRAPE = { key: 'grape', name: 'Grape',     bg: '#030008', grid: '#170a2c', ink: '#f3eaff', colors: ['#0d0020', '#4a0099', '#9d00ff', '#ff5bd8', '#f6e6ff'],
+  liq: { body: '#4800a8', diffuse: 0.45, key: '#f6e8ff', fill: '#ff5bd8', rim: '#ff9df0', f0: 0.045, mark: '#ff6be6' } };
+const NEON  = { key: 'neon',  name: 'Neon Oil',  bg: '#05000c', grid: '#1e0b2e', ink: '#ffe9ff', colors: ['#000000', '#ff2bd6', '#a35bff', '#5b6bff', '#00e5ff'],
+  liq: { body: '#020104', diffuse: 0.0,  key: '#ff3cd8', fill: '#00e5ff', rim: '#ffd6ff', f0: 0.045, mark: '#9a4dff' } };
+const BENCH_LIQ = { body: '#050506', diffuse: 0.0, key: '#ffffff', fill: '#e4e8f0', rim: '#ffffff', f0: 0.04, mark: '#ffffff' };
+
+const QUALITY = {
+  low:    { scale: 0.5,  steps: 56,  refl: 18 },
+  medium: { scale: 0.75, steps: 84,  refl: 32 },
+  high:   { scale: 1.0,  steps: 120, refl: 56 },
+  ultra:  { scale: 2.0,  steps: 120, refl: 56, maxPx: 3 }   // 2×2 supersampled; on a retina screen capped at 3 px per CSS px
+};
+
+// Viscosity slider runs 0..1 on a log scale: 50 → 1600 Pa·s (cold tar territory). Default 1600 Pa·s.
+const muOf = v => 50 * Math.pow(2, 5 * v);
+
+const lab = createLab({
+  number: '03',
+  title: 'Neon Oil',
+  blurb: 'The mark rises out of a pool of black oil. Sheets of it slide off, long ropes stretch back down to the pool and snap, and the clean mark shows through.',
+  teaches: 'Beautiful eye candy for its own sake. Raw WebGL2, no library: the logo’s outline is baked into a half-float texture, and one large shader draws the oil, the drips and the reflections. It’s the heaviest shader on the site, so it compiles in the background while the page stays responsive.',
+  hint: 'tap the pool for a ripple · drag through it for a wake<br>tap the mark to pour a drip',
+  palettes: [OIL, HONEY, SLIME, GRAPE, NEON],
+  defaultPalette: 'neon',
+  grid: false,
+  params: {
+    viscosity: { type: 'range', label: 'Viscosity μ', min: 0, max: 1, step: 0.01, value: 1, format: v => Math.round(muOf(v)) + ' Pa·s' },
+    drips:     { type: 'range', label: 'Drip rate', min: 0, max: 2, step: 0.05, value: 0.2, unit: '×' },
+    stretch:   { type: 'range', label: 'Thread stretch', min: 0.4, max: 2.5, step: 0.05, value: 2.5, unit: '×' },
+    coat:      { type: 'range', label: 'Coat thickness', min: 0, max: 1, step: 0.01, value: 0.14 },
+    meniscus:  { type: 'range', label: 'Meniscus', min: 0, max: 1, step: 0.01, value: 1 },
+    ripple:    { type: 'range', label: 'Surface ripple', min: 0, max: 2, step: 0.05, value: 2, unit: '×' },
+    gloss:     { type: 'range', label: 'Gloss', min: 0, max: 1, step: 0.01, value: 0.86 },
+    handheld:  { type: 'range', label: 'Handheld camera', min: 0, max: 1, step: 0.01, value: 0.5 },
+    tilt:      { type: 'range', label: 'Camera tilt', min: 6, max: 45, step: 1, value: 10, unit: '°' },
+    under:     { type: 'select', label: 'Logo underneath', value: 'neon', options: [['neon', 'Neon glow'], ['lacquer', 'Lacquer'], ['oil', 'Black (oil all the way)']] },
+    quality:   { type: 'select', label: 'Quality', value: 'high', options: [['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['ultra', 'Ultra (4× cost)']] },
+    liftHead:  { type: 'heading', label: 'Lift' },
+    rise:      { type: 'range', label: 'Lift duration', min: 2, max: 15, step: 0.5, value: 4, unit: ' s' },
+    wobble:    { type: 'range', label: 'Hanging wobble', min: 0, max: 1, step: 0.01, value: 0.4 },
+    loop:      { type: 'toggle', label: 'Lift, drain, dunk on a loop', value: true },
+    lift:      { type: 'range', label: 'Scrub lift (pauses the loop)', min: 0, max: 1, step: 0.005, value: 0, format: v => Math.round(v * 100) + '%' }
+  },
+  actions: [
+    { label: 'Pour on the mark', primary: true, action: () => { pourAll(); wake(); } },
+    { label: 'Dunk it', action: () => { if (!P.loop) lab.set('loop', true); cyc.phase = 'sink'; cyc.u = 1 - lc; cyc.t = 0; wake(); } },
+    { label: 'Drop a stone', action: () => { addRing(0.4 - 1.6 * rand(), 2.2 + 1.2 * rand(), 0.16 * lab.params.ripple); wake(); } }
+  ]
+});
+const P = lab.params;
+
+// ---- world: key square = 10 units, mark = 6 units wide, y up ----
+// The mark and the camera are fixed together: the mark's bounding box stays centered in the key square at
+// LOGO_FILL. The lift is the oil surface dropping away beneath them, which is the same picture as mark and
+// camera rising together: from just under the mark's top tips down to well below its feet.
+const SQ = 10, LW = SQ * LOGO_FILL, LH = LOGO_ASPECT * LW, HT = LOGO_DEPTH * LW / 2;
+const SUB = 0.13;
+const YC = LH / 2 - SUB * LH;               // world y of the mark's center
+const DIST = 24;                            // camera distance to the mark's center
+const POOL_HI = YC + LH / 2 - 0.4;          // lift 0: only the top tips break the surface
+const POOL_LO = YC - LH / 2 - 1.3;          // lift 1: the feet hang 1.3 units clear of the oil
+const FEET = YC - LH / 2;
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const mix = (a, b, t) => a + (b - a) * t;
+const ease = u => u * u * (3 - 2 * u);
+const toWorld = (u, v) => [u * LW, YC - v * LW];   // logo units (y down) → world x, y
+
+// ---- seeded randomness: the same seed and time give the same frame ----
+let seed = 11;
+const rand = () => { seed = (seed + 0x6D2B79F5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+
+// ---- the mark's exact 2D signed distance (logo units), from its outline ----
+const POLYS = logoPolygons({ curveSegments: 10 });
+const SEGS = POLYS.flatMap(poly => poly.map((a, i) => { const b = poly[(i + 1) % poly.length]; return [a[0], a[1], b[0] - a[0], b[1] - a[1]]; }));
+function sd2(u, v) {
+  let m = Infinity, inside = false;
+  for (const [ax, ay, bx, by] of SEGS) {
+    const px = u - ax, py = v - ay;
+    const t = clamp((px * bx + py * by) / (bx * bx + by * by || 1), 0, 1);
+    const dx = px - bx * t, dy = py - by * t, d2 = dx * dx + dy * dy;
+    if (d2 < m) m = d2;
+    if ((ay > v) !== (ay + by > v) && u < ax + (v - ay) * bx / by) inside = !inside;
+  }
+  return (inside ? -1 : 1) * Math.sqrt(m);
+}
+
+// Baked into a half-float texture for the shader (scanline parity for the sign, exact segment distance).
+const SDF_N = 512, SDF_L = 0.62;
+function toHalf(v) {
+  toHalf.f[0] = v; const x = toHalf.u[0];
+  const s = (x >>> 16) & 0x8000; let e = ((x >>> 23) & 0xff) - 112; const m = x & 0x7fffff;
+  if (e <= 0) return s; if (e >= 31) return s | 0x7c00;
+  return s | (e << 10) | (m >>> 13);
+}
+toHalf.f = new Float32Array(1); toHalf.u = new Uint32Array(toHalf.f.buffer);
+function bakeSdf() {
+  const E = SEGS.length, h = 2 * SDF_L / SDF_N, out = new Uint16Array(SDF_N * SDF_N);
+  for (let j = 0; j < SDF_N; j++) {
+    const v = -SDF_L + (j + 0.5) * h, xs = [];
+    for (const [ax, ay, bx, by] of SEGS) if ((ay > v) !== (ay + by > v)) xs.push(ax + (v - ay) * bx / by);
+    xs.sort((a, b) => a - b);
+    let ci = 0;
+    for (let i = 0; i < SDF_N; i++) {
+      const u = -SDF_L + (i + 0.5) * h;
+      while (ci < xs.length && xs[ci] < u) ci++;
+      let m = Infinity;
+      for (let e = 0; e < E; e++) {
+        const s = SEGS[e], px = u - s[0], py = v - s[1];
+        let t = (px * s[2] + py * s[3]) / (s[2] * s[2] + s[3] * s[3] || 1); t = t < 0 ? 0 : t > 1 ? 1 : t;
+        const dx = px - s[2] * t, dy = py - s[3] * t, d2 = dx * dx + dy * dy;
+        if (d2 < m) m = d2;
+      }
+      out[j * SDF_N + i] = toHalf((ci % 2 ? -1 : 1) * Math.sqrt(m));
+    }
+  }
+  return out;
+}
+
+// ---- the lift: a quick eased haul out, a long hang while the oil lets go, a dunk, a beat under, again ----
+let lc = 0;                                  // current lift 0..1
+let poolY = POOL_HI, drainY = POOL_HI;       // oil surface height; the line the coat has drained down to
+const cyc = { phase: 'rise', u: 0, t: 0 };
+const poolAt = l => mix(POOL_HI, POOL_LO, l);
+const drainD = () => 0.55 + 0.35 / Math.sqrt(speed());            // height over which the coat thins out
+const drainV = () => 1.0 * Math.sqrt(speed());                    // how fast the drained line creeps down
+const wetAt = y => {                                              // 1 = fully gloopy, 0 = bare solid
+  const D = drainD(), k = 0.5 * D, x = Math.max(y - drainY, 0);    // eased start, same as the shader
+  return Math.exp(-(x < 2 * k ? x * x / (4 * k) : x - k) / D);
+};
+const coatMax = () => 0.05 + 0.32 * P.coat;                      // extra coat on a fully wet surface
+const ropesLeft = () => drips.filter(d => d.phase === 'stream' || d.phase === 'fall').length;
+const drained = () => drainY < FEET - 1.2 * drainD();            // nothing left but the solid mark
+function stepLift(dt) {
+  if (!P.loop) {
+    lc += (P.lift - lc) * (1 - Math.exp(-dt * 2.5));   // scrubbing eases the surface there, never jumps it
+  } else {
+    cyc.t += dt;
+    if (cyc.phase === 'rise') { cyc.u += dt / P.rise; lc = ease(Math.min(cyc.u, 1)); if (cyc.u >= 1) { cyc.phase = 'hang'; cyc.t = 0; } }
+    else if (cyc.phase === 'hang') { lc = 1; if (drained() && (ropesLeft() === 0 || cyc.t > 16)) { cyc.phase = 'clear'; cyc.t = 0; } }
+    else if (cyc.phase === 'clear') { lc = 1; if (cyc.t > 3.5) { cyc.phase = 'sink'; cyc.u = 0; cyc.t = 0; } }
+    else if (cyc.phase === 'sink') { cyc.u += dt / (P.rise * 1.3); lc = 1 - ease(Math.min(cyc.u, 1)); if (cyc.u >= 1) { cyc.phase = 'under'; cyc.t = 0; } }
+    else { lc = 0; if (cyc.t > 2) { cyc.phase = 'rise'; cyc.u = 0; cyc.t = 0; } }
+  }
+  const prev = poolY;
+  poolY = poolAt(lc);
+  // The coat drains on its own clock, from the top down, whatever the lift does: the line it has drained
+  // to creeps down at a viscous pace. While the oil is coming up (a dunk) or the mark sits under it, the
+  // coat is pinned to the surface: everything that has been under is fully wet again.
+  const pinned = poolY > prev + 1e-7 || (P.loop && (cyc.phase === 'under' || cyc.phase === 'sink'));
+  if (pinned && poolY > drainY) drainY = poolY;
+  else drainY = Math.max(POOL_LO - 8, drainY - drainV() * dt);
+}
+
+// ---- where oil can fall: walk straight down from a point under the mark to the next part of the mark ----
+const STEP = 0.004;
+function logoBelow(u, v) {              // world y of the mark below (u, v), or -Infinity if only oil is below
+  for (let w = v; w < 0.62; w += STEP) if (sd2(u, w) < 0) return toWorld(u, w)[1];
+  return -Infinity;
+}
+const targetY = yLogo => Math.max(yLogo, poolY);
+// From a point on the mark's face, slide straight down to the edge it drips from.
+function columnFrom(u, v) {
+  let w = v;
+  while (w < 0.62 && sd2(u, w) < 0) w += STEP;
+  const [x, y] = toWorld(u, w - STEP * 0.5);
+  if (y < poolY + 0.12) return null;    // the edge is under the oil
+  return { u, x, y, yLogo: logoBelow(u, w + STEP) };
+}
+
+// Drip sources: points on edges that face down, spread out so drips don't crowd.
+function buildAnchors() {
+  const cands = [];
+  for (const poly of POLYS) {
+    for (let i = 0; i < poly.length; i++) {
+      const a = poly[i], b = poly[(i + 1) % poly.length];
+      const ex = b[0] - a[0], ey = b[1] - a[1], len = Math.hypot(ex, ey);
+      if (len < 1e-4) continue;
+      let nx = ey / len, ny = -ex / len;
+      const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2;
+      if (sd2(mx + nx * 0.004, my + ny * 0.004) < 0) { nx = -nx; ny = -ny; }
+      if (ny < 0.4) continue;           // y is down in logo units: keep edges whose outside faces down
+      // downhill along the edge (y is down in logo units), and how far a drip can creep before the corner
+      const down = ey > 0 ? 1 : -1, du = down * ex / len, dv = down * ey / len;
+      for (let s = 0.004; s < len; s += 0.008) {
+        const u = a[0] + ex * s / len, v = a[1] + ey * s / len;
+        const [x, y] = toWorld(u, v);
+        const yLogo = logoBelow(u, v + 0.006);
+        if (y - yLogo < 0.35) continue;
+        const room = Math.max(0, (down > 0 ? len - s : s) - 0.012);
+        cands.push({ u, v, x, y, yLogo, w: ny, du, dv, room: Math.abs(dv) > 0.15 ? room : 0 });
+      }
+    }
+  }
+  // farthest-point style thinning with a fixed shuffle
+  for (let i = cands.length - 1; i > 0; i--) { const j = Math.floor(rand() * (i + 1)); [cands[i], cands[j]] = [cands[j], cands[i]]; }
+  const out = [];
+  for (const c of cands) if (out.every(o => Math.hypot(o.x - c.x, o.y - c.y) > 0.4)) out.push(c);
+  return out;
+}
+
+// ---- simulation state ----
+const MAXS = 28, MAXB = 6, MAXR = 24, MAXD = 14;
+let ANCHORS = [];
+let drips = [], blobs = [], rings = [], time = 0, nextDrip = 0, nextBlob = 0;
+const speed = () => Math.pow(400 / muOf(P.viscosity), 0.6);   // 1 at 400 Pa·s
+
+function addRing(x, z, amp) {
+  if (amp <= 0) return;
+  rings.push({ x, z, t0: time, amp });
+  if (rings.length > MAXR) {
+    let k = 0, lo = Infinity;
+    rings.forEach((r, i) => { const a = r.amp * Math.exp(-(time - r.t0) * ringDamp()); if (a < lo) { lo = a; k = i; } });
+    rings.splice(k, 1);
+  }
+}
+const ringDamp = () => 0.55 * Math.pow(speed(), 0.3);
+const ringAmp = R => 0.075 * Math.pow(R / 0.2, 1.5) * P.ripple;
+
+function newDrip(src, { z, Rmax, fast = false, repeats, rope = false } = {}) {
+  const live = drips.filter(d => !d.dead);
+  if (live.length >= MAXD || live.some(d => Math.abs(d.x - src.x) < 0.2 && Math.abs(d.y - src.y) < 0.2)) return null;
+  const S = speed();
+  const d = {
+    x: src.x, y: src.y, yLogo: src.yLogo, yT: targetY(src.yLogo), toPool: src.yLogo < poolY, z: z ?? HT * (0.05 + 0.55 * rand()),
+    phase: 'swell', t: 0, R0: 0.02, R: 0.02, Rmax: Rmax ?? (0.13 + 0.11 * rand()) * (0.75 + 0.5 * P.coat),
+    L: 0.02, v: 0, rn: 0.02, cap: 1, capT: 5.5, Tsw: (fast ? 1.2 : 2.4 + 2.2 * rand()) / Math.sqrt(S),
+    sway: rand() * 6.283, swayAmp: 0.025 + 0.035 * rand(), swayW: 0.45 + 0.35 * rand(), flare: 0.12 + 0.06 * rand(),
+    repeats: repeats ?? Math.floor(rand() * 3), lower: null, dead: false, ringT: 0,
+    // creeping downhill along a sloped edge, each at its own pace
+    eu: src.u, ev: src.v, du: src.du || 0, dv: src.dv || 0, room: src.room || 0, slideV: (0.25 + 0.55 * rand()) * Math.sqrt(S) / LW, probeT: 0,
+    baseR: 0.03 + 0.05 * rand(), baseK: 1.8 + 2.6 * rand()   // how wide the foot spreads where it meets the pool
+  };
+  if (rope) {
+    // Torn up out of the oil as this edge clears it: born as a thick rope already joined to the pool.
+    // Each rope thins at its own rate, so they let go one at a time rather than all at once.
+    d.phase = 'stream'; d.R = d.Rmax = 0.16 + 0.1 * rand(); d.Rb = 0;
+    d.rS = (0.08 + 0.05 * rand()) * (0.7 + 0.6 * P.coat); d.cap = 1; d.capT = 0.6 + 2.0 * rand() ** 1.6;   // mostly quick, a few hang on
+    d.L = d.y - d.yT + 0.15; d.Ls0 = 0.3;
+    d.flare = 0.2 + 0.15 * rand(); d.swayAmp *= 1.6; d.repeats = Math.floor(rand() * 2);
+  }
+  drips.push(d);
+  return d;
+}
+
+function snap(d) {
+  const h = 0.35 + 0.3 * rand();
+  const Ls = Math.max(0.05, d.L * h);
+  const streaming = d.phase === 'stream';
+  d.lower = {
+    x: d.x, top: d.y - Ls, bot: streaming ? d.yT - 0.15 : d.y - d.L, v: streaming ? 0.05 : d.v,
+    R: streaming ? d.Rb : d.R, rn: d.rn, stream: streaming, yLogo: d.yLogo, sink: false, t: 0
+  };
+  d.phase = 'recoil'; d.t = 0; d.Ls = Ls; d.Lu = Ls; d.vu = 0; d.tip = d.rn; d.Rr = d.Rmax * 0.55;
+}
+
+// Two drips that meet become one: volumes add (R³), and a rope gets fed, so it thickens and holds on longer.
+let merges = 0;
+function merge(o, d) {
+  merges++;
+  const cube = r => r * r * r, vd = cube(d.phase === 'stream' ? Math.max(d.rS, 0.08) : d.R);
+  if (o.phase === 'swell') o.Rmax = Math.cbrt(cube(o.Rmax) + vd);
+  else if (o.phase === 'fall') { o.R = Math.cbrt(cube(o.R) + vd); o.r0 *= 1.15; o.cap = Math.min(1, o.cap * 1.3); }
+  else { o.rS = Math.cbrt(cube(o.rS) + vd * 0.5); o.cap = Math.min(1, o.cap + 0.35); o.Rb = Math.max(o.Rb, d.R * 0.6); }
+  o.repeats = Math.max(o.repeats, d.repeats);
+  d.phase = 'gone';                       // its strand is gone; anything already falling from it finishes on its own
+}
+function stepDrip(d, dt, S) {
+  d.t += dt;
+  // the oil under a drip moves (the lift), so its target is live
+  if (d.room > 0 && (d.phase === 'swell' || d.phase === 'fall' || d.phase === 'stream')) {
+    // oil hanging under a sloped edge runs downhill along it toward the corner; it stops behind another drip
+    const ds = Math.min(d.room, d.slideV * dt * (d.phase === 'stream' ? 0.5 : 1));
+    const nu = d.eu + d.du * ds, nv = d.ev + d.dv * ds, [nx, ny] = toWorld(nu, nv);
+    // another drip just ahead: a live one swallows this one when they touch; a spent one blocks the way
+    const o = drips.find(o => o !== d && !o.dead && o.phase !== 'gone' && Math.hypot(o.x - nx, o.y - ny) < 0.2 && (o.x - d.x) * (nx - d.x) + (o.y - d.y) * (ny - d.y) > 0);
+    const live = o && (o.phase === 'swell' || o.phase === 'fall' || o.phase === 'stream');
+    if (o && !live) d.room = 0;
+    else if (o && Math.hypot(o.x - nx, o.y - ny) < 0.07) { merge(o, d); return; }
+    else {
+      d.eu = nu; d.ev = nv; d.x = nx; d.y = ny; d.room -= ds;
+      if ((d.probeT -= dt) <= 0) { d.probeT = 0.15; d.yLogo = logoBelow(d.eu, d.ev + 0.006); }
+    }
+  }
+  d.toPool = d.yLogo < poolY; d.yT = targetY(d.yLogo);
+  if (d.y < poolY + 0.04) { d.dead = true; return; }        // swallowed by a dunk
+  const st = P.stretch, rSnap = 0.011 / Math.sqrt(st);
+  if (d.phase === 'swell') {
+    const k = clamp(d.t / d.Tsw, 0, 1), e = k * k * (3 - 2 * k);
+    d.R = mix(d.R0, d.Rmax, e); d.L = d.R * (0.35 + 0.55 * e); d.rn = d.R * 0.72;
+    if (k >= 1) { d.phase = 'fall'; d.t = 0; d.L0 = d.L; d.r0 = d.R * 0.55; d.v = 0.015 * S; d.cap = 1; }
+  } else if (d.phase === 'fall') {
+    // The bulb sinks under its weight; the thread resists less as it thins, so the fall slowly speeds up.
+    const vt = S * (0.07 + 0.3 * d.L) * (0.6 + 0.8 * d.R / 0.2);
+    d.v += (vt - d.v) * (1 - Math.exp(-dt * 1.5));
+    d.L += d.v * dt;
+    d.cap *= Math.exp(-dt * S / (7 * st));                     // capillary thinning on top of stretching
+    d.rn = d.r0 * Math.sqrt(d.L0 / d.L) * d.cap;               // volume in the thread is conserved: r²L ≈ const
+    if (d.L >= d.y - d.yT - d.R * 0.55) {
+      d.phase = 'stream'; d.t = 0; d.Rb = d.R; d.rS = d.rn; d.cap = 1; d.Ls0 = Math.max(d.L, 0.3);
+      if (d.toPool) addRing(d.x, d.z, ringAmp(d.R) * 0.8);
+    } else if (d.rn < rSnap) snap(d);
+  } else if (d.phase === 'stream') {
+    // Joined end to end: the bulb melts into what it landed on while the rope keeps necking. When the oil
+    // drops away (the lift), the rope stretches with it and thins as it does.
+    d.L = d.y - d.yT + 0.15;
+    d.Rb *= Math.exp(-dt * 1.4 * Math.sqrt(S));
+    d.cap *= Math.exp(-dt * S / (d.capT * st * (0.3 + 0.7 * wetAt(d.y))));   // a dried-out edge feeds it nothing, so it necks faster
+    d.rn = d.rS * d.cap * Math.pow(d.Ls0 / Math.max(d.L, d.Ls0), 0.4);
+    if (d.toPool && (d.ringT += dt) > 1.6) { d.ringT = 0; addRing(d.x, d.z, 0.012 * P.ripple); }
+    if (d.rn < rSnap && d.t > 0.6) snap(d);
+  } else if (d.phase === 'recoil') {
+    // The freed end springs back toward the edge (underdamped, so it overshoots once) and gathers into a bead.
+    const w = 5.5 * Math.pow(S, 0.25), z = 0.4, rest = d.Rr * 0.6;
+    const a = -w * w * (d.Lu - rest) - 2 * z * w * d.vu;
+    d.vu += a * dt; d.Lu = Math.max(0.03, d.Lu + d.vu * dt);
+    const f = clamp(1 - (d.Lu - rest) / Math.max(1e-3, d.Ls - rest), 0, 1);
+    d.tip = mix(d.rn, d.Rr, Math.min(1, f * 1.2));
+    if (d.t > 2.2) {
+      // a dried-out edge has nothing left to drip
+      if (d.repeats-- > 0 && wetAt(d.y) > 0.2) { d.phase = 'swell'; d.t = 0; d.R0 = d.tip; d.R = d.tip; d.Tsw = (2.2 + 2 * rand()) / Math.sqrt(S); d.Rmax = (0.13 + 0.11 * rand()) * (0.75 + 0.5 * P.coat); }
+      else { d.phase = 'retire'; d.t = 0; d.R = d.tip; d.L = d.Lu; }
+    }
+  } else if (d.phase === 'retire') {
+    const k = Math.exp(-dt * 1.6);
+    d.R *= k; d.L *= k;
+    if (d.R < 0.012) d.phase = 'gone';
+  }
+  const lo = d.lower;
+  if (lo) {
+    lo.t += dt;
+    const yT = targetY(lo.yLogo), toPool = lo.yLogo < poolY;
+    if (lo.stream) {
+      // what is left of a rope slumps into the pool
+      lo.bot = yT - 0.15;
+      // the freed thread snaps back down and gathers into the pool instead of standing there as a spike
+      lo.v += 5 * Math.sqrt(S) * dt; lo.top -= lo.v * dt; lo.rn = Math.min(lo.rn * Math.exp(dt * 0.9), 0.06);
+      if (lo.top <= yT + 0.03) { if (toPool) addRing(lo.x, d.z, 0.025 * P.ripple); d.lower = null; }
+    } else if (!lo.sink) {
+      lo.v += 3.2 * dt; lo.bot -= lo.v * dt;
+      const tail = (lo.top - lo.bot) * Math.exp(-dt * 2.4); lo.top = lo.bot + Math.max(tail, 0);
+      if (lo.bot - lo.R * 0.35 <= yT) {
+        lo.sink = true;
+        if (toPool) addRing(lo.x, d.z, ringAmp(lo.R));
+        else {
+          // landed on a lower arm: it runs to that arm's edge and drips again
+          const col = columnFrom(lo.x / LW, (YC - yT) / LW + 0.01);
+          if (col) newDrip(col, { z: d.z, Rmax: lo.R * 1.05, fast: true, repeats: 0 });
+        }
+      }
+    } else {
+      lo.bot -= 0.25 * dt; lo.top = Math.max(lo.bot, lo.top - 1.2 * dt); lo.R *= Math.exp(-dt * 4);
+      if (lo.R < 0.012) d.lower = null;
+    }
+  }
+  if (d.phase === 'gone' && !d.lower) d.dead = true;
+}
+
+// Globs of oil that slide down the face toward an edge, then pour over it as a drip.
+function newBlob(u, v, size = 1, grow = 0.5) {
+  if (blobs.length >= MAXB) return null;
+  const col = columnFrom(u, v);
+  if (!col) return null;
+  const [x, y] = toWorld(u, v);
+  if (y < poolY + 0.2) return null;
+  const b = { x, y, col, s: size, g: 0, grow, trail: 0, phase: 'slide', t: 0 };
+  blobs.push(b);
+  return b;
+}
+function stepBlob(b, dt, S) {
+  b.t += dt;
+  const ry = 0.2 * b.s;
+  if (b.y < poolY + 0.05 && b.phase === 'slide') b.phase = 'pour';     // swallowed by a dunk
+  if (b.phase === 'slide') {
+    b.g = Math.min(1, b.g + dt / b.grow);
+    const v = 0.13 * S * (0.6 + 0.6 * b.s) * b.g;
+    b.y -= v * dt; b.trail = Math.min(0.9 * b.s, b.trail + v * dt * 0.7);
+    if (b.y - ry * 0.4 <= b.col.y) {
+      b.phase = 'pour'; b.t = 0;
+      if (b.col.y > poolY + 0.12) newDrip(b.col, { z: HT * 0.55, Rmax: 0.12 + 0.12 * b.s, fast: true, repeats: 1 });
+    }
+  } else {
+    b.g *= Math.exp(-dt * 2.2); b.trail *= Math.exp(-dt * 1.5); b.y -= 0.04 * dt;
+    if (b.g < 0.03) b.dead = true;
+  }
+}
+
+// A random point on the mark's face, at or below logo-height v0 and above the oil.
+function facePoint(v0) {
+  const u = (rand() - 0.5) * 0.9;
+  for (let v = v0; v < 0.45; v += 0.01) {
+    if (toWorld(u, v)[1] < poolY + 0.4) return null;
+    if (sd2(u, v) < -0.012) return [u, v];
+  }
+  return null;
+}
+function pourAll() {
+  for (let i = 0; i < 3; i++) {
+    const u = -0.36 + 0.36 * i + (rand() - 0.5) * 0.1;
+    for (let v = -0.47; v < 0.3; v += 0.01) if (sd2(u, v) < -0.01) { newBlob(u, v + 0.03, 1.1 + 0.3 * rand(), 0.4); break; }
+  }
+}
+
+function stepSim(dt) {
+  const S = speed();
+  time += dt;
+  const prevPool = poolY;
+  stepLift(dt);
+  // Edges tearing up out of the oil drag a rope with them.
+  if (poolY < prevPool) {
+    for (const a of ANCHORS) if (a.y >= poolY + 0.06 && a.y < prevPool + 0.06 && rand() < 0.8) newDrip(a, { rope: true });
+  }
+  // ambient drips and globs, only where the coat is still heavy enough to give them
+  if (P.drips > 0) {
+    if (time >= nextDrip) {
+      const free = ANCHORS.filter(a => a.y > poolY + 0.3 && wetAt(a.y) > 0.25);
+      // mostly the long falls into the pool; now and then a short bridge between two arms
+      const pool = rand() < 0.78;
+      const pick = free.filter(a => (a.yLogo < poolY) === pool);
+      const from = pick.length ? pick : free;
+      if (from.length) newDrip(from[Math.floor(rand() * from.length)]);
+      nextDrip = time + (1.6 + 2.6 * rand()) / (P.drips * Math.sqrt(S));
+    }
+    if (time >= nextBlob) {
+      // globs come off the coat just above the drained line, where it is still thick
+      const fp = facePoint(clamp((YC - (drainY + drainD())) / LW, -0.47, 0.4));
+      if (fp) newBlob(fp[0], fp[1] + 0.02, 0.7 + 0.6 * rand(), 1.2);
+      nextBlob = time + (2.5 + 3.5 * rand()) / (P.drips * Math.sqrt(S));
+    }
+  } else { nextDrip = time + 1; nextBlob = time + 1; }
+  for (const d of drips) stepDrip(d, dt, S);
+  for (const b of blobs) stepBlob(b, dt, S);
+  drips = drips.filter(d => !d.dead);
+  blobs = blobs.filter(b => !b.dead);
+  const damp = ringDamp();
+  rings = rings.filter(r => r.amp * Math.exp(-(time - r.t0) * damp) > 4e-4);
+}
+function simulate(dt) { while (dt > 1e-6) { const h = Math.min(dt, 1 / 60); stepSim(h); dt -= h; } }
+
+function resetSim(warm = 0) {
+  seed = 11; time = 0; drips = []; blobs = []; rings = []; nextDrip = 0.2; nextBlob = 1.5;
+  cyc.phase = P.loop ? 'under' : 'rise'; cyc.u = 0; cyc.t = 1.2;     // a short beat under, then the haul
+  lc = P.loop ? 0 : P.lift; poolY = drainY = poolAt(lc);
+  if (warm > 0) simulate(warm);
+}
+
+// ---- pack the scene for the shader ----
+const SA = new Float32Array(MAXS * 4), SB = new Float32Array(MAXS * 4), SC = new Float32Array(MAXS * 4);
+const BA = new Float32Array(MAXB * 4), BB = new Float32Array(MAXB * 4), RG = new Float32Array(MAXR * 4);
+let nS = 0, nB = 0, nR = 0, hAmp = 0.05;
+function pushStrand(x, z, yTop, yBot, rTop, rMid, rBot, bulb, sway, swayAmp, flare, swayW) {
+  if (nS >= MAXS) return;
+  const i = nS++ * 4;
+  SA.set([x, z, yTop, yBot], i); SB.set([rTop, rMid, rBot, bulb], i); SC.set([sway, swayAmp, flare, swayW], i);
+}
+// ---- the hanging wobble: the mark rocks a little on its hanger and turns slightly, more the higher it hangs ----
+// Roll about z and yaw about y, both around a pivot above the mark. The shader gets the inverse; drips and
+// globs ride along through wob().
+const PIVOT_Y = YC + LH / 2 + 2.2;
+let wR = 0, wY = 0;
+function stepWobble() {
+  const k = P.wobble * lc;
+  wR = k * (0.035 * Math.sin(time * 0.7) + 0.014 * Math.sin(time * 1.63 + 1.3));
+  wY = k * 0.07 * Math.sin(time * 0.45 + 0.5);
+}
+function wob(x, y, z) {
+  const cy = Math.cos(wY), sy = Math.sin(wY), cr = Math.cos(wR), sr = Math.sin(wR);
+  const x1 = x * cy + z * sy, z1 = -x * sy + z * cy, y0 = y - PIVOT_Y;   // yaw
+  return [x1 * cr - y0 * sr, PIVOT_Y + x1 * sr + y0 * cr, z1];         // roll
+}
+function pack() {
+  stepWobble();
+  nS = 0;
+  for (const d of drips) {
+    const top0 = d.y + 0.07, sa = d.swayAmp * Math.min(1, d.L / 2.5);
+    const [wx, top, wz] = wob(d.x, top0, d.z);   // the end on the mark moves with it
+    if (d.phase === 'swell' || d.phase === 'fall') {
+      const rTop = Math.max(d.R * 0.75, d.rn * 1.8) + 0.03;
+      pushStrand(wx, wz, top, d.y - d.L, rTop, d.rn, Math.max(d.rn * 1.3, d.R * 0.7), d.R, d.sway, sa, d.flare, d.swayW);
+    } else if (d.phase === 'stream') {
+      const rTop = Math.max(d.R * 0.7, d.rn * 1.8) + 0.03;
+      pushStrand(wx, wz, top, d.yT - 0.15, rTop, d.rn, Math.max(d.baseR, d.rn * d.baseK), d.Rb, d.sway, sa, d.flare, d.swayW);
+    } else if (d.phase === 'recoil') {
+      const rTop = d.Rr * 0.9 + 0.03;
+      pushStrand(wx, wz, top, d.y - d.Lu, rTop, Math.max(d.rn, d.tip * 0.55), d.tip, d.tip * 1.05, d.sway, sa * 0.5, d.flare, d.swayW);
+    } else if (d.phase === 'retire') {
+      pushStrand(wx, wz, top, d.y - d.L, d.R * 0.9 + 0.02, d.R * 0.7, d.R * 0.8, d.R, d.sway, 0, d.flare, d.swayW);
+    }
+    const lo = d.lower;
+    if (lo) {
+      if (lo.stream) pushStrand(lo.x, d.z, lo.top, lo.bot, lo.rn * 1.6, lo.rn, Math.max(d.baseR, lo.rn * d.baseK), 0, d.sway, sa * 0.6, d.flare, d.swayW);
+      else pushStrand(lo.x, d.z, lo.top, lo.bot, 0.004, Math.max(lo.rn, lo.R * 0.25), lo.R * 0.6, lo.R, d.sway, 0.01, 0.08, d.swayW);
+    }
+  }
+  nB = 0;
+  for (const b of blobs) {
+    if (nB >= MAXB) break;
+    const i = nB++ * 4, rz = 0.13 * b.s;
+    const cz = HT + 0.01 + coatMax() * wetAt(b.y) * 0.9;
+    const [bx, by, bz] = wob(b.x, b.y, cz + rz * 0.15);
+    BA.set([bx, by, bz, Math.max(0.001, b.g)], i);
+    BB.set([0.19 * b.s, 0.24 * b.s, rz, b.trail], i);
+  }
+  nR = 0;
+  const damp = ringDamp();
+  let amp = 0;
+  for (const r of rings) {
+    if (nR >= MAXR) break;
+    RG.set([r.x, r.z, r.t0, r.amp], nR++ * 4);
+    amp += r.amp * Math.exp(-(time - r.t0) * damp);
+  }
+  hAmp = 0.04 * P.ripple + Math.min(amp, 0.35) + 0.02;
+}
+
+// ---- renderer ----
+const { canvas } = lab.canvas({ context: 'none' });
+const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, depth: false, stencil: false, preserveDrawingBuffer: true, powerPreference: 'high-performance' });
+
+const VERT = `#version 300 es
+void main() { vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0); }`;
+
+const FRAG = `#version 300 es
+precision highp float;
+uniform vec3 uView;                    // stage center (px), px per square unit
+uniform vec3 uCam, uFwd, uUp, uRight;
+uniform float uDist, uTime;
+uniform mat3 uWob;                     // inverse of the hanging wobble (world → the mark's own frame)
+uniform float uPivotY;
+uniform sampler2D uSdf;
+uniform float uSdfL, uLW, uLH, uYC, uHT, uCoat, uSheet, uMinR;
+uniform int uNS, uNB, uNR, uSteps, uRSteps;
+uniform vec4 uSA[${MAXS}], uSB[${MAXS}], uSC[${MAXS}];
+uniform vec4 uBA[${MAXB}], uBB[${MAXB}];
+uniform vec4 uRing[${MAXR}];
+uniform vec3 uRingK;                   // front speed, wavenumber, damping
+uniform float uSwell, uHMax, uKPool, uPoolY, uDrainY, uDrainD, uCoatMin, uMen, uMenR;
+uniform vec3 uBoxMin, uBoxMax;
+uniform float uF0, uShin, uSoft, uDiffuse;
+uniform int uDbg;
+uniform vec3 uBody, uKey, uFill, uRim, uMarkC;
+uniform int uMark;                     // the solid under the oil: 0 black, 1 neon glow, 2 lacquer
+out vec4 fragColor;
+// Loops run to a uniform count, never "to a constant, then break": on Windows (ANGLE → D3D) a constant bound lets the
+// compiler unroll and inline the whole ray-marcher, and the first compile took ~32 s instead of ~10 s. ZERO is 0 the
+// compiler can't see through, for the loops that do have a fixed count.
+#define ZERO min(uDbg, 0)
+
+float smin(float a, float b, float k) { float h = max(k - abs(a - b), 0.0) / k; return min(a, b) - h * h * k * 0.25; }
+float hash(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+float vnoise(vec2 p) {
+  vec2 i = floor(p), f = fract(p), u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(i), hash(i + vec2(1, 0)), u.x), mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), u.x), u.y);
+}
+
+// ---- the mark, extruded and rounded, under a coat that sags downward over time ----
+// Cubic B-spline lookup from four bilinear taps: a smooth field, so the side walls don't facet under sharp gloss.
+float sdfTex(vec2 uv) {
+  vec2 st = uv * ${SDF_N}.0 - 0.5, i = floor(st), f = st - i;
+  vec2 w0 = (1.0 - f) * (1.0 - f) * (1.0 - f) / 6.0, w1 = (4.0 - 6.0 * f * f + 3.0 * f * f * f) / 6.0;
+  vec2 w3 = f * f * f / 6.0, w2 = 1.0 - w0 - w1 - w3;
+  vec2 s0 = w0 + w1, s1 = w2 + w3;
+  vec2 c0 = (i - 0.5 + w1 / s0) / ${SDF_N}.0, c1 = (i + 1.5 + w3 / s1) / ${SDF_N}.0;
+  return s0.y * (s0.x * textureLod(uSdf, vec2(c0.x, c0.y), 0.0).r + s1.x * textureLod(uSdf, vec2(c1.x, c0.y), 0.0).r)
+       + s1.y * (s0.x * textureLod(uSdf, vec2(c0.x, c1.y), 0.0).r + s1.x * textureLod(uSdf, vec2(c1.x, c1.y), 0.0).r);
+}
+float sdLogo2(vec2 xy) {
+  vec2 b = vec2(xy.x, uYC - xy.y) / uLW;
+  vec2 c = clamp(b, vec2(-uSdfL * 0.99), vec2(uSdfL * 0.99));
+  return (sdfTex((c + uSdfL) / (2.0 * uSdfL)) + length(b - c)) * uLW;
+}
+// How much of the coat is left at height y: 1 just above the drained line (one gloopy mass), falling to 0
+// higher up (the bare, crisp solid). The line creeps down over time, so the mark clears from the top down.
+float wetAt(float y) {
+  // eased into the falloff over half a drain height, so the coat has no crease at the drained line
+  float x = max(y - uDrainY, 0.0), k = 0.5 * uDrainD;
+  return exp(-(x < 2.0 * k ? x * x / (4.0 * k) : x - k) / uDrainD);
+}
+float coatAt(vec3 p, float wet) {
+  // sag lips: the coat thickens slowly going down, then drops off a rounded lip, like paint that runs.
+  // The lips are wavy across the face and the whole pattern slides down at the sheet speed.
+  float wav = vnoise(vec2(p.x * 0.9, 1.3)) * 1.6 + vnoise(vec2(p.x * 2.1 + 5.0, 0.4)) * 0.5;
+  float s = p.y * 1.25 + uTime * uSheet * 1.25 + wav;
+  float w = fract(s);
+  float lip = smoothstep(0.0, 0.8, w) * (1.0 - smoothstep(0.8, 1.0, w));
+  float n = vnoise(vec2(p.x * 0.6, p.y * 0.5 + uTime * uSheet * 0.5));
+  float face = smoothstep(uHT - 0.25, uHT - 0.05, abs(p.z));   // lips run on the faces, not over the tops
+  return uCoatMin + wet * uCoat * (0.75 + 0.55 * n + 0.45 * lip * face * smoothstep(0.15, 0.6, n + 0.2));
+}
+vec3 markSpace(vec3 p) { vec3 v = vec3(0.0, uPivotY, 0.0); return uWob * (p - v) + v; }
+float logoD(vec3 p) {
+  p = markSpace(p);
+  float d2 = sdLogo2(p.xy);
+  float wet = wetAt(p.y);
+  float re = mix(0.03, 0.11, wet);                 // dry: crisp edges; wet: the coat rounds everything off
+  vec2 w = vec2(d2 + re, abs(p.z) - uHT + re);
+  float d = min(max(w.x, w.y), 0.0) + length(max(w, 0.0)) - re;
+  if (d > 1.6) return (d - uCoatMin - uCoat * 1.8) * 0.75;   // far away: a bound, beyond every blend radius
+  return (d - coatAt(p, wet)) * 0.75;
+}
+
+// ---- one hanging strand: a vertical thread that necks in the middle and flares into both ends ----
+float strand(vec3 p, vec4 A, vec4 B, vec4 C) {
+  float L = max(A.z - A.w, 1e-3);
+  float rmax = max(max(B.x, B.z), B.w) + C.y + 0.04;
+  vec3 bc = vec3(A.x, 0.5 * (A.z + A.w), A.y);
+  vec3 q = abs(p - bc) - vec3(rmax, 0.5 * L + B.w + 0.04, rmax);
+  float db = length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0);
+  if (db > 1.0) return db * 0.7;        // past every smin radius even after the 0.7 safety scale, so the shortcut never shows
+  float h = clamp((A.z - p.y) / L, 0.0, 1.0);
+  float sw = sin(uTime * C.w + C.x) * C.y * 4.0 * h * (1.0 - h);
+  vec2 c = vec2(A.x + sw, A.y + sw * 0.5 * cos(C.x));
+  // top flare: a short cone pulled from the edge; bottom flare: a long pear shape into the bulb
+  float kt = max(2.0, L / C.z);
+  float kb = max(1.6, L / (C.z + 2.4 * B.w));
+  float r = B.y + (B.x - B.y) * pow(1.0 - h, kt) + (B.z - B.y) * pow(h, kb);
+  r = max(r, uMinR);
+  float dy = max(p.y - A.z, A.w - p.y);
+  float dr = length(p.xz - c);
+  float d = (dy > 0.0 ? length(vec2(max(dr - r, 0.0), dy)) + min(dr - r, 0.0) : dr - r) * 0.7;
+  if (B.w > 0.002) {
+    // the bulb hangs a little below the end of the thread and is a touch taller than wide
+    vec3 bq = p - vec3(A.x, A.w - B.w * 0.35, A.y);
+    bq.y /= 1.22;
+    d = smin(d, (length(bq) - B.w) * 0.85, 0.1);
+  }
+  return d;
+}
+// a glob sliding down the face, trailing a streak
+float blob(vec3 p, vec4 A, vec4 B) {
+  vec3 d = p - A.xyz;
+  float ty = clamp(d.y, 0.0, B.w);
+  vec3 e = d - vec3(0.0, ty, 0.0);
+  float tr = mix(1.0, 0.4, ty / max(B.w, 1e-3));
+  vec3 rr = B.xyz * A.w * vec3(tr, 1.0, tr);
+  return (length(e / rr) - 1.0) * min(rr.x, min(rr.y, rr.z));
+}
+float mapBody(vec3 p) {
+  float d = logoD(p);
+  for (int i = 0; i < uNB; i++) { d = smin(d, blob(p, uBA[i], uBB[i]), 0.1); }
+  float ds = 1e3;
+  for (int i = 0; i < uNS; i++) { ds = smin(ds, strand(p, uSA[i], uSB[i], uSC[i]), 0.05); }
+  return smin(d, ds, 0.13);
+}
+
+// ---- the pool: slow swell plus damped rings from every impact ----
+float poolH(vec2 q) {
+  // long, slow, heavy swell: three wide wave trains, no chop
+  float h = uPoolY + uSwell * (sin(q.x * 0.31 + q.y * 0.62 - uTime * 0.36) * 0.6 + sin(-q.x * 0.52 + q.y * 0.4 - uTime * 0.27 + 1.7) * 0.4
+          + sin(q.x * 0.9 - q.y * 0.8 - uTime * 0.45 + 0.4) * 0.12);
+  for (int i = 0; i < uNR; i++) {
+    vec4 R = uRing[i];
+    float a = uTime - R.z;
+    vec2 dq = q - R.xy;
+    float r2 = dot(dq, dq), r = sqrt(r2);
+    float x = r - uRingK.x * a;
+    float sig = 0.25 + 0.2 * a;
+    float decay = exp(-a * uRingK.z);
+    h += R.w * decay * (exp(-x * x / (sig * sig)) * cos(uRingK.y * x) / sqrt(1.0 + 2.5 * r)
+                        - 2.2 * exp(-r2 * 9.0) * a * exp(-a * 2.6));
+  }
+  return h;
+}
+float mapAll(vec3 p) {
+  float b = mapBody(p);
+  // meniscus: the oil climbs whatever pokes through it, a thick skirt that falls away over uMenR
+  float s = 1.0 - clamp(b / uMenR, 0.0, 1.0);
+  float pl = (p.y - poolH(p.xz) - uMen * s * s * s) * 0.8 / (1.0 + 3.0 * uMen / uMenR);
+  return smin(b, pl, uKPool);
+}
+
+vec2 boxHit(vec3 ro, vec3 rd, vec3 bmin, vec3 bmax) {
+  vec3 inv = 1.0 / rd;
+  vec3 t0 = (bmin - ro) * inv, t1 = (bmax - ro) * inv;
+  vec3 tmin = min(t0, t1), tmax = max(t0, t1);
+  return vec2(max(max(tmin.x, tmin.y), tmin.z), min(min(tmax.x, tmax.y), tmax.z));
+}
+
+// ---- studio: near-black room, a wide warm key strip behind the mark, a fill behind the camera, a low rim ----
+float gShin = 100.0, gSoft = 0.02;
+float band(float x, float a, float b, float s) { return smoothstep(a - s, a + s, x) * (1.0 - smoothstep(b - s, b + s, x)); }
+vec3 env(vec3 d) {
+  float el = asin(clamp(d.y, -1.0, 1.0));
+  float az = atan(d.x, -d.z);                       // 0 = straight past the mark, away from the camera
+  vec3 c = vec3(0.0022, 0.0021, 0.002) * (0.5 + clamp(d.y + 0.3, 0.0, 1.0));
+  float s = gSoft;
+  // key: one long thin strip low behind the scene, in three panes; the oil draws it as wavering lines
+  float pane = band(az, -1.0, -0.36, s * 2.0) + band(az, -0.28, 0.28, s * 2.0) + band(az, 0.36, 1.0, s * 2.0);
+  c += uKey * band(el, 0.372, 0.381, s * 0.3) * pane * 3.2;
+  c += uKey * band(el, 0.258, 0.268, s * 0.4) * band(az, -0.7, 0.7, s * 2.0) * 0.9;
+  // high overhead softbox: tops of the arms and the crowns of every bead
+  c += uKey * band(el, 0.95, 1.45, s * 2.0) * band(az, -0.7, 0.7, s * 3.0) * 1.4;
+  // fill behind and above the camera: the sag lips on the faces catch it
+  float azb = atan(d.x, d.z);
+  c += uFill * band(el, 0.12, 0.85, s * 3.0) * band(azb, -0.8, 0.8, s * 3.0) * 0.3;
+  // tall strips either side: vertical threads see these (via the pool) as bright edges
+  float side = band(abs(az), 1.35, 1.75, s * 2.0);
+  c += uRim * side * band(el, -0.05, 0.42, s * 2.0) * 0.9;
+  // a hairline on the horizon behind: the rim on every top curve
+  c += uRim * band(el, 0.012, 0.05, s * 0.8) * band(az, -1.2, 1.2, s * 4.0) * 1.3;
+  return c;
+}
+vec3 spots(vec3 n, vec3 rd) {
+  // two tight specular points: the hard glints on every bead and bulge
+  vec3 l1 = normalize(vec3(-0.35, 0.8, -0.5)), l2 = normalize(vec3(0.55, 0.7, 0.45));
+  float s1 = pow(max(dot(n, normalize(l1 - rd)), 0.0), gShin), s2 = pow(max(dot(n, normalize(l2 - rd)), 0.0), gShin * 0.7);
+  return (uKey * s1 * 1.0 + uFill * s2 * 0.45) * (gShin * 0.012 + 0.4);
+}
+vec3 liquidB(vec3 n, vec3 rd, vec3 refl, float ao, float rim, vec3 body, float diffuse) {
+  float ndv = clamp(dot(n, -rd), 0.0, 1.0);
+  float F = uF0 + (1.0 - uF0) * pow(1.0 - ndv, 5.0);
+  vec3 col = refl * F + spots(n, rd) * mix(F, 1.0, 0.25);
+  // thin bright rim where the surface turns away from us: the edge light that outlines oil in the dark
+  col += uRim * rim * pow(1.0 - ndv, 6.0) * (0.25 + 0.75 * clamp(n.y + 0.6, 0.0, 1.0)) * 0.9;
+  float wrap = 0.35 + 0.65 * clamp(n.y * 0.6 + 0.4 + dot(n, normalize(vec3(0.3, 0.5, 0.8))) * 0.4, 0.0, 1.0);
+  col += body * (0.02 + diffuse * wrap) * (1.0 - F) * ao;
+  col += body * diffuse * pow(1.0 - ndv, 3.0) * 0.6 * ao;  // light through thin edges
+  return col;
+}
+vec3 liquid(vec3 n, vec3 rd, vec3 refl, float ao, float rim) { return liquidB(n, rd, refl, ao, rim, uBody, uDiffuse); }
+
+// The solid mark under the oil. How much oil sits on it here is just the distance down to the bare solid:
+// where that is nearly nothing the mark shows; through a thick coat it is a faint smoky tint, and in the
+// thin film at the draining front the oil throws an interference rainbow.
+float bareLogo(vec3 p) {
+  p = markSpace(p);
+  float re = mix(0.03, 0.11, wetAt(p.y));   // the same rounded core the coat is laid over (see logoD)
+  vec2 w = vec2(sdLogo2(p.xy) + re, abs(p.z) - uHT + re);
+  return min(max(w.x, w.y), 0.0) + length(max(w, 0.0)) - re;
+}
+vec3 reveal(vec3 col, vec3 p, vec3 n, vec3 rd, vec3 refl, float ao) {
+  if (uMark == 0) return col;
+  // oil thickness over the solid: measured, but never less than the coat the drain model says is there,
+  // so rays that start inside the oil (reflections off the meniscus) can't see through it
+  float th = max(bareLogo(p) - uCoatMin, wetAt(p.y) * uCoat * 0.75);
+  if (th > 0.4) return col;
+  float show = exp(-th * 45.0);                       // 1 bare, a faint tint under a full coat
+  float ndv = clamp(dot(n, -rd), 0.0, 1.0);
+  if (uMark == 1) {
+    // a neon tube: hottest face-on, a whiter core where it is bare
+    vec3 glow = uMarkC * (0.35 + 0.55 * ndv * ndv) + uMarkC * uMarkC * 0.25 * pow(ndv, 4.0);
+    col = col * (1.0 - 0.5 * show) + glow * show;
+  } else {
+    col = mix(col, liquidB(n, rd, refl, ao, 0.6, uMarkC * 0.55, 0.6), show);
+  }
+  // thin-film colours where the oil is a whisker thick: the hue runs with the thickness
+  float film = smoothstep(0.006, 0.02, th) * (1.0 - smoothstep(0.03, 0.075, th));
+  vec3 hue = 0.5 + 0.5 * cos(6.2832 * (th * 18.0 + vec3(0.0, 0.33, 0.67)));
+  col += hue * film * (dot(refl, vec3(0.33)) * 2.5 + 0.06);
+  return col;
+}
+// Tetrahedral normals as a loop the compiler can't unroll, so the map is inlined once per normal, not four times.
+vec3 tet(int i) { return vec3(float(((i + 3) >> 1) & 1), float((i >> 1) & 1), float(i & 1)) * 2.0 - 1.0; }
+vec3 normalBody(vec3 p) {
+  vec3 n = vec3(0.0);
+  for (int i = ZERO; i < 4; i++) { vec3 k = tet(i); n += k * mapBody(p + k * 0.003); }
+  return normalize(n);
+}
+vec3 normalAll(vec3 p, float e) {
+  vec3 n = vec3(0.0);
+  for (int i = ZERO; i < 4; i++) { vec3 k = tet(i); n += k * mapAll(p + k * e); }
+  return normalize(n);
+}
+// what a mirror-like surface sees in direction R from p: the mark (if the ray finds it) or the room
+vec3 trace2(vec3 p, vec3 R) {
+  if (R.y < 0.0) {
+    // looking down at the pool: a darker mirror of the room
+    vec3 Rm = reflect(R, vec3(0, 1, 0));
+    float F = uF0 + (1.0 - uF0) * pow(1.0 - clamp(-R.y, 0.0, 1.0), 5.0);
+    return env(Rm) * min(1.0, F * 1.6);
+  }
+  vec2 rb = boxHit(p, R, uBoxMin, uBoxMax);
+  if (uRSteps > 0 && rb.x < rb.y && rb.y > 0.0) {
+    float t = max(rb.x, 0.04);
+    for (int i = 0; i < uRSteps; i++) {
+      vec3 q = p + R * t;
+      float d = mapBody(q);
+      if (d < 0.004 * (1.0 + t)) {
+        vec3 n = normalBody(q);
+        vec3 R2 = reflect(R, n);
+        vec3 e2 = R2.y < 0.0 ? env(reflect(R2, vec3(0, 1, 0))) * 0.08 : env(R2);
+        return reveal(liquid(n, R, e2, 1.0, 0.5), q, n, R, e2, 1.0);
+      }
+      t += d;
+      if (t > rb.y) break;
+    }
+  }
+  return env(R);
+}
+
+vec3 aces(vec3 x) { return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0); }
+
+void main() {
+  vec2 s = (gl_FragCoord.xy - uView.xy) / uView.z;
+  vec3 right = uRight;
+  vec3 ro = uCam;
+  vec3 rd = normalize(uFwd * uDist + right * s.x + uUp * s.y);
+  bool hit = false, near = false;
+  float t = 0.0;
+  vec2 tb = boxHit(ro, rd, uBoxMin, uBoxMax);
+  bool inBox = tb.x < tb.y && tb.y > 0.0;
+  float resume = -1.0;
+  // A ray that enters the box's front face already under the surface met the pool before the box:
+  // leave it to the heightfield march.
+  vec3 pe = ro + rd * max(tb.x, 0.0);
+  bool wet = inBox && pe.y < poolH(pe.xz);
+  if (wet) inBox = false;
+  if (inBox) {
+    t = max(tb.x, 0.0);
+    bool exited = false;
+    float d = 1.0;
+    for (int i = 0; i < uSteps; i++) {
+      d = mapAll(ro + rd * t);
+      if (d < 0.00035 * t) { hit = true; break; }
+      t += d;
+      if (t > tb.y) { exited = true; break; }
+    }
+    // Out of steps: if we're touching something, call it a hit; if we're skimming the pool, let the
+    // heightfield march below finish the job from here.
+    if (!hit && !exited) { if (d < 0.004 * t) hit = true; else resume = t; }
+    near = hit;
+  }
+  if (!hit && rd.y < 0.0) {
+    // open pool: march the heightfield alone
+    float t0 = (uHMax - ro.y) / rd.y;
+    t = resume > 0.0 ? max(t0, resume) : inBox ? max(t0, tb.y) : t0;
+    for (int i = ZERO; i < 40; i++) {
+      vec3 p = ro + rd * t;
+      float d = p.y - poolH(p.xz);
+      if (d < 0.0008 * t) break;
+      t += d / (-rd.y + 0.3);
+      if (t > 400.0) break;
+    }
+    hit = true;
+  }
+  vec3 p = ro + rd * t;
+  vec3 n = vec3(0.0, 1.0, 0.0);
+  float bodyW = 0.0, ao = 1.0, nvar = 0.0;
+  float fp = t / (uDist * uView.z);                      // one pixel's width in world units at this depth
+  if (hit) {
+    if (near) {
+      n = normalAll(p, 0.00012 * t);
+      float b = mapBody(p), pl = p.y - poolH(p.xz);
+      bodyW = clamp((pl - b) / 0.08 + 0.25, 0.0, 1.0);      // 0 on open pool, 1 on the mark and its drips
+      ao = clamp(0.45 + 0.55 * mapAll(p + n * 0.14) * (1.0 + 3.0 * uMen / uMenR) / 0.112, 0.0, 1.0);   // undo the pool field's scaling
+      vec3 nb = normalAll(p, fp * 1.5); nvar = dot(n - nb, n - nb) * 4.0;
+    } else {
+      float h0 = poolH(p.xz), e = 0.5 * fp, E = 2.0 * fp;
+      n = normalize(vec3(h0 - poolH(p.xz + vec2(e, 0.0)), e, h0 - poolH(p.xz + vec2(0.0, e))));
+      n = normalize(mix(n, vec3(0.0, 1.0, 0.0), smoothstep(45.0, 110.0, t) * 0.7));   // far oil reads calmer
+      vec3 nb = normalize(vec3(h0 - poolH(p.xz + vec2(E, 0.0)), E, h0 - poolH(p.xz + vec2(0.0, E))));
+      nvar = dot(n - nb, n - nb) * 4.0;
+    }
+  }
+  // Specular anti-aliasing: where the surface turns a lot inside one pixel (fine normal vs a pixel-wide one),
+  // widen the highlights instead of letting them sparkle as single bright pixels.
+  nvar = min(nvar, 1.0);
+  gShin = uShin / (1.0 + uShin * nvar * 0.6);
+  gSoft = uSoft + sqrt(nvar) * 1.6;
+  vec3 col;
+  if (!hit) {
+    col = env(rd);
+  } else {
+    vec3 R = reflect(rd, n);
+    vec3 refl = trace2(p + n * mix(0.02, 0.03, bodyW), R);
+    col = liquid(n, rd, refl, ao, bodyW);
+    if (near) col = reveal(col, p, n, rd, refl, ao);
+    // far oil fades into the dark
+    col *= exp(-max(t - DIST_FADE, 0.0) * 0.035);
+  }
+  if (uDbg == 1) col = vec3(bodyW, near ? 1.0 : 0.0, 0.0);
+  if (uDbg == 2) col = vec3(nvar * 10.0);
+  if (uDbg == 3) col = n * 0.5 + 0.5;
+  if (uDbg > 0) { fragColor = vec4(col, 1.0); return; }
+  // vignette
+  vec2 vq = (gl_FragCoord.xy - uView.xy) / (uView.z * 10.0);
+  col *= 1.0 - 0.35 * smoothstep(0.35, 1.1, length(vq * vec2(0.8, 1.0)));
+  col = aces(col * 1.15);
+  fragColor = vec4(pow(col, vec3(1.0 / 2.2)), 1.0);
+}`.replace('DIST_FADE', (DIST + 6).toFixed(1));
+
+let prog = null, U = {}, shaders = [];
+let warming = false;   // true until the shader has compiled; the site's feed waits on window.labWarming before showing the lab
+// The ray-marcher is a big shader: on Windows (ANGLE → D3D) its first compile can take half a minute, and asking for
+// its status blocks the page until it's done. With KHR_parallel_shader_compile the GPU process compiles it in the
+// background while compileReady() polls each frame; without the extension this falls back to one blocking compile.
+const parallel = gl?.getExtension('KHR_parallel_shader_compile');
+function compileStart() {
+  const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); return s; };
+  shaders = [sh(gl.VERTEX_SHADER, VERT), sh(gl.FRAGMENT_SHADER, FRAG)];
+  prog = gl.createProgram();
+  shaders.forEach(s => gl.attachShader(prog, s));
+  gl.linkProgram(prog);
+}
+const compileReady = () => !parallel || gl.getProgramParameter(prog, parallel.COMPLETION_STATUS_KHR);
+function compile() {
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    const log = shaders.map(s => gl.getShaderInfoLog(s)).filter(Boolean).join('\n');
+    throw new Error(log || gl.getProgramInfoLog(prog));
+  }
+  gl.useProgram(prog);
+  const n = gl.getProgramParameter(prog, gl.ACTIVE_UNIFORMS);
+  for (let i = 0; i < n; i++) { const name = gl.getActiveUniform(prog, i).name.replace(/\[0\]$/, ''); U[name] = gl.getUniformLocation(prog, name); }
+  gl.bindVertexArray(gl.createVertexArray());
+  const tex = gl.createTexture();
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.R16F, SDF_N, SDF_N, 0, gl.RED, gl.HALF_FLOAT, bakeSdf());
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.uniform1i(U.uSdf, 0);
+}
+const u1 = (k, v) => U[k] && gl.uniform1f(U[k], v), i1 = (k, v) => U[k] && gl.uniform1i(U[k], v);
+const u3 = (k, a, b, c) => U[k] && gl.uniform3f(U[k], a, b, c);
+const lin = hex => { const c = parseInt(hex.slice(1), 16); return [(c >> 16 & 255) / 255, (c >> 8 & 255) / 255, (c & 255) / 255].map(v => Math.pow(v, 2.2)); };
+
+let sq = lab.square(), dirty = true, pxPerUnit = 1;
+function applySize() {
+  const Q = QUALITY[P.quality] || QUALITY.medium;
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const k = Math.min(dpr * Q.scale, Q.maxPx || Infinity);
+  canvas.width = Math.max(2, Math.round(sq.w * k));
+  canvas.height = Math.max(2, Math.round(sq.h * k));
+  pxPerUnit = sq.size * k / SQ;
+  dirty = true;
+}
+lab.on('resize', s => { sq = s; applySize(); });
+
+let liq = OIL.liq;
+lab.on('palette', p => { liq = p.liq || BENCH_LIQ; dirty = true; });
+lab.on('change', key => { dirty = true; if (key === 'quality') applySize(); });
+
+function render() {
+  if (!gl || warming) return;
+  pack();
+  const Q = QUALITY[P.quality] || QUALITY.medium;
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  const phi = P.tilt * Math.PI / 180, sn = Math.sin(phi), cs = Math.cos(phi);
+  u3('uView', canvas.width / 2, canvas.height / 2, pxPerUnit);
+  {
+    // handheld: slow drift in yaw, pitch and roll plus a little sway of the body, from overlapping sines
+    // at unrelated rates (never repeats), and a faint quicker tremor on top
+    const h = P.handheld, t = time, D = Math.PI / 180;
+    const yaw = h * D * (0.45 * Math.sin(t * 0.41 + 1.0) + 0.22 * Math.sin(t * 1.13) + 0.05 * Math.sin(t * 3.7 + 2.0));
+    const pit = h * D * (0.38 * Math.sin(t * 0.53) + 0.2 * Math.sin(t * 1.37 + 2.0) + 0.04 * Math.sin(t * 4.1 + 0.7));
+    const rol = h * D * (0.3 * Math.sin(t * 0.71 + 0.3) + 0.1 * Math.sin(t * 1.9 + 1.1));
+    const ph = phi + pit, s2 = Math.sin(ph), c2 = Math.cos(ph), sy = Math.sin(yaw), cy = Math.cos(yaw);
+    const fwd = [-c2 * sy, -s2, -c2 * cy], rt = [cy, 0, -sy];
+    const up = [rt[1] * fwd[2] - rt[2] * fwd[1], rt[2] * fwd[0] - rt[0] * fwd[2], rt[0] * fwd[1] - rt[1] * fwd[0]];
+    const cr = Math.cos(rol), sr = Math.sin(rol);
+    const R = rt.map((v, k) => v * cr + up[k] * sr), Up = up.map((v, k) => v * cr - rt[k] * sr);
+    const dx = h * 0.05 * Math.sin(t * 0.37 + 0.4), dy = h * 0.035 * Math.sin(t * 0.61 + 2.2);
+    u3('uCam', dx, YC + DIST * sn + dy, DIST * cs); u3('uFwd', ...fwd); u3('uUp', ...Up); u3('uRight', ...R);
+  }
+  u1('uDist', DIST); u1('uTime', time);
+  {
+    const cy = Math.cos(wY), sy = Math.sin(wY), cr = Math.cos(wR), sr = Math.sin(wR);
+    // inverse of wob(): undo the roll about z, then the yaw about y. Listed column by column, as GLSL wants.
+    if (U.uWob) gl.uniformMatrix3fv(U.uWob, false, [cy * cr, -sr, sy * cr,  cy * sr, cr, sy * sr,  -sy, 0, cy]);
+    u1('uPivotY', PIVOT_Y);
+  }
+  u1('uSdfL', SDF_L); u1('uLW', LW); u1('uLH', LH); u1('uYC', YC); u1('uHT', HT);
+  const S = speed();
+  u1('uCoat', coatMax()); u1('uCoatMin', 0.008); u1('uPoolY', poolY); u1('uDrainY', drainY); u1('uDrainD', drainD()); u1('uSheet', 0.06 * S); u1('uMinR', 0.55 / pxPerUnit);
+  i1('uNS', nS); i1('uNB', nB); i1('uNR', nR); const dbg = window.__lab?.debug || {};
+  i1('uDbg', dbg.mode ?? 0); i1('uSteps', dbg.steps ?? Q.steps); i1('uRSteps', dbg.refl ?? Q.refl);
+  if (U.uSA) { gl.uniform4fv(U.uSA, SA); gl.uniform4fv(U.uSB, SB); gl.uniform4fv(U.uSC, SC); }
+  if (U.uBA) { gl.uniform4fv(U.uBA, BA); gl.uniform4fv(U.uBB, BB); }
+  if (U.uRing) gl.uniform4fv(U.uRing, RG);
+  u3('uRingK', 0.75 * Math.pow(S, 0.25), 2 * Math.PI / 0.85, ringDamp());
+  u1('uSwell', 0.022 * P.ripple); u1('uHMax', poolY + hAmp); u1('uKPool', 0.32 + 0.3 * (1 - lc)); u1('uMen', 0.5 * P.meniscus); u1('uMenR', 0.65);
+  const yTop = YC + LH / 2 + 0.5;
+  u3('uBoxMin', -LW / 2 - 0.7, poolY - hAmp - 0.05, -HT - 0.75); u3('uBoxMax', LW / 2 + 0.7, yTop, HT + 0.75);
+  u1('uF0', liq.f0); u1('uShin', 40 + Math.pow(P.gloss, 2) * 2400); u1('uSoft', mix(0.09, 0.008, P.gloss)); u1('uDiffuse', liq.diffuse);
+  u3('uBody', ...lin(liq.body)); u3('uKey', ...lin(liq.key)); u3('uFill', ...lin(liq.fill)); u3('uRim', ...lin(liq.rim)); u3('uMarkC', ...lin((lab.palette.liq || BENCH_LIQ).mark)); i1('uMark', { oil: 0, neon: 1, lacquer: 2 }[P.under] ?? 1);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  dirty = false;
+}
+
+// ---- HUD: viscosity, what's hanging, and the pinch-off clock for the thinnest neck ----
+function hud() {
+  const mu = muOf(P.viscosity);
+  let threads = 0, thin = Infinity;
+  for (const d of drips) if (d.phase === 'fall' || d.phase === 'stream') { threads++; thin = Math.min(thin, d.rn); }
+  const MM = 50;  // the mark is 30 cm wide, so one world unit is 50 mm
+  const coatMM = coatMax() * wetAt(FEET + 0.3) * MM;
+  let s = `lift <b>${Math.round(lc * 100)}%</b> · coat at the feet <b>${coatMM.toFixed(0)} mm</b> · μ <b>${Math.round(mu)} Pa·s</b> · ropes <b>${threads}</b>`;
+  if (thin < Infinity) {
+    const R = thin * MM / 1000, tau = mu * R / 0.032;   // γ ≈ 32 mN/m for an oil
+    s += ` · thinnest neck <b>${(thin * MM).toFixed(1)} mm</b> · τ ≈ μR/γ <b>${tau.toFixed(0)} s</b>`;
+  }
+  lab.hud(s);
+}
+
+// ---- pointer: the pool takes ripples and wakes, the mark takes a glob that pours into a drip ----
+let lastInteract = -1e9;
+const nowS = () => performance.now() / 1000;
+function wake() { lastInteract = nowS(); dirty = true; }
+function pick(e) {
+  const r = canvas.getBoundingClientRect();
+  const sx = (e.clientX - r.left - r.width / 2) / sq.size * SQ, sy = -(e.clientY - r.top - r.height / 2) / sq.size * SQ;
+  const phi = P.tilt * Math.PI / 180, sn = Math.sin(phi), cs = Math.cos(phi);
+  const ro = [0, YC + DIST * sn, DIST * cs];
+  const rd = [sx, -sn * DIST + cs * sy, -cs * DIST - sn * sy];
+  // the mark's front face
+  const zf = HT + 0.05;
+  const tf = (zf - ro[2]) / rd[2];
+  const fx = ro[0] + rd[0] * tf, fy = ro[1] + rd[1] * tf;
+  const u = fx / LW, v = (YC - fy) / LW;
+  if (fy > poolY + 0.05 && sd2(u, v) < 0.012) return { logo: true, u, v };
+  if (rd[1] >= 0) return null;
+  const tp = (poolY - ro[1]) / rd[1];
+  return { logo: false, x: ro[0] + rd[0] * tp, z: ro[2] + rd[2] * tp };
+}
+let drag = null;
+canvas.style.touchAction = 'pan-y';
+canvas.style.cursor = 'pointer';
+canvas.tabIndex = 0;
+canvas.setAttribute('aria-label', 'A pool of black oil with the mark standing in it. Tap the pool for a ripple, tap the mark to pour a drip. Enter pours on the mark, space drops a stone.');
+canvas.addEventListener('pointerdown', e => {
+  const h = pick(e); if (!h) return;
+  wake();
+  if (h.logo) {
+    const sd = sd2(h.u, h.v);
+    if (newBlob(h.u, sd < -0.006 ? h.v : h.v - 0.012, 1.35, 0.3) === null) { const c = columnFrom(h.u, h.v); if (c) newDrip(c, { z: HT * 0.5, fast: true }); }
+    drag = null;
+  } else {
+    addRing(h.x, h.z, 0.13 * P.ripple);
+    drag = { x: h.x, z: h.z, id: e.pointerId };
+  }
+});
+canvas.addEventListener('pointermove', e => {
+  if (!drag || drag.id !== e.pointerId) return;
+  const h = pick(e); if (!h || h.logo) return;
+  const d = Math.hypot(h.x - drag.x, h.z - drag.z);
+  if (d > 0.3) { addRing(h.x, h.z, Math.min(0.07, 0.03 + d * 0.02) * P.ripple); drag.x = h.x; drag.z = h.z; wake(); }
+});
+const endDrag = () => { drag = null; };
+canvas.addEventListener('pointerup', endDrag); canvas.addEventListener('pointercancel', endDrag); canvas.addEventListener('pointerleave', endDrag);
+canvas.addEventListener('keydown', e => {
+  if (e.key === 'Enter') { pourAll(); wake(); e.preventDefault(); }
+  if (e.key === ' ') { addRing(0.4 - 1.6 * rand(), 2.2 + 1.2 * rand(), 0.16 * P.ripple); wake(); e.preventDefault(); }
+});
+
+// ---- boot ----
+const WARM = 0.2, CALM_T = 7.5;   // calm: hanging just after the haul, ropes still joined to the pool
+if (!gl) {
+  lab.hud('This lab needs WebGL2, which this browser has turned off.');
+} else {
+  compileStart();
+  ANCHORS = buildAnchors();
+  resetSim(lab.calm ? CALM_T : WARM);
+  applySize();
+}
+warming = window.labWarming = !!gl;
+if (warming) lab.hud('compiling the shader…');
+let failed = false;
+function finishWarming() {
+  try { compile(); } catch (e) {
+    // say so once and stop polling; the render loop stays off (warming), but nothing waits on it any more
+    failed = true; window.labWarming = false;
+    console.error(e);
+    lab.hud('The shader didn’t compile on this device.');
+    return;
+  }
+  warming = window.labWarming = false;
+  render(); hud();
+}
+lab.on('reset', () => { lab.set('loop', true); dirty = true; });
+// Scrubbing the lift takes over from the loop; turning the loop back on carries on from where the scrub left it.
+lab.on('change', (key, v) => {
+  if (key === 'lift' && P.loop) lab.set('loop', false);
+  if (key === 'loop' && v) { cyc.phase = 'rise'; cyc.u = lc; cyc.t = 0; }
+  if (key === 'lift' || key === 'loop') wake();
+});
+
+window.__lab = {
+  // Rebuild the scene from the seed and simulate to time t (seconds), then draw. Same t → same frame.
+  renderOnce(t = WARM) { resetSim(t); render(); hud(); return { time, drips: drips.length, rings: rings.length }; },
+  // Advance n steps of dt from wherever the simulation is, then draw.
+  frames(n = 1, dt = 1 / 60) { for (let i = 0; i < n; i++) simulate(dt); render(); hud(); return { time, drips: drips.length }; },
+  step(n = 1, dt = 1 / 60) { return this.frames(n, dt); },
+  ripple(x = 0, z = 3, amp = 0.13) { addRing(x, z, amp); render(); },
+  pour() { pourAll(); },
+  drip(u = -0.3, v = 0) { const c = columnFrom(u, v); return c ? !!newDrip(c, { z: HT * 0.5, fast: true }) : false; },
+  // GPU time per frame: n synchronous renders, timed between two pixel reads.
+  perf(n = 30) { const px = new Uint8Array(4); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); const t0 = performance.now(); for (let i = 0; i < n; i++) { simulate(1 / 60); render(); } gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); return +((performance.now() - t0) / n).toFixed(2); },
+  state: () => ({ time, anchors: ANCHORS.length, drips: drips.map(d => ({ phase: d.phase, x: +d.x.toFixed(2), y: +d.y.toFixed(2), z: +d.z.toFixed(2), yT: +d.yT.toFixed(2), R: +d.R.toFixed(3), L: +d.L.toFixed(2), rn: +d.rn.toFixed(4), toPool: d.toPool, lower: !!d.lower })), lift: +lc.toFixed(3), phase: cyc.phase, poolY: +poolY.toFixed(2), drainY: +drainY.toFixed(2), blobs: blobs.length, merges, rings: rings.length, strands: nS, canvas: [canvas.width, canvas.height] }),
+  params: P, set: (k, v) => lab.set(k, v)
+};
+
+let hudTick = 0;
+lab.loop(dt => {
+  if (!gl) return;
+  if (warming) { if (!failed && compileReady()) finishWarming(); return; }
+  const active = !lab.calm || nowS() - lastInteract < 10;
+  if (active) simulate(dt);
+  if (active || dirty) render();
+  if (++hudTick % 10 === 0) hud();
+});
+</script>
