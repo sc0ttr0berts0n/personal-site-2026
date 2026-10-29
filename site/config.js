@@ -19,7 +19,7 @@ export const NO_PRELOAD = [];
 // touch: 'tap' | 'hold' | 'drag' gets pointer input in the middle of the screen; 'none' lets a drag anywhere swipe.
 // hint: a few words shown over the toy when it arrives, until it's touched. Touch wording; mice see the lab's own hint.
 export const TOUCH = {
-  prism:    { touch: 'drag', hint: 'drag to aim the laser' },
+  prism:    { touch: 'drag', hint: 'drag to aim · drag the emitter to move it' },
   fluid:    { touch: 'drag', hint: 'drag to tilt · flick to slosh' },
   goop:     { touch: 'drag', hint: 'tap the pool · tap the mark' },
   knockout: { touch: 'drag', hint: 'pull back · let go to throw' },

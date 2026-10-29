@@ -41,8 +41,8 @@ const lab = createLab({
   title: 'Prism',
   blurb: 'A laser crosses the mark from above. Each color bends at its own angle, and steep rays get trapped, bouncing around inside the glass.',
   teaches: 'three.js loaded straight from a CDN through an import map, with no build step. A custom GLSL shader bends the background grid through the glass once per color channel, which is where the rainbow fringes come from, and the beams are pixel-exact screen-space lines with bloom on top. The beams follow Snell’s law at seven wavelengths; the grid fakes it with three, one per color channel.',
-  hint: 'move to aim<br>on touch: drag to aim',
-  feed: { touch: 'drag', hint: 'drag to aim the laser' },
+  hint: 'move to aim · drag the emitter to move it<br>on touch: drag to aim',
+  feed: { touch: 'drag', hint: 'drag to aim · drag the emitter to move it' },
   palettes: ['spectrum', 'synthwave', 'reef', 'ember', 'aurora', 'ultraviolet',
     { key: 'neonred', name: 'Neon Red', bg: '#000000', grid: '#170505', ink: '#ff3a24', colors: ['#ff1a0c', '#ff3b22', '#ff5a3a', '#e8200f', '#b80c05'] }],
   defaultPalette: 'spectrum',
@@ -477,20 +477,39 @@ lab.on('change', key => {
 buildBacklight();
 buildEdges(lab.params.rotation);
 
-// pointer: the emitter stays put on the left, and the beam aims at the pointer.
+// pointer: the beam aims at the pointer, and dragging the emitter itself moves it.
 // A mouse aims by hovering; a finger can't hover, so it aims while dragging and the beam holds that angle after it lifts.
+// While the emitter is dragged the aim point stays where it was, so the beam keeps pointing at it from the new spot.
 const toWorld = e => {
   const r = canvas.getBoundingClientRect();
   return { x: (e.clientX - r.left - sq.w / 2) * k / camera.zoom, z: (e.clientY - r.top - sq.h / 2) * k / camera.zoom };
 };
-let aim = null;
-const source = { x: -4.4, z: 1.1 };
-canvas.addEventListener('pointermove', e => { aim = toWorld(e); });
-canvas.addEventListener('pointerleave', e => { if (e.pointerType !== 'touch') aim = null; });
-canvas.addEventListener('pointerdown', e => {
-  if (e.pointerType === 'touch') canvas.setPointerCapture(e.pointerId);
-  aim = toWorld(e);
+let aim = null, source = { x: -4.4, z: 1.1 }, moving = null;
+// within a fingertip (about 24 px) of the emitter, or 0.6 units, whichever is bigger
+const onEmitter = (p, e) => Math.hypot(p.x - source.x, p.z - source.z) < Math.max(0.6, (e.pointerType === 'touch' ? 24 : 12) * k / camera.zoom);
+canvas.addEventListener('pointermove', e => {
+  const p = toWorld(e);
+  if (moving === e.pointerId) { source = p; return; }
+  // a mouse reaching for the emitter leaves the aim where it was
+  const grab = e.pointerType === 'mouse' && onEmitter(p, e);
+  if (!grab) aim = p;
+  if (e.pointerType === 'mouse') canvas.style.cursor = grab ? 'grab' : '';
 });
+canvas.addEventListener('pointerleave', e => { if (e.pointerType !== 'touch' && moving === null) aim = null; });
+canvas.addEventListener('pointerdown', e => {
+  const p = toWorld(e);
+  if (onEmitter(p, e)) {
+    moving = e.pointerId;
+    canvas.setPointerCapture(e.pointerId);
+    if (e.pointerType === 'mouse') canvas.style.cursor = 'grabbing';
+    return;
+  }
+  if (e.pointerType === 'touch') canvas.setPointerCapture(e.pointerId);
+  aim = p;
+});
+const stopMoving = e => { if (moving === e.pointerId) { moving = null; if (e.pointerType === 'mouse') canvas.style.cursor = 'grab'; } };
+canvas.addEventListener('pointerup', stopMoving);
+canvas.addEventListener('pointercancel', stopMoving);
 
 let hudTick = 0;
 function frame(dt, t) {

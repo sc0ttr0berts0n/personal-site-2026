@@ -6,9 +6,9 @@ export const LABS = [
     "title": "Prism",
     "blurb": "A laser crosses the mark from above. Each color bends at its own angle, and steep rays get trapped, bouncing around inside the glass.",
     "teaches": "three.js loaded straight from a CDN through an import map, with no build step. A custom GLSL shader bends the background grid through the glass once per color channel, which is where the rainbow fringes come from, and the beams are pixel-exact screen-space lines with bloom on top. The beams follow Snell’s law at seven wavelengths; the grid fakes it with three, one per color channel.",
-    "hint": "move to aim<br>on touch: drag to aim",
+    "hint": "move to aim · drag the emitter to move it<br>on touch: drag to aim",
     "touch": "drag",
-    "touchHint": "drag to aim the laser",
+    "touchHint": "drag to aim · drag the emitter to move it",
     "href": "labs/prism.html",
     "versions": []
   },
