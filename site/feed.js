@@ -53,9 +53,33 @@ const fx = calm || new URLSearchParams(location.search).get('fx') === 'off' ? nu
 // They sit over the ripple, so they stay in sight through a move. (Wide screens have the ‹ › buttons.)
 const cues = document.createElement('div');
 cues.className = 'cues'; cues.setAttribute('aria-hidden', 'true');
-cues.innerHTML = '<i class="cue lo"></i><i class="cue hi"></i>';
+cues.innerHTML = '<i class="cue lo"></i><i class="cue hi"></i><i class="ring"></i>';
 feed.appendChild(cues);
+const [cueLo, cueHi, ring] = cues.children;
 const swiping = on => feed.classList.toggle('swiping', on);
+// While a drag is on, the chevron it pulls from rides just ahead of the finger, and a ring waits where the drag
+// counts: letting go there moves on (EASY of the screen), or, for a touched toy, getting there does (HARD). Reach
+// it and the chevron sits in the ring, and the two carry on with the finger; pull back short and the chevron leaves.
+const LEAD = 44;      // px from the finger to the chevron
+function guide(d, e) {
+  if (d.axis !== 'y') return;
+  const r = feed.getBoundingClientRect(), x = e.clientX - r.left;
+  const s = d.dx < 0 ? -1 : 1;                       // -1: pulling up, toward the next toy
+  const T = feed.clientHeight * (d.hard ? HARD : EASY);
+  const armed = Math.abs(d.dx) >= T;
+  const cy = d.x0 + d.dx - r.top + s * LEAD;         // the chevron's centre
+  const ry = armed ? cy : d.x0 - r.top + s * (T + LEAD);
+  const [on, off] = s < 0 ? [cueHi, cueLo] : [cueLo, cueHi];
+  on.style.cssText = `top: ${cy - 5}px; left: ${x}px`;
+  off.style.cssText = '';
+  ring.style.cssText = `top: ${ry - 11}px; left: ${x}px`;
+  feed.classList.add('guiding');
+  feed.classList.toggle('armed', armed);
+}
+function unguide() {
+  for (const el of [cueLo, cueHi, ring]) el.style.cssText = '';
+  feed.classList.remove('guiding', 'armed');
+}
 function placeCues() {
   const cap = slides.get(toys[cur].slug)?.el.querySelector('.caption');
   if (cap) feed.style.setProperty('--cap-top', `${cap.offsetTop}px`);
@@ -341,9 +365,9 @@ const SLOP = 8;
 // stray stroke on a slide the feed handles), leaving takes a long pull, from the edge zones too: a bubble of the toy
 // itself forms at the entering edge and only breaks through to the next toy at HARD of the screen; let go before
 // that and it shrinks back out. Reset on every visit.
-const HARD = 0.45;
+const HARD = 0.45, EASY = 0.18;
 const touchedCurrent = () => { const c = slides.get(toys[cur].slug); if (c) c.touched = true; };
-const clearCue = () => { cue?.classList.remove('pressed'); cue = null; swiping(false); };
+const clearCue = () => { cue?.classList.remove('pressed'); cue = null; swiping(false); unguide(); };
 feed.addEventListener('pointerdown', e => {
   if (e.button !== 0 || dialogOpen()) return;
   // positions are along the swipe axis (x0, dx) and across it (y0); the axis is fixed for the life of a drag
@@ -382,7 +406,7 @@ feed.addEventListener('pointermove', e => {
     return;
   }
   drag.dx = along(e, a) - drag.x0;
-  feed.dataset.swipe = drag.dx < 0 ? 'on' : 'back';
+  guide(drag, e);
   drag.samples.push([e.timeStamp, along(e, a)]);
   while (drag.samples.length > 2 && e.timeStamp - drag.samples[0][0] > 90) drag.samples.shift();
   const L = a === 'y' ? feed.clientHeight : feed.clientWidth;
@@ -417,7 +441,7 @@ function endDrag(e, cancelled) {
   const v = tb > ta && e.timeStamp - tb < 80 ? (xb - xa) / (tb - ta) : 0;
   const flick = Math.abs(v) > 0.35 && Math.sign(v) === Math.sign(d.dx);
   // (a hard-tier pull commits as it crosses HARD, in pointermove; letting go is always a spring-back)
-  if (!cancelled && !d.hard && (Math.abs(d.dx) > W * 0.18 || flick)) {
+  if (!cancelled && !d.hard && (Math.abs(d.dx) > W * EASY || flick)) {
     const remaining = W - Math.abs(d.dx);
     const ms = Math.round(Math.max(200, Math.min(420, flick ? remaining / Math.abs(v) * 1.6 : 420)));
     go(d.dx < 0 ? 1 : -1, { ms, t0: performance.now() });
