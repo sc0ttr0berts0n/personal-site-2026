@@ -319,9 +319,9 @@ let drag = null, cue = null;
 const SLOP = 8;
 // Two tiers of swiping. Until someone touches the toy on screen, a swipe moves on easily (18% of the screen, or a
 // flick). Once they have touched it (a press that reaches the toy, which its embed reports as 'touched', or a tap or
-// stray stroke on a slide the feed handles), a drag that starts on the toy takes a long pull: a bubble of the toy
+// stray stroke on a slide the feed handles), leaving takes a long pull, from the edge zones too: a bubble of the toy
 // itself forms at the entering edge and only breaks through to the next toy at HARD of the screen; let go before
-// that and it shrinks back out. Drags from the edge zones always move on easily. Reset on every visit.
+// that and it shrinks back out. Reset on every visit.
 const HARD = 0.45;
 const touchedCurrent = () => { const c = slides.get(toys[cur].slug); if (c) c.touched = true; };
 const clearCue = () => { cue?.classList.remove('pressed'); cue = null; };
@@ -345,7 +345,7 @@ feed.addEventListener('pointermove', e => {
       drag.active = true;
       // pick up from where the slides are now: mid-slide after a quick second swipe, at rest otherwise
       const c = slides.get(toys[cur].slug);
-      drag.hard = drag.onToy && !!c?.touched;
+      drag.hard = !!c?.touched;
       const m = c && !c.pinned ? new DOMMatrix(getComputedStyle(c.el).transform) : null;
       const at = m ? (a === 'y' ? m.m42 : m.m41) : 0;
       drag.x0 = along(e, a) - at;               // no jump at the slop either
