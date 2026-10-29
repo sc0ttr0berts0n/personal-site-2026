@@ -157,8 +157,17 @@ sdfTex.minFilter = sdfTex.magFilter = THREE.LinearFilter;
 
 // Sorts float32s ascending in place, bit for bit as f.sort() does, but in linear time (it runs on every cavity
 // twice a frame): the float bits become unsigned keys that order like the numbers, then 3 radix passes of 11 bits.
-const HIST = new Uint32Array(2048);
+// That loop needs the JIT; with it off (iOS Lockdown Mode) the built-in sort is quicker. Both give the same array,
+// so early calls alternate (untimed while the JIT warms up, then timed) and the rest use the faster.
+const HIST = new Uint32Array(2048), sortMs = [0, 0];
+let sortCalls = 0;
 function sortHeights(f, a, b) {
+  if (sortCalls >= 240) return sortMs[0] <= sortMs[1] ? radixSort(f, a, b) : f.sort();
+  const t0 = performance.now(), k = sortCalls & 1;
+  if (k) f.sort(); else radixSort(f, a, b);
+  if (sortCalls++ >= 120) sortMs[k] += performance.now() - t0;
+}
+function radixSort(f, a, b) {
   const u = new Uint32Array(f.buffer, f.byteOffset, f.length), n = u.length;
   for (let i = 0; i < n; i++) { const x = u[i]; a[i] = x & 0x80000000 ? ~x : x | 0x80000000; }
   for (let sh = 0; sh < 32; sh += 11) {
