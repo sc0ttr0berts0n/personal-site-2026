@@ -23,6 +23,19 @@
   const q = new URLSearchParams(location.search);
   if (!q.has('embed') || window.parent === window) return;
 
+  // The feed decides when a toy runs (play/pause, below), so a lab's own check for being on screen (lab.loop's
+  // IntersectionObserver) only gets in the way: a neighbour waits off screen, and on iOS that reads as not
+  // intersecting, so it never drew its warm-up frames and a swipe landed on a toy that had yet to start.
+  if (window.IntersectionObserver) {
+    const IO = window.IntersectionObserver;
+    window.IntersectionObserver = class extends IO {
+      constructor(cb, opts) {
+        super((entries, o) => cb(entries.map(e => ({ target: e.target, time: e.time, rootBounds: e.rootBounds,
+          boundingClientRect: e.boundingClientRect, intersectionRect: e.boundingClientRect, isIntersecting: true, intersectionRatio: 1 })), o), opts);
+      }
+    };
+  }
+
   const root = document.documentElement;
   root.classList.add('lab-embed');
   const css = document.createElement('style');
@@ -164,6 +177,11 @@
 
   // ---- input the feed needs back ----
   addEventListener('pointerdown', () => { if (!touched) { touched = true; post({ feed: 'touched' }); } }, true);
+  // 'active': someone is using the toy (the feed holds off starting neighbours meanwhile); a few a second at most
+  let activeAt = 0;
+  const active = e => { if ((e.type === 'pointerdown' || e.buttons || e.pointerType === 'touch') && e.timeStamp - activeAt > 300) { activeAt = e.timeStamp; post({ feed: 'active' }); } };
+  addEventListener('pointerdown', active, true);
+  addEventListener('pointermove', active, true);
   addEventListener('wheel', e => { e.preventDefault(); post({ feed: 'wheel', dx: e.deltaX, dy: e.deltaY, mode: e.deltaMode }); }, { passive: false });
   const NAV_KEYS = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'g'];
   addEventListener('keydown', e => {

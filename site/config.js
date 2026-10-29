@@ -6,13 +6,16 @@
 export const ORDER = ['prism', 'fluid', 'goop', 'knockout', 'bigbang', 'godrays', 'maze', 'pachinko', 'neural', 'sand', 'life', 'splat'];
 
 // Which toy a bare link (no #toy) opens on. null = the first in ORDER.
-export const START = null;
+// Splat: on an iPhone 15 Pro it draws 0.3 s after its frame loads, at 60 fps. Prism, first in ORDER, froze the
+// whole page for 11 s on a first visit there (its shaders compiling), so it made a poor first impression.
+export const START = 'splat';
 
-// Toys too heavy to preload as a frozen neighbour: they mount only once someone stops on them, and preload
-// normally after their first compile. A lab whose first shader compile blocks the page's main thread (shared by
-// every toy in the feed) freezes the toy on screen while it preloads. Goop (~33 s) and Vessel (~10 s) used to;
-// they now compile in the background and set window.labWarming until they can draw, so the list is empty.
-export const NO_PRELOAD = [];
+// Toys too heavy to preload as a frozen neighbour: they mount only once someone stops on them, with the loading
+// spinner and pie over their still. Starting one blocks the page's main thread, which every toy in the feed
+// shares, so a neighbour starting up froze the toy being played with. Measured on an iPhone 15 Pro (?trace),
+// whole-page freezes on start: Vessel 12.5 s (5.7 s again later), Prism 11.4 s (5.7 s), Big Bang 9.9 s (9.8 s),
+// Goop 4.6 s (4.6 s). Every other toy starts in under 0.4 s. Take a toy off once its lab compiles without blocking.
+export const NO_PRELOAD = ['fluid', 'prism', 'bigbang', 'goop'];
 
 // What each toy does with a finger in the feed, until the lab says so itself (window.labFeed, see embed/lab-embed.js).
 // touch: 'tap' | 'hold' | 'drag' gets pointer input in the middle of the screen; 'none' lets a drag anywhere swipe.

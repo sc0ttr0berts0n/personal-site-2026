@@ -35,8 +35,8 @@ const across = (e, a = axis()) => a === 'y' ? e.clientX : e.clientY;
 const feed = $('feed'), slidesEl = $('slides');
 const codes = new Map();          // slug → settings code from the URL
 const slides = new Map();         // slug → slide
-const warmed = new Set();         // toys that have drawn once this visit, so their shaders are compiled
-const heavy = t => NO_PRELOAD.includes(t.slug) && !warmed.has(t.slug);
+// not even after a first visit: on an iPhone a heavy toy's second start froze the page for 5-10 s too
+const heavy = t => NO_PRELOAD.includes(t.slug);
 const touchedToys = new Set();    // toys someone has pressed on this visit, so their hint stops showing
 const finePointer = matchMedia('(hover: hover) and (pointer: fine)').matches;
 let cur = 0;
@@ -109,7 +109,8 @@ function eta(slug) {
 function paintPies() {
   for (const [pie, cue, d] of [[pieHi, cueHi, 1], [pieLo, cueLo, -1]]) {
     const s = solo ? null : slides.get(toys[wrap(cur + d)].slug);
-    const state = !s || s.ready ? '' : s.iframe ? 'loading' : 'queued';
+    // a heavy toy waits to load until it's on screen, where the spinner and pie say so: nothing to wait for here
+    const state = !s || s.ready ? '' : s.iframe ? 'loading' : heavy(s.toy) ? '' : 'queued';
     cue.classList.toggle('nudge', !!state);   // its chevron nudges the way it points, now and then, until it's ready
     fillPie(pie, s, state);
   }
@@ -217,6 +218,7 @@ function mount(s) {
   s.born = performance.now();
   s.el.querySelector('.stage').appendChild(f);
   s.iframe = f;
+  waiting(); paintPies();   // the pies start filling now, before a heavy start-up can hold the main thread
 }
 
 // reload a resting neighbour from scratch; it comes back frozen on its first frame, like any preload
@@ -268,9 +270,16 @@ function animate(on, ms) {
 // the toy on screen, froze the feed and the toy you're playing with. One at a time leaves gaps between the stalls.
 let neighbourTimer = 0;
 const STUCK = 8000;   // a neighbour that hasn't drawn in this long stops holding up the next
+// Nor does one start while someone is using the toy on screen: the stall would land under their finger. Touch
+// on the feed and in the toys (the embed's 'active') counts; neighbours wait for QUIET of none.
+const QUIET = 1500;
+let activeAt = -Infinity;
+const busyNow = () => { activeAt = performance.now(); };
 function loadNeighbours() {
   clearTimeout(neighbourTimer);
   if (solo) return;
+  const idle = performance.now() - activeAt;
+  if (idle < QUIET) { neighbourTimer = setTimeout(loadNeighbours, QUIET - idle + 50); return; }
   let busy = !slides.get(toys[cur].slug)?.ready;
   for (const d of [1, -1]) {
     const t = toys[wrap(cur + d)];
@@ -388,7 +397,7 @@ addEventListener('message', e => {
     // the lab's own word on what it does with a finger beats the feed's table
     if (m.touch) s.touch = m.touch;
     if (m.hint) s.hint = m.hint;
-    s.ready = true; s.wantLive = false; s.el.classList.add('ready'); warmed.add(s.toy.slug);
+    s.ready = true; s.wantLive = false; s.el.classList.add('ready');
     if (s.toy === toys[cur]) { setLive(); showHint(s); }
     waiting(); paintPies();
     sawLoad(s.toy.slug, now - s.born);
@@ -403,6 +412,7 @@ addEventListener('message', e => {
     if (showStats && s.toy === toys[cur]) renderStats(s.toy.slug);
   } else if (m.feed === 'frozen') fx?.keep(s);
   else if (m.feed === 'snap' && m.url) savePoster(s.toy.slug, m.url);
+  else if (m.feed === 'active') busyNow();
   else if (m.feed === 'touched') { if (s.toy === toys[cur]) s.touched = true; touchedToys.add(s.toy.slug); clearTimeout(s.hintTimer); s.el.classList.remove('hinting'); }
   // a toy under the pointer gets the wheel, and one that was pressed keeps the focus (even once swiped away),
   // so they pass the feed's own back up
@@ -436,6 +446,8 @@ const SLOP = 8;
 const HARD = 0.45, EASY = 0.18;
 const touchedCurrent = () => { const c = slides.get(toys[cur].slug); if (c) c.touched = true; };
 const clearCue = () => { cue?.classList.remove('pressed'); cue = null; swiping(false); unguide(); };
+feed.addEventListener('pointerdown', busyNow, true);
+feed.addEventListener('pointermove', e => { if (e.buttons || e.pointerType === 'touch') busyNow(); }, true);
 feed.addEventListener('pointerdown', e => {
   if (e.button !== 0 || dialogOpen()) return;
   // positions are along the swipe axis (x0, dx) and across it (y0); the axis is fixed for the life of a drag
