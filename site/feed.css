@@ -4,7 +4,7 @@
   --grid: #1c1c22;
   --ink: #f4f4f6;
   --dim: #8b8b98;
-  --line: #26262e;
+  --line: #5c5c66;   /* 3:1 on black, the minimum for borders */
   --panel: #07070a;
   --grid-size: 16px;
   --display: "Unbounded", "Arial Narrow", system-ui, sans-serif;

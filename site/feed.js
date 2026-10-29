@@ -79,7 +79,7 @@ function makeSlide(t, play, defer = false) {
         <span class="blurb">${esc(t.blurb)}</span>
         <span class="more">more ↑</span>
       </button>
-      <a class="btn primary play" href="${esc(pageHref(t))}">Play with this <span aria-hidden="true">→</span></a>
+      <a class="btn primary play" href="${esc(pageHref(t))}">Change This <span aria-hidden="true">→</span></a>
     </div>`;
   const s = { toy: t, el, iframe: null, ready: false, playing: play, offset: 0, born: performance.now() };
   const poster = posters.get(t.slug);
@@ -418,7 +418,7 @@ function openSheet(t) {
     <p class="blurb">${esc(t.blurb)}</p>
     <p class="teaches"><span>teaches →</span> ${esc(t.teaches)}</p>
     ${t.hint ? `<p class="hint"><span>on its own page →</span> ${esc(stripTags(t.hint))}</p>` : ''}
-    <div class="row"><a class="btn primary" href="${esc(pageHref(t))}">Play with this <span aria-hidden="true">→</span></a></div>
+    <div class="row"><a class="btn primary" href="${esc(pageHref(t))}">Change This <span aria-hidden="true">→</span></a></div>
     ${motion ? `<section><span class="label">Motion</span>
       <p class="stub">${forced ? 'Toys play full motion even though your system asks for reduced motion.' : 'Your system asks for reduced motion, so the toys hold still.'}</p>
       <div class="row"><button type="button" class="btn" id="motion-toggle">${forced ? 'Reduce motion again' : 'Play motion anyway'}</button></div></section>` : ''}
