@@ -78,49 +78,107 @@ const NMODES = 6;
 // ---- bake a signed distance field per chevron (exact distance to the polygon) ----
 const N = 512, DOM = 1.2;          // texture covers ±0.6 logo units
 const polys = logoPolygons({ curveSegments: 12 });
-const sdf = new Float32Array(N * N * 4).fill(1);
-polys.forEach((poly, pi) => {
-  const m = poly.length;
-  const ax = new Float64Array(m), ay = new Float64Array(m), ex = new Float64Array(m), ey = new Float64Array(m), il = new Float64Array(m);
-  for (let e = 0; e < m; e++) {
-    const a = poly[e], b = poly[(e + 1) % m];
-    ax[e] = a[0]; ay[e] = a[1]; ex[e] = b[0] - a[0]; ey[e] = b[1] - a[1]; il[e] = 1 / (ex[e] * ex[e] + ey[e] * ey[e]);
-  }
-  for (let j = 0; j < N; j++) {
-    const y = ((j + 0.5) / N - 0.5) * DOM;
-    for (let i = 0; i < N; i++) {
-      const x = ((i + 0.5) / N - 0.5) * DOM;
-      let best = 1e9, inside = false;
-      for (let e = 0; e < m; e++) {
-        const px = x - ax[e], py = y - ay[e];
-        let t = (px * ex[e] + py * ey[e]) * il[e];
-        t = t < 0 ? 0 : t > 1 ? 1 : t;
-        const dx = px - ex[e] * t, dy = py - ey[e] * t, d2 = dx * dx + dy * dy;
-        if (d2 < best) best = d2;
-        if ((ay[e] > y) !== (ay[e] + ey[e] > y) && x < ax[e] + ex[e] * (y - ay[e]) / ey[e]) inside = !inside;
-      }
-      sdf[(j * N + i) * 4 + pi] = inside ? -Math.sqrt(best) : Math.sqrt(best);
+// It runs on every load, so it skips work without changing a bit of the result: each 8×8 block of texels only
+// measures the edges that can be nearest to some texel in it, and inside/outside comes from one sorted list of
+// edge crossings per row instead of a crossing test per texel and edge.
+// And it runs in a worker, so the page (and the feed around it) keeps moving while it bakes and the shader compiles.
+function bakeSdf(polys, N, DOM) {
+  const sdf = new Float32Array(N * N * 4).fill(1);
+  const BLK = 8, HD = (BLK / 2) * Math.SQRT2 * DOM / N;   // block size in texels, its half-diagonal in logo units
+  polys.forEach((poly, pi) => {
+    const m = poly.length;
+    const ax = new Float64Array(m), ay = new Float64Array(m), ex = new Float64Array(m), ey = new Float64Array(m), il = new Float64Array(m);
+    for (let e = 0; e < m; e++) {
+      const a = poly[e], b = poly[(e + 1) % m];
+      ax[e] = a[0]; ay[e] = a[1]; ex[e] = b[0] - a[0]; ey[e] = b[1] - a[1]; il[e] = 1 / (ex[e] * ex[e] + ey[e] * ey[e]);
     }
+    const segD2 = (x, y, e) => {
+      const px = x - ax[e], py = y - ay[e];
+      let t = (px * ex[e] + py * ey[e]) * il[e];
+      t = t < 0 ? 0 : t > 1 ? 1 : t;
+      const dx = px - ex[e] * t, dy = py - ey[e] * t;
+      return dx * dx + dy * dy;
+    };
+    // distance: the nearest edge to any texel in a block lies within (nearest to the block centre) + 2 half-diagonals of the centre
+    const dc = new Float64Array(m), cand = new Int32Array(m);
+    for (let bj = 0; bj < N; bj += BLK) for (let bi = 0; bi < N; bi += BLK) {
+      const cx = ((bi + BLK / 2) / N - 0.5) * DOM, cy = ((bj + BLK / 2) / N - 0.5) * DOM;
+      let dmin = 1e9, nc = 0;
+      for (let e = 0; e < m; e++) { dc[e] = Math.sqrt(segD2(cx, cy, e)); if (dc[e] < dmin) dmin = dc[e]; }
+      for (let e = 0; e < m; e++) if (dc[e] <= dmin + 2 * HD + 1e-9) cand[nc++] = e;
+      for (let j = bj; j < bj + BLK; j++) {
+        const y = ((j + 0.5) / N - 0.5) * DOM;
+        for (let i = bi; i < bi + BLK; i++) {
+          const x = ((i + 0.5) / N - 0.5) * DOM;
+          let best = 1e9;
+          for (let k = 0; k < nc; k++) { const d2 = segD2(x, y, cand[k]); if (d2 < best) best = d2; }
+          sdf[(j * N + i) * 4 + pi] = Math.sqrt(best);
+        }
+      }
+    }
+    // sign: a texel is inside when an odd number of the row's edge crossings lie to its right
+    const xs = new Float64Array(m);
+    for (let j = 0; j < N; j++) {
+      const y = ((j + 0.5) / N - 0.5) * DOM;
+      let n = 0;
+      for (let e = 0; e < m; e++) if ((ay[e] > y) !== (ay[e] + ey[e] > y)) xs[n++] = ax[e] + ex[e] * (y - ay[e]) / ey[e];
+      const row = xs.subarray(0, n).sort();
+      for (let i = 0, k = 0; i < N; i++) {
+        const x = ((i + 0.5) / N - 0.5) * DOM;
+        while (k < n && !(x < row[k])) k++;
+        if ((n - k) & 1) sdf[(j * N + i) * 4 + pi] *= -1;
+      }
+    }
+  });
+  // and as half floats for the texture, the same bits three's DataUtils.toHalfFloat gives (every value is well inside half range)
+  const base = new Uint32Array(512), shift = new Uint32Array(512);
+  for (let i = 0; i < 256; i++) {
+    const e = i - 127;
+    const [b, sh] = e < -27 ? [0, 24] : e < -14 ? [0x0400 >> (-e - 14), -e - 1] : e <= 15 ? [(e + 15) << 10, 13] : e < 128 ? [0x7c00, 24] : [0x7c00, 13];
+    base[i] = b; base[i | 0x100] = b | 0x8000; shift[i] = shift[i | 0x100] = sh;
   }
+  const bits = new Uint32Array(sdf.buffer), half = new Uint16Array(sdf.length);
+  for (let i = 0; i < bits.length; i++) { const x = bits[i], e = (x >> 23) & 0x1ff; half[i] = base[e] + ((x & 0x007fffff) >> shift[e]); }
+  return { sdf, half };
+}
+const baked = new Promise(resolve => {
+  const here = () => resolve(bakeSdf(polys, N, DOM));
+  try {
+    const src = `onmessage = e => { const s = (${bakeSdf})(...e.data); postMessage(s, [s.sdf.buffer, s.half.buffer]); };`;
+    const w = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
+    w.onmessage = e => { resolve(e.data); w.terminate(); };
+    w.onerror = here;
+    w.postMessage([polys, N, DOM]);
+  } catch (e) { here(); }
 });
-const half = new Uint16Array(N * N * 4);
-for (let i = 0; i < half.length; i++) half[i] = THREE.DataUtils.toHalfFloat(sdf[i]);
+const half = new Uint16Array(N * N * 4);   // filled once the bake is in
 const sdfTex = new THREE.DataTexture(half, N, N, THREE.RGBAFormat, THREE.HalfFloatType);
 sdfTex.minFilter = sdfTex.magFilter = THREE.LinearFilter;
-sdfTex.needsUpdate = true;
 
-// cavity cross-section samples per vessel (local world units, y up), for the hydrostatic level
-const STRIDE = 3, CELL = STRIDE * DOM / N * W;
-const cavities = polys.map((_, pi) => {
-  const xs = [], ys = [];
-  for (let j = 1; j < N; j += STRIDE) for (let i = 1; i < N; i += STRIDE) {
-    if (sdf[(j * N + i) * 4 + pi] * W < -WALL) {
-      xs.push(((i + 0.5) / N - 0.5) * DOM * W);
-      ys.push(-((j + 0.5) / N - 0.5) * DOM * W);
-    }
+// Sorts float32s ascending in place, bit for bit as f.sort() does, but in linear time (it runs on every cavity
+// twice a frame): the float bits become unsigned keys that order like the numbers, then 3 radix passes of 11 bits.
+// That loop needs the JIT; with it off (iOS Lockdown Mode) the built-in sort is quicker. Both give the same array,
+// so early calls alternate (untimed while the JIT warms up, then timed) and the rest use the faster.
+const HIST = new Uint32Array(2048), sortMs = [0, 0];
+let sortCalls = 0;
+function sortHeights(f, a, b) {
+  if (sortCalls >= 240) return sortMs[0] <= sortMs[1] ? radixSort(f, a, b) : f.sort();
+  const t0 = performance.now(), k = sortCalls & 1;
+  if (k) f.sort(); else radixSort(f, a, b);
+  if (sortCalls++ >= 120) sortMs[k] += performance.now() - t0;
+}
+function radixSort(f, a, b) {
+  const u = new Uint32Array(f.buffer, f.byteOffset, f.length), n = u.length;
+  for (let i = 0; i < n; i++) { const x = u[i]; a[i] = x & 0x80000000 ? ~x : x | 0x80000000; }
+  for (let sh = 0; sh < 32; sh += 11) {
+    HIST.fill(0);
+    for (let i = 0; i < n; i++) HIST[(a[i] >>> sh) & 2047]++;
+    for (let i = 0, s = 0; i < 2048; i++) { const c = HIST[i]; HIST[i] = s; s += c; }
+    for (let i = 0; i < n; i++) { const k = a[i]; b[HIST[(k >>> sh) & 2047]++] = k; }
+    const t = a; a = b; b = t;
   }
-  return { xs: Float32Array.from(xs), ys: Float32Array.from(ys), yw: new Float32Array(xs.length), sorted: new Float32Array(xs.length) };
-});
+  for (let i = 0; i < n; i++) { const k = a[i]; u[i] = k & 0x80000000 ? k ^ 0x80000000 : ~k; }
+}
 
 // ---- renderer ----
 const { canvas } = lab.canvas({ context: 'none' });
@@ -146,6 +204,9 @@ uniform float uClk, uWaveV, uBase, uSheen, uChroma, uRag;
 uniform int uRampN, uSteps, uVSteps, uGSteps;
 uniform vec3 uBg, uGrid, uInk, uTintCol;
 
+// A loop bound the compiler can't see through, so ANGLE → D3D keeps small fixed loops as loops instead of pasting
+// their bodies (and everything they call) in again and again. uFrontN is never negative, so this is always 0.
+#define ZERO min(uFrontN, 0)
 const float LIQ_N = 1.333;   // liquid refractive index
 const float SIGMA = 2.6;     // liquid extinction per world unit
 
@@ -180,20 +241,21 @@ vec3 evalP(vec3 p) {
 }
 float outerD(vec3 p) { vec3 d = sdf2(p.xy); return extr(min(d.x, min(d.y, d.z)), p.z + uD * 0.5, uD * 0.5, uBevel); }
 float cavD(vec3 p) { vec3 d = sdf2(p.xy); return extr(min(d.x, min(d.y, d.z)) + uWall, p.z + uD * 0.5, uD * 0.5 - uWall, uBevel * 1.6); }
-vec3 nOuter(vec3 p) {
-  const vec2 k = vec2(1.0, -1.0); const float e = 0.012;
-  return normalize(k.xyy * outerD(p + k.xyy * e) + k.yyx * outerD(p + k.yyx * e) + k.yxy * outerD(p + k.yxy * e) + k.xxx * outerD(p + k.xxx * e));
-}
-vec3 nCav(vec3 p) {
-  const vec2 k = vec2(1.0, -1.0); const float e = 0.012;
-  return normalize(k.xyy * cavD(p + k.xyy * e) + k.yyx * cavD(p + k.yyx * e) + k.yxy * cavD(p + k.yxy * e) + k.xxx * cavD(p + k.xxx * e));
+// either surface of the glass: wall 0, bevel 1 is the outside (outerD); wall uWall, bevel 1.6 the cavity (cavD)
+float shellD(vec3 p, float wall, float bev) { vec3 d = sdf2(p.xy); return extr(min(d.x, min(d.y, d.z)) + wall, p.z + uD * 0.5, uD * 0.5 - wall, uBevel * bev); }
+// tetrahedral normal, as a loop over the four corners (in the same order, so the sum is the same)
+const vec3 TET[4] = vec3[4](vec3(1, -1, -1), vec3(-1, -1, 1), vec3(-1, 1, -1), vec3(1, 1, 1));
+vec3 nShell(vec3 p, float wall, float bev) {
+  vec3 n = vec3(0.0);
+  for (int i = ZERO; i < 4; i++) n += TET[i] * shellD(p + TET[i] * 0.012, wall, bev);
+  return normalize(n);
 }
 
 // free surface of chevron i at x in the liquid's frame (liqF): hydrostatic level + standing-wave modes
 float surfY(int i, float x) {
   float u = clamp((x - uX0[i]) / uL[i], 0.0, 1.0);
   float c1 = cos(3.14159265 * u), cp = 1.0, cn = c1, h = uLevel[i];
-  for (int n = 0; n < 6; n++) { h += uModes[i * 6 + n] * cn; float nx = 2.0 * c1 * cn - cp; cp = cn; cn = nx; }
+  for (int n = ZERO; n < 6; n++) { h += uModes[i * 6 + n] * cn; float nx = 2.0 * c1 * cn - cp; cp = cn; cn = nx; }
   return h;
 }
 bool liq(vec3 pl, int pid, float cd) {
@@ -265,7 +327,7 @@ vec3 benchGlow(vec2 bw) {
   vec2 pl = rotI(bw - uOff), lw = liqF(pl);
   vec3 d = sdf2(pl) + uWall;
   vec3 acc = vec3(0.0);
-  for (int i = 0; i < 3; i++) {
+  for (int i = ZERO; i < 3; i++) {
     float di = d[i];
     if (di > 2.5) continue;
     float Y = surfY(i, lw.x);
@@ -287,12 +349,12 @@ vec3 glassT(float len) { return exp(-len * uTint * 2.2 * (1.05 - uTintCol)); }
 // rising bubbles, drawn in the plane of the front cavity wall
 vec2 bubbles(vec2 pw, int pid) {
   vec2 res = vec2(0.0);
-  for (int layer = 0; layer < 2; layer++) {
+  for (int layer = ZERO; layer < 2; layer++) {
     float cw = layer == 0 ? 0.34 : 0.23;
     float cx = floor(pw.x / cw);
-    for (int dx = -1; dx <= 1; dx++) {
+    for (int dx = ZERO - 1; dx <= 1; dx++) {
       float col = cx + float(dx) + float(layer) * 517.0;
-      for (int b = 0; b < 2; b++) {
+      for (int b = ZERO; b < 2; b++) {
         vec4 h = fract(sin(vec4(col, col + 1.7, col + 3.1, col + 5.3) * (12.9898 + float(b) * 7.13)) * 43758.5453);
         if (h.x > uBub) continue;
         float r = mix(0.025, 0.06, h.y) * (layer == 0 ? 1.0 : 0.75);
@@ -342,93 +404,105 @@ void main() {
     t += d;
     if (t > tEnd) break;
   }
-  if (!hit) { gl_FragColor = vec4(bench(ro, rd), 1.0); return; }
+  // Every path ends on the bench seen along one ray, so bench() is called once, at the end: the colour is
+  // col + kB * bench(bRo, bRd). (Called from each branch, the compiler pasted it and its glow in four times.)
+  vec3 col = vec3(0.0), kB = vec3(1.0), bRo = ro, bRd = rd;
+  if (hit) {
+    vec3 n = nShell(p, 0.0, 1.0);
+    float F = fresnel(-dot(rdl, n), 1.0 / uIor);
+    col = F * env(toWorldDir(reflect(rdl, n)));
+    vec3 T = refract(rdl, n, 1.0 / uIor);
+    if (dot(T, T) < 0.5) T = rdl;
 
-  vec3 n = nOuter(p);
-  float F = fresnel(-dot(rdl, n), 1.0 / uIor);
-  vec3 col = F * env(toWorldDir(reflect(rdl, n)));
-  vec3 T = refract(rdl, n, 1.0 / uIor);
-  if (dot(T, T) < 0.5) T = rdl;
-
-  // walk through the glass until we reach the cavity or leave the solid
-  vec3 q = p - n * 0.004;
-  float glassLen = 0.0; int state = 0; vec3 e;
-  for (int k = 0; k < uGSteps; k++) {
-    e = evalP(q);
-    float g = min(-e.x, e.y);
-    if (g < 0.0015) { state = e.y < -e.x ? 1 : 2; break; }
-    float h = max(g, 0.004);
-    q += T * h; glassLen += h;
-  }
-
-  vec3 body;
-  if (state != 1) {
-    // passed through solid glass only (rims, side walls)
-    vec3 n2 = nOuter(q);
-    vec3 o = refract(T, -n2, uIor);
-    if (dot(o, o) < 0.5) {
-      body = env(toWorldDir(reflect(T, -n2))) * 0.6 + bench(toWorld(q), toWorldDir(T)) * 0.25;
-    } else {
-      float F2 = fresnel(dot(T, n2), uIor);
-      body = (1.0 - F2) * bench(toWorld(q), toWorldDir(o));
+    // walk through the glass until we reach the cavity or leave the solid
+    vec3 q = p - n * 0.004;
+    float glassLen = 0.0; int state = 0; vec3 e;
+    for (int k = 0; k < uGSteps; k++) {
+      e = evalP(q);
+      float g = min(-e.x, e.y);
+      if (g < 0.0015) { state = e.y < -e.x ? 1 : 2; break; }
+      float h = max(g, 0.004);
+      q += T * h; glassLen += h;
     }
-    body *= glassT(glassLen);
-  } else {
-    // into the cavity: glass to air at the inner wall
-    vec3 nc = nCav(q);
-    float Fi = fresnel(-dot(T, nc), uIor);
-    vec3 Dc = refract(T, nc, uIor);
-    vec3 inner = Fi * env(toWorldDir(reflect(T, nc))) * 0.7;
-    if (dot(Dc, Dc) < 0.5) { Dc = rdl; inner += env(toWorldDir(reflect(T, nc))) * 0.3; }
 
-    int pid = int(e.z);
-    vec3 c = q + Dc * 0.002;
-    float cd = cavD(c);
-    bool inL = liq(c, pid, cd);
-    vec2 bub = vec2(0.0);
-    vec2 frontW = rotF(c.xy) + uOff;
-    if (inL && uBub > 0.0) bub = bubbles(frontW, pid);
-    Tr = vec3(1.0); Lc = vec3(0.0);
-    for (int k = 0; k < uVSteps; k++) {
-      float h = clamp(-cd, 0.025, 0.09);
-      vec3 c2 = c + Dc * h;
-      float cd2 = cavD(c2);
-      bool out2 = cd2 > 0.0;
-      if (out2) { h *= clamp(-cd / (cd2 - cd + 1e-5), 0.0, 1.0); c2 = c + Dc * h; }
-      bool inL2 = out2 ? inL : liq(c2, pid, cd2);
-      if (inL2 != inL) {
-        vec3 a = c, b = c2;
-        for (int i = 0; i < 4; i++) { vec3 mm = (a + b) * 0.5; if (liq(mm, pid, cavD(mm)) == inL) a = mm; else b = mm; }
-        vec3 s = (a + b) * 0.5;
-        if (inL) absorb(length(s - c), (s + c) * 0.5, pid);
-        vec2 sw = liqF(s.xy);
-        float dy = (surfY(pid, sw.x + 0.02) - surfY(pid, sw.x - 0.02)) / 0.04;
-        vec3 nl = vec3(rotLI(normalize(vec2(-dy, 1.0))), 0.0);
-        vec3 nf = dot(Dc, nl) < 0.0 ? nl : -nl;
-        float eta = inL ? LIQ_N : 1.0 / LIQ_N;
-        float Fs = fresnel(-dot(Dc, nf), eta);
-        if (inL) {
-          // underside of the surface: a mirror of the liquid, total internal reflection at grazing view
-          Lc += Tr * Fs * liqC(0.0, s.xy) * (0.4 + 0.6 * uGlow);
-          vec3 r = refract(Dc, nf, eta);
-          if (dot(r, r) < 0.5) { Dc = reflect(Dc, nf); inL2 = true; } else { Tr *= 1.0 - Fs; Dc = r; }
-        } else {
-          Lc += Tr * Fs * env(toWorldDir(reflect(Dc, nf))) * 1.4;
-          Tr *= 1.0 - Fs;
-          Dc = refract(Dc, nf, eta);
-        }
-        c = s + Dc * 0.003; cd = cavD(c); inL = inL2;
-        continue;
+    // body = bodyA + bodyK * bench(bRo, bRd)
+    vec3 bodyA, bodyK;
+    // the normal where the walk stopped, on the cavity wall (state 1) or the outside: one call for both
+    vec3 n2 = nShell(q, state == 1 ? uWall : 0.0, state == 1 ? 1.6 : 1.0);
+    if (state != 1) {
+      // passed through solid glass only (rims, side walls)
+      vec3 o = refract(T, -n2, uIor);
+      vec3 gt = glassT(glassLen);
+      bRo = toWorld(q);
+      if (dot(o, o) < 0.5) {
+        bodyA = env(toWorldDir(reflect(T, -n2))) * 0.6 * gt; bodyK = 0.25 * gt; bRd = toWorldDir(T);
+      } else {
+        float F2 = fresnel(dot(T, n2), uIor);
+        bodyA = vec3(0.0); bodyK = (1.0 - F2) * gt; bRd = toWorldDir(o);
       }
-      if (inL) absorb(h, (c + c2) * 0.5, pid);
-      c = c2; cd = cd2;
-      if (out2) break;
+    } else {
+      // into the cavity: glass to air at the inner wall
+      vec3 nc = n2;
+      float Fi = fresnel(-dot(T, nc), uIor);
+      vec3 Dc = refract(T, nc, uIor);
+      vec3 inner = Fi * env(toWorldDir(reflect(T, nc))) * 0.7;
+      if (dot(Dc, Dc) < 0.5) { Dc = rdl; inner += env(toWorldDir(reflect(T, nc))) * 0.3; }
+
+      int pid = int(e.z);
+      vec3 c = q + Dc * 0.002;
+      float cd = cavD(c);
+      bool inL = liq(c, pid, cd);
+      vec2 bub = vec2(0.0);
+      vec2 frontW = rotF(c.xy) + uOff;
+      if (inL && uBub > 0.0) bub = bubbles(frontW, pid);
+      Tr = vec3(1.0); Lc = vec3(0.0);
+      for (int k = 0; k < uVSteps; k++) {
+        float h = clamp(-cd, 0.025, 0.09);
+        vec3 c2 = c + Dc * h;
+        float cd2 = cavD(c2);
+        bool out2 = cd2 > 0.0;
+        if (out2) { h *= clamp(-cd / (cd2 - cd + 1e-5), 0.0, 1.0); c2 = c + Dc * h; }
+        bool inL2 = out2 ? inL : liq(c2, pid, cd2);
+        bool cross = inL2 != inL;
+        vec3 s = c2;
+        if (cross) {
+          vec3 a = c, b = c2;
+          for (int i = ZERO; i < 4; i++) { vec3 mm = (a + b) * 0.5; if (liq(mm, pid, cavD(mm)) == inL) a = mm; else b = mm; }
+          s = (a + b) * 0.5;
+        }
+        // one absorb() for both cases, up to the surface or across the whole step
+        if (inL) absorb(cross ? length(s - c) : h, (s + c) * 0.5, pid);
+        if (cross) {
+          vec2 sw = liqF(s.xy);
+          float dy = (surfY(pid, sw.x + 0.02) - surfY(pid, sw.x - 0.02)) / 0.04;
+          vec3 nl = vec3(rotLI(normalize(vec2(-dy, 1.0))), 0.0);
+          vec3 nf = dot(Dc, nl) < 0.0 ? nl : -nl;
+          float eta = inL ? LIQ_N : 1.0 / LIQ_N;
+          float Fs = fresnel(-dot(Dc, nf), eta);
+          if (inL) {
+            // underside of the surface: a mirror of the liquid, total internal reflection at grazing view
+            Lc += Tr * Fs * liqC(0.0, s.xy) * (0.4 + 0.6 * uGlow);
+            vec3 r = refract(Dc, nf, eta);
+            if (dot(r, r) < 0.5) { Dc = reflect(Dc, nf); inL2 = true; } else { Tr *= 1.0 - Fs; Dc = r; }
+          } else {
+            Lc += Tr * Fs * env(toWorldDir(reflect(Dc, nf))) * 1.4;
+            Tr *= 1.0 - Fs;
+            Dc = refract(Dc, nf, eta);
+          }
+          c = s + Dc * 0.003; cd = cavD(c); inL = inL2;
+          continue;
+        }
+        c = c2; cd = cd2;
+        if (out2) break;
+      }
+      Lc = mix(Lc, Lc * 0.4, bub.y) + bub.x * mix(uInk, rampC(0.0), 0.35) * 0.6;
+      float back = uWall / max(abs(Dc.z), 0.3);
+      vec3 gt = glassT(glassLen + back);
+      bodyA = inner + gt * Lc; bodyK = gt * Tr; bRo = toWorld(c); bRd = toWorldDir(Dc);
     }
-    Lc = mix(Lc, Lc * 0.4, bub.y) + bub.x * mix(uInk, rampC(0.0), 0.35) * 0.6;
-    float back = uWall / max(abs(Dc.z), 0.3);
-    body = inner + glassT(glassLen + back) * (Lc + Tr * bench(toWorld(c), toWorldDir(Dc)));
+    col += (1.0 - F) * bodyA; kB = (1.0 - F) * bodyK;
   }
-  col += (1.0 - F) * body;
+  col += kB * bench(bRo, bRd);
   gl_FragColor = vec4(col, 1.0);
 }`;
 
@@ -462,11 +536,33 @@ composer.addPass(new OutputPass());
 const fxaa = new ShaderPass(FXAAShader);
 composer.addPass(fxaa);
 
+// Adaptive resolution, for a GPU that can't keep up (a phone at 3× renders as many pixels as a desktop at High):
+// when frames run slow for a second, render fewer pixels, down to 2× (still retina). Quality stays the ceiling, and
+// it only ever steps down, so a device that holds its frame rate keeps exactly the chosen Quality.
+const PR_STEP = 0.5, PR_FLOOR = 2;      // a cut takes the pixel ratio down this much (3× → 2.5× → 2×), never below the floor
+const SLOW = 1000 / 45;                 // median frame interval (ms) that counts as slow
+let cut = 0, gaps = [], judgeFrom = 0, lastNow = 0;
+function adapt() {
+  // real intervals (lab.loop's dt is clamped), skipping the first second after a resize and any long gap
+  // (paused in the feed, off screen, a hitch), which says nothing about the GPU
+  const now = performance.now(), gap = now - lastNow; lastNow = now;
+  if (!judgeFrom) judgeFrom = now + 1000;
+  if (now < judgeFrom || gap > 1500) return;
+  gaps.push(gap);
+  if (gaps.length < 30 && !(gaps.length >= 4 && now - judgeFrom > 2000)) return;
+  const med = gaps.sort((a, b) => a - b)[gaps.length >> 1];
+  gaps = [];
+  if (med > SLOW && qualityPR() - (cut + 1) * PR_STEP >= PR_FLOOR) { cut++; resize(sq); judgeFrom = 0; }
+  else judgeFrom = now;
+}
+
+const qualityPR = () => Math.min(3, Math.min(2, window.devicePixelRatio || 1) * (QUALITY[lab.params.quality] || QUALITY.balanced).scale);
+
 let sq = lab.square(), k = SQ / sq.size;
 function resize(s) {
   sq = s; k = SQ / s.size;
   const q = QUALITY[lab.params.quality] || QUALITY.balanced;
-  const pr = Math.min(3, Math.min(2, window.devicePixelRatio || 1) * q.scale);
+  const pr = qualityPR() - cut * PR_STEP;
   renderer.setPixelRatio(pr); renderer.setSize(s.w, s.h, false);
   composer.setPixelRatio(pr); composer.setSize(s.w, s.h);
   const buf = renderer.getDrawingBufferSize(new THREE.Vector2());
@@ -491,7 +587,38 @@ function applyPalette(p) {
 }
 lab.on('palette', applyPalette);
 applyPalette(lab.palette);
-lab.on('change', key => { if (key === 'quality') resize(sq); });
+lab.on('change', key => { if (key === 'quality') { cut = 0; gaps = []; judgeFrom = 0; resize(sq); } });
+
+// The vessel shader's first compile can take ~10 s on Windows (ANGLE → D3D), and a plain first render blocks the page
+// for all of it. compileAsync lets the GPU process compile it in the background (KHR_parallel_shader_compile);
+// the loop waits until it's ready. The site's feed reads window.labWarming before showing the lab.
+let warming = window.labWarming = true;
+lab.hud('compiling the shader…');
+// Compile the variant that's actually drawn: the scene renders into the composer's half-float target (linear output),
+// not straight to the canvas. compileAsync reads the current target synchronously, so set it only around the call.
+renderer.setRenderTarget(composer.renderTarget1);
+const compiled = renderer.compileAsync(scene, camera);
+renderer.setRenderTarget(null);
+compiled.catch(e => console.error(e)).finally(() => { warming = window.labWarming = false; });
+
+// the distance field: the compile above runs on while we wait for it
+const { sdf, half: h } = await baked;
+half.set(h);
+sdfTex.needsUpdate = true;
+
+// cavity cross-section samples per vessel (local world units, y up), for the hydrostatic level
+const STRIDE = 3, CELL = STRIDE * DOM / N * W;
+const cavities = polys.map((_, pi) => {
+  const xs = [], ys = [];
+  for (let j = 1; j < N; j += STRIDE) for (let i = 1; i < N; i += STRIDE) {
+    if (sdf[(j * N + i) * 4 + pi] * W < -WALL) {
+      xs.push(((i + 0.5) / N - 0.5) * DOM * W);
+      ys.push(-((j + 0.5) / N - 0.5) * DOM * W);
+    }
+  }
+  const n = xs.length;
+  return { xs: Float32Array.from(xs), ys: Float32Array.from(ys), yw: new Float32Array(n), sorted: new Float32Array(n), ka: new Uint32Array(n), kb: new Uint32Array(n) };
+});
 
 // ---- simulation state ----
 const sim = {
@@ -520,10 +647,19 @@ function hydrostatics(k = 1) {
     if (f <= 0.002) { st.level = -1e3; st.bL = 0; return; }
     if (f >= 0.998) { st.level = 1e3; st.bL = 0; return; }
     for (let j = 0; j < n; j++) cav.yw[j] = s * cav.xs[j] + c * cav.ys[j];
-    cav.sorted.set(cav.yw); cav.sorted.sort();
+    cav.sorted.set(cav.yw); sortHeights(cav.sorted, cav.ka, cav.kb);
     const qf = f * (n - 1), j0 = Math.floor(qf);
     const guess = cav.sorted[j0] + (cav.sorted[Math.min(n - 1, j0 + 1)] - cav.sorted[j0]) * (qf - j0);
-    const want = f * n, below = L => { let a = 0; for (let j = 0; j < n; j++) a += Math.min(1, Math.max(0, (L - cav.yw[j]) / CELL + 0.5)); return a; };
+    // A sample's share below L falls as its height rises, so on the sorted heights the ones under the band about L
+    // count 1 each, the ones over it 0, and only the band needs adding up (this runs twice a frame on a phone's CPU).
+    const ys = cav.sorted, share = (L, y) => Math.min(1, Math.max(0, (L - y) / CELL + 0.5));
+    const want = f * n, below = L => {
+      let a = 0, b = n;
+      while (a < b) { const m = (a + b) >> 1; if (share(L, ys[m]) >= 1) a = m + 1; else b = m; }
+      let s = a;
+      for (let j = a; j < n; j++) { const w = share(L, ys[j]); if (w <= 0) break; s += w; }
+      return s;
+    };
     let lo = guess - CELL, hi = guess + CELL;
     for (let it = 0; it < 14; it++) { const m = (lo + hi) / 2; if (below(m) < want) lo = m; else hi = m; }
     const lvl = (lo + hi) / 2;
@@ -831,16 +967,5 @@ function stepClock(dt) {
 
 let lastT = 0;
 window.__lab = { renderOnce(t) { lastT = t ?? lastT + 1 / 60; step(1 / 60, lastT); }, flipNow() { flipT = 0; }, sim, U, renderer };
-// The vessel shader's first compile can take ~10 s on Windows (ANGLE → D3D), and a plain first render blocks the page
-// for all of it. compileAsync lets the GPU process compile it in the background (KHR_parallel_shader_compile);
-// the loop waits until it's ready. The site's feed reads window.labWarming before showing the lab.
-let warming = window.labWarming = true;
-lab.hud('compiling the shader…');
-// Compile the variant that's actually drawn: the scene renders into the composer's half-float target (linear output),
-// not straight to the canvas. compileAsync reads the current target synchronously, so set it only around the call.
-renderer.setRenderTarget(composer.renderTarget1);
-const compiled = renderer.compileAsync(scene, camera);
-renderer.setRenderTarget(null);
-compiled.catch(e => console.error(e)).finally(() => { warming = window.labWarming = false; });
-lab.loop((dt, t) => { if (warming) return; lastT = t; step(dt, t); });
+lab.loop((dt, t) => { if (warming) return; lastT = t; step(dt, t); adapt(); });
 </script>
