@@ -37,30 +37,33 @@ const lab = createLab({
   defaultPalette: 'ember',
   grid: false,
   params: {
-    exposure:  { type: 'range', label: 'Scattering', min: 0, max: 4, step: 0.05, value: 1.6 },
-    density:   { type: 'range', label: 'Shaft length', min: 0.1, max: 1, step: 0.01, value: 0.9, format: v => Math.round(v * 100), unit: '%' },
-    decay:     { type: 'range', label: 'Decay per step', min: 0.9, max: 1, step: 0.001, value: 0.976 },
+    hLamp:     { type: 'heading', label: 'Lamp' },
     intensity: { type: 'range', label: 'Light intensity', min: 0, max: 4, step: 0.05, value: 1.6 },
     size:      { type: 'range', label: 'Light size', min: 0.2, max: 2.5, step: 0.05, value: 0.7 },
-    tilt:      { type: 'range', label: 'Tilt toward pointer', min: 0, max: 35, step: 1, value: 12, unit: '°' },
+    tilt:      { type: 'range', label: 'Mark tilts toward the pointer', min: 0, max: 35, step: 1, value: 12, unit: '°' },
+    hShafts:   { type: 'heading', label: 'Shafts' },
+    exposure:  { type: 'range', label: 'Scattering', min: 0, max: 4, step: 0.05, value: 1.6 },
+    density:   { type: 'range', label: 'Shaft length', min: 0.1, max: 1, step: 0.01, value: 0.9, format: v => Math.round(v * 100), unit: '%' },
+    decay:     { type: 'range', label: 'Falloff per step', min: 0.9, max: 1, step: 0.001, value: 0.976 },
     chroma:    { type: 'toggle', label: 'Chromatic spread', value: false },
     bloom:     { type: 'range', label: 'Bloom', min: 0, max: 2, step: 0.05, value: 0.6 },
-    samples:   { type: 'range', label: 'Samples (quality)', min: 16, max: 128, step: 8, value: 64 },
+    samples:   { type: 'range', label: 'Samples per shaft (quality)', min: 16, max: 128, step: 8, value: 64 },
     hDust:     { type: 'heading', label: 'Dust' },
     dust:      { type: 'range', label: 'Amount', min: 0, max: 1, step: 0.01, value: 0.39, format: v => Math.round(v * MOTES).toLocaleString(), unit: ' motes' },
-    dustBright:{ type: 'range', label: 'Brightness', min: 0, max: 3, step: 0.05, value: 1.05 },
-    dustSize:  { type: 'range', label: 'Mote size', min: 0.3, max: 3, step: 0.05, value: 2.15, unit: '×' },
-    drift:     { type: 'range', label: 'Settling speed', min: 0, max: 4, step: 0.05, value: 1.75, unit: '×' },
-    swirl:     { type: 'range', label: 'Air currents', min: 0, max: 4, step: 0.05, value: 0.75, unit: '×' },
-    twinkle:   { type: 'range', label: 'Glint', min: 0, max: 1, step: 0.01, value: 0.78 },
-    bokeh:     { type: 'range', label: 'Near-lens blur (bokeh)', min: 0, max: 1, step: 0.01, value: 0 },
-    hBurst:    { type: 'heading', label: 'Sun bursts' },
-    burst:     { type: 'toggle', label: 'Rainbow bursts', value: true },
-    burstEvery:{ type: 'range', label: 'Average interval', min: 3, max: 30, step: 0.5, value: 4, unit: ' s' },
-    burstPower:{ type: 'range', label: 'Burst strength', min: 0, max: 2.5, step: 0.05, value: 2.3 },
-    burstSettle:{ type: 'range', label: 'Return to sunlight', min: 0.5, max: 8, step: 0.1, value: 2, unit: ' s' },
-    burstWander:{ type: 'range', label: 'Wander during a burst', min: 1, max: 4, step: 0.1, value: 4, unit: '×' },
-    sunK:      { type: 'range', label: 'Sun temperature', min: 4000, max: 7000, step: 50, value: 5700, unit: ' K' }
+    dustBright:{ type: 'range', label: 'Brightness', min: 0, max: 3, step: 0.05, value: 1.05, when: P => P.dust > 0 },
+    dustSize:  { type: 'range', label: 'Mote size', min: 0.3, max: 3, step: 0.05, value: 2.15, unit: '×', when: P => P.dust > 0 },
+    drift:     { type: 'range', label: 'Settling speed', min: 0, max: 4, step: 0.05, value: 1.75, unit: '×', when: P => P.dust > 0 },
+    swirl:     { type: 'range', label: 'Air currents', min: 0, max: 4, step: 0.05, value: 0.75, unit: '×', when: P => P.dust > 0 },
+    twinkle:   { type: 'range', label: 'Glint', min: 0, max: 1, step: 0.01, value: 0.78, when: P => P.dust > 0 },
+    bokeh:     { type: 'range', label: 'Near-lens blur (bokeh)', min: 0, max: 1, step: 0.01, value: 0, when: P => P.dust > 0 },
+    hBurst:    { type: 'heading', label: 'Sunlight' },
+    // sunlight replaces the palette's lamp color; picking a palette switches it off (below)
+    burst:     { type: 'toggle', label: 'Sunlight with rainbow bursts (off: palette color)', value: true },
+    sunK:      { type: 'range', label: 'Sun temperature', min: 4000, max: 7000, step: 50, value: 5700, unit: ' K', when: P => P.burst },
+    burstEvery:{ type: 'range', label: 'Burst every (average)', min: 3, max: 30, step: 0.5, value: 4, unit: ' s', when: P => P.burst },
+    burstPower:{ type: 'range', label: 'Burst strength', min: 0, max: 2.5, step: 0.05, value: 2.3, when: P => P.burst },
+    burstSettle:{ type: 'range', label: 'Return to sunlight', min: 0.5, max: 8, step: 0.1, value: 2, unit: ' s', when: P => P.burst },
+    burstWander:{ type: 'range', label: 'Wander during a burst', min: 1, max: 4, step: 0.1, value: 4, unit: '×', when: P => P.burst }
   },
   actions: [
     { label: 'Center light', primary: true, action: () => { pinned = { x: 0, y: 0 }; } },
@@ -452,6 +455,8 @@ function applyPalette(p) {
 }
 lab.on('palette', applyPalette);
 applyPalette(lab.palette);
+// sunlight mode paints over the palette's lamp, so choosing a palette by hand switches to it
+document.querySelector('.palettes').addEventListener('click', e => { if (e.target.closest('.pal') && lab.params.burst) lab.set('burst', false); });
 
 // ---- pointer: the lamp follows the pointer, a click pins it, leaving the stage returns to the orbit ----
 const toPlane = e => {
