@@ -34,7 +34,7 @@ export const TOUCH = {
   neural:   { touch: 'drag', hint: 'draw on it' },
   sand:     { touch: 'drag', hint: 'drag to paint' },
   life:     { touch: 'drag', hint: 'tap or drag to draw cells' },
-  splat:    { touch: 'tap',  hint: 'tap it mid-fall to tilt it' }
+  splat:    { touch: 'drag', hint: 'tap or flick it to send it tumbling' }
 };
 
 // Placeholders: Scott supplies the mugshot, bio and links.
