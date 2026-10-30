@@ -22,7 +22,7 @@
     .lab-page .lab-back { text-decoration: none; }
     .lab-page .lab-back:hover { color: var(--ink); }
     .lab-page .lab-back .arr { color: var(--dim); margin-right: -2px; }
-    .lab-page .lab-peek, .lab-page .lab-holdbar, .lab-page .lab-pip { display: none; }
+    .lab-page .lab-peek, .lab-page .lab-holdbar, .lab-page .lab-pip, .lab-page .lab-scrub { display: none; }
     @media ${PHONE} {
       html.lab-page { scroll-snap-type: y proximity; scroll-padding-top: var(--top-h, 41px); }
       .lab-page .lab-top { position: sticky; top: 0; z-index: 3; background: var(--bg);
@@ -56,6 +56,9 @@
       .lab-page .ctl.track.in-top { border-radius: 6px; padding: 0 10px; }
       .lab-page .ctl.track.in-top .row { font-size: 11px; }
       .lab-page .lab-panel:has(.docked) { z-index: 4; }
+      /* a tapped slider waits in the header: the next drag anywhere on screen scrubs it */
+      html.lab-page.armed .lab-scrub { display: block; position: fixed; inset: 0; z-index: 7; cursor: ew-resize; touch-action: none;
+        user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
       .lab-page .lab-panel > *, .lab-page .lab-group > *, .lab-page .ctls > * { transition: opacity .2s; }
       html.lab-page.tuning .lab-panel { background-color: transparent; -webkit-backdrop-filter: none; backdrop-filter: none; border-color: transparent; }
       html.lab-page.tuning .lab-panel > :not(:has(.ctl.active)),
@@ -271,18 +274,49 @@
       undockT = setTimeout(finishUndock, matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : FLY_MS);
     };
 
-    // tuning starts once a slider actually moves sideways, so a scroll that starts on a slider just scrolls
-    let drag = null;
+    // tuning starts once a slider actually moves sideways, so a scroll that starts on a slider just scrolls.
+    // A tap docks it instead ("armed"): a cover over the whole screen then takes the next drag, wherever it starts,
+    // and scrubs that slider; letting go of it (or tapping without dragging) puts the slider back.
+    let drag = null, armed = null;
+    const scrub = document.createElement('div');
+    scrub.className = 'lab-scrub';
+    document.body.append(scrub);
+    const arm = ctl => {
+      armed = ctl;
+      ctl.classList.add('active');
+      root.classList.add('tuning', 'armed');
+      dock(ctl);
+    };
+    const disarm = () => {
+      armed = null;
+      root.classList.remove('tuning', 'armed');
+      undock();
+    };
+    const begin = (ctl, e, extra) => {
+      const inp = ctl.querySelector('input');
+      const w = (docked?.ctl === ctl ? docked.ph : ctl).getBoundingClientRect().width;   // scrub at the slider's own width
+      drag = { ctl, inp, id: e.pointerId, x: e.clientX, y: e.clientY, v: +inp.value, w, live: false, ...extra };
+    };
     panel.addEventListener('pointerdown', e => {
       const ctl = e.target.closest('.ctl.track');
-      if (!ctl || !phone.matches || e.button > 0) return;
-      const inp = ctl.querySelector('input');
-      drag = { ctl, inp, id: e.pointerId, x: e.clientX, y: e.clientY, v: +inp.value, w: ctl.getBoundingClientRect().width, live: false };
+      if (!ctl || !phone.matches || e.button > 0 || armed) return;
+      begin(ctl, e);
     });
+    scrub.addEventListener('pointerdown', e => {
+      if (!armed || e.button > 0) return;
+      e.preventDefault();
+      scrub.setPointerCapture?.(e.pointerId);
+      begin(armed, e, { armed: true });
+    });
+    scrub.addEventListener('contextmenu', e => e.preventDefault());
+    addEventListener('keydown', e => { if (e.key === 'Escape' && armed && !drag) disarm(); });
     addEventListener('pointermove', e => {
       if (!drag || e.pointerId !== drag.id) return;
       const dx = e.clientX - drag.x;
-      if (!drag.live) {
+      if (!drag.live && drag.armed) {
+        if (Math.hypot(dx, e.clientY - drag.y) < 6) return;   // already docked: any drag counts, sideways sets the value
+        drag.live = true;
+      } else if (!drag.live) {
         if (Math.abs(dx) < 6) return;
         if (Math.abs(e.clientY - drag.y) > Math.abs(dx)) { drag = null; return; }
         drag.live = true;
@@ -298,11 +332,11 @@
     });
     const end = e => {
       if (!drag || e.pointerId !== drag.id) return;
-      const was = drag.live;
+      const { live, ctl } = drag, wasArmed = drag.armed;
       drag = null;
-      if (!was) return;
-      root.classList.remove('tuning');
-      undock();
+      if (wasArmed) { disarm(); return; }                  // the scrub that followed a tap is over, or it was a tap away
+      if (live) { root.classList.remove('tuning'); undock(); return; }
+      if (e.type === 'pointerup') arm(ctl);                 // a tap on a slider: dock it and wait for a drag
     };
     addEventListener('pointerup', end);
     addEventListener('pointercancel', end);
