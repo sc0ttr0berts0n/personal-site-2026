@@ -165,7 +165,7 @@ for (const s of SPECIES) {
 
 // The materials keep their natural colours. A palette only recolours the dirt (the bedrock's banded ombre, top to
 // floor) and the skeletons in it (their own ombre, laid over the rock by `boneMix`); its swatch bar is that dirt
-// and those bones. Nature is the original grey rock.
+// and those bones. Nature is the original grey rock; Dusk is the default.
 const SAND_PALETTES = [
   { key: 'nature', name: 'Nature', rock: [[104, 103, 106], [30, 30, 33]], bone: [[214, 206, 192], [214, 206, 192]], boneMix: 0.2 },
   { key: 'loam', name: 'Loam', rock: [[156, 118, 80], [96, 64, 40], [34, 22, 16]], bone: [[246, 236, 214], [216, 190, 150]], boneMix: 0.45 },
@@ -188,7 +188,7 @@ const lab = createLab({
   hint: 'drag to paint · keys 1–7 pick · [ ] brush',
   feed: { touch: 'drag', hint: 'drag to paint' },
   palettes: SAND_PALETTES,
-  defaultPalette: 'nature',
+  defaultPalette: 'dusk',
   params: {
     hSim:      { type: 'heading', label: 'Simulation' },
     speed:     { type: 'range', label: 'Steps per frame', min: 1, max: 8, step: 1, value: 2 },
