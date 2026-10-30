@@ -1,13 +1,15 @@
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<script src="../../../../embed/lab-embed.js"></script>
 <title>Out of the Goop</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@200;300&family=Familjen+Grotesk:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap">
-<link rel="stylesheet" href="shared/lab.css">
+<link rel="stylesheet" href="./shared/lab.css">
 <script type="module">
-import { createLab } from '../../../shared/lab.js';
-import { logoPolygons, LOGO_FILL, LOGO_DEPTH, LOGO_ASPECT } from '../../../shared/logo.js';
+import { createLab } from './shared/lab.js';
+import { logoPolygons, LOGO_FILL, LOGO_DEPTH, LOGO_ASPECT } from './shared/logo.js';
 
 // ---- liquids: each palette is a liquid. `liq` drives the shader; `colors` is only the swatch bar. ----
 // body: the liquid's own color (oil is near black), diffuse: how much light it scatters back (oil ≈ 0),

@@ -1,14 +1,16 @@
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<script src="../../../../embed/lab-embed.js"></script>
 <title>Life</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@200;300&family=Familjen+Grotesk:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap">
-<link rel="stylesheet" href="shared/lab.css">
+<link rel="stylesheet" href="./shared/lab.css">
 <script type="module">
-import { createLab } from '../../../shared/lab.js';
-import { LOGO_PIECES, LOGO_FILL, fitLogo } from '../../../shared/logo.js';
-import { ramp, hex } from '../../../shared/palettes.js';
+import { createLab } from './shared/lab.js';
+import { LOGO_PIECES, LOGO_FILL, fitLogo } from './shared/logo.js';
+import { ramp, hex } from './shared/palettes.js';
 
 // ---- the mark's lattice (derivation as in pachinko.html / maze.html) ----
 // Every straight edge of the mark runs along one of two directions (±42.8°, an 85.6° apex). Read both from the

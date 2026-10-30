@@ -9,6 +9,7 @@
 // The header's name links back to the feed, on this toy.
 (() => {
   if (new URLSearchParams(location.search).has('embed')) return;
+  const SCRIPT = document.currentScript?.src || location.href;   // for the generated stories next to the labs
   const root = document.documentElement;
   root.classList.add('lab-page');
   const PHONE = '(max-width: 899px)';   // lab.css's own breakpoint for the stacked layout
@@ -101,7 +102,42 @@
         opacity: 0; pointer-events: none; transition: opacity .2s; }
       html.lab-page.pip .lab-pip { opacity: 1; pointer-events: auto; }
     }
-    @media (prefers-reduced-motion: reduce) { .lab-page .lab-panel, .lab-page .lab-panel *, .lab-page .lab-holdbar *, .lab-page .lab-stage { transition: none !important; } }`;
+    @media (prefers-reduced-motion: reduce) { .lab-page .lab-panel, .lab-page .lab-panel *, .lab-page .lab-holdbar *, .lab-page .lab-stage { transition: none !important; } }
+
+    /* the lab's process story, at the end of the panel, with its saved versions as squares that play on tap */
+    .lab-page .lab-story { display: grid; gap: 12px; padding-top: 16px; border-top: 1px solid var(--line); }
+    .lab-page .lab-story p { margin: 0; font-size: 14px; line-height: 1.6; text-wrap: pretty; }
+    .lab-page .lab-story .open { color: var(--dim); font-size: 13px; }
+    .lab-page .lab-story .open b { font: 500 10px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--ink); margin-right: 6px; }
+    .lab-page .lab-versions { list-style: none; margin: 4px 0 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
+    .lab-page .lab-versions li { position: relative; aspect-ratio: 1; }
+    .lab-page .ver-tile, .lab-page .ver-now { position: absolute; inset: 0; z-index: 1; display: flex; flex-direction: column; justify-content: space-between; align-items: flex-start;
+      padding: 8px; border: 1px solid var(--line); border-radius: 2px; text-align: left; cursor: pointer; -webkit-tap-highlight-color: transparent;
+      background: var(--bg) linear-gradient(var(--grid) 1px, transparent 1px) 0 0 / 12px 12px, linear-gradient(90deg, var(--grid) 1px, transparent 1px) 0 0 / 12px 12px;
+      transition: border-color .2s, background-color .2s; }
+    .lab-page .ver-tile:hover, .lab-page .ver-now:hover { border-color: var(--dim); }
+    .lab-page .ver-n { font: 200 22px/1 var(--display); }
+    .lab-page .ver-cap { font: 400 11px/1.3 var(--mono); color: var(--dim); text-wrap: balance; }
+    .lab-page .ver-go { font: 400 10px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--dim); }
+    .lab-page .ver-now { border-color: var(--dim); background: var(--ink); color: var(--bg); }
+    .lab-page .ver-now .ver-cap, .lab-page .ver-now .ver-go { color: var(--bg); opacity: .7; }
+    /* playing: the frame fills the square, under the tile, which turns clear and offers to break out */
+    .lab-page .ver-play { position: absolute; inset: 0; display: block; margin: 0; padding: 0; width: auto; height: auto; overflow: hidden;
+      border: 1px solid var(--ink); border-radius: 2px; background: var(--bg); color: var(--ink); }
+    .lab-page .ver-play iframe { display: block; width: 100%; height: 100%; border: 0; pointer-events: none; }
+    .lab-page .ver-bar { display: none; }
+    .lab-page li.playing .ver-tile { background: linear-gradient(transparent 55%, rgb(0 0 0 / .75)); border-color: transparent; justify-content: flex-end; }
+    .lab-page li.playing .ver-tile .ver-n { display: none; }
+    .lab-page li.playing :is(.ver-go, .ver-cap) { color: var(--ink); }
+    /* broken out: the same frame, over everything (the popover's top layer), and playable */
+    .lab-page .ver-play:popover-open { position: fixed; inset: 0; width: 100%; height: 100%; max-width: none; max-height: none; border: 0; border-radius: 0; }
+    .lab-page .ver-play:popover-open iframe { pointer-events: auto; }
+    .lab-page .ver-play:popover-open .ver-bar { display: flex; position: absolute; z-index: 1; align-items: center; justify-content: space-between; gap: 12px;
+      top: env(safe-area-inset-top, 0px); left: 0; right: 0; padding: 10px max(16px, env(safe-area-inset-left, 0px));
+      font: 400 12px/1.2 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--dim); pointer-events: none; }
+    .lab-page .ver-bar button { pointer-events: auto; padding: 9px 12px; border: 1px solid var(--line); border-radius: 2px; background: rgb(0 0 0 / .6);
+      -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); font: inherit; letter-spacing: inherit; text-transform: inherit; color: var(--ink); cursor: pointer; }
+    .lab-page .ver-play::backdrop { background: var(--bg); }`;
   document.head.appendChild(css);
 
   const EYE = '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M1 8s2.5-4.5 7-4.5S15 8 15 8s-2.5 4.5-7 4.5S1 8 1 8z" fill="none" stroke="currentColor" stroke-width="1.2"/><circle cx="8" cy="8" r="2" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>';
@@ -340,5 +376,70 @@
     };
     addEventListener('pointerup', end);
     addEventListener('pointercancel', end);
+
+    // ---- how it got here: the lab's process story, and its saved versions as squares ----
+    // A tap plays a version in its square (stage only, through the feed's embed hooks); a second tap breaks it out
+    // full screen, where it can be played with. One plays at a time, so a phone isn't running a stack of old labs.
+    import(new URL('../labs/stories.js', SCRIPT)).then(({ STORIES }) => {
+      const story = STORIES[slug];
+      if (!story) return;
+      const title = panel.querySelector('h1')?.textContent || '';
+      const sec = document.createElement('section');
+      sec.className = 'lab-story';
+      sec.setAttribute('aria-labelledby', 'lab-story-h');
+      const label = v => v.note || v.name.replace(/^\d+[a-z]?-?/, '').replace(/-/g, ' ');
+      sec.innerHTML = `<span class="ctl-head" id="lab-story-h">How it got here</span>
+        ${story.paras.map(p => `<p>${p}</p>`).join('')}
+        ${story.open ? `<p class="open"><b>Still open</b>${story.open}</p>` : ''}
+        ${story.versions.length ? `<ol class="lab-versions" aria-label="Saved versions, oldest first">
+          ${story.versions.map((v, i) => `<li><button type="button" class="ver-tile" data-i="${i}">
+            <span class="ver-n">${v.name.match(/^\d+[a-z]?/)?.[0] || i + 1}</span>
+            <span><span class="ver-cap">${label(v)}</span><br><span class="ver-go">Play ▸</span></span></button></li>`).join('')}
+          <li><button type="button" class="ver-now"><span class="ver-n">Now</span>
+            <span><span class="ver-cap">this lab, as it is today</span><br><span class="ver-go">${phone.matches ? 'See it ▴' : 'Playing ▸'}</span></span></button></li>
+        </ol>` : ''}`;
+      panel.append(sec);
+      if (!story.versions.length) return;
+
+      let cur = null;   // { li, play, frame }
+      const stop = () => {
+        if (!cur) return;
+        if (cur.play.matches?.(':popover-open')) cur.play.hidePopover();
+        cur.play.remove();
+        cur.li.classList.remove('playing');
+        cur.li.querySelector('.ver-go').textContent = 'Play ▸';
+        cur = null;
+      };
+      const breakOut = () => {
+        if (!cur.play.showPopover) { open(cur.frame.src.replace(/\?.*$/, ''), '_blank', 'noopener'); return; }
+        cur.play.showPopover();
+        cur.play.querySelector('button').focus();
+      };
+      const play = (li, v) => {
+        stop();
+        const p = document.createElement('div');
+        p.className = 'ver-play';
+        p.setAttribute('popover', 'manual');
+        p.innerHTML = `<iframe title="${title} version ${v.name}" src="../${v.href}?embed=1" tabindex="-1"></iframe>
+          <div class="ver-bar"><span>${title} · ${v.name.match(/^\d+[a-z]?/)?.[0] || ''} · ${label(v)}</span><button type="button">Close</button></div>`;
+        p.querySelector('button').addEventListener('click', () => { p.hidePopover(); li.querySelector('.ver-tile').focus(); });
+        li.prepend(p);
+        li.classList.add('playing');
+        li.querySelector('.ver-go').textContent = 'Full screen ⤢';
+        cur = { li, play: p, frame: p.querySelector('iframe') };
+      };
+      sec.querySelector('.lab-versions').addEventListener('click', e => {
+        if (e.target.closest('.ver-now')) {
+          stop();
+          if (phone.matches) scrollTo({ top: 0, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+          return;
+        }
+        const tile = e.target.closest('.ver-tile');
+        if (!tile) return;
+        const li = tile.parentElement;
+        if (cur?.li === li) breakOut(); else play(li, story.versions[+tile.dataset.i]);
+      });
+      addEventListener('keydown', e => { if (e.key === 'Escape' && cur?.play.matches?.(':popover-open')) cur.play.hidePopover(); });
+    }, () => {});
   });
 })();

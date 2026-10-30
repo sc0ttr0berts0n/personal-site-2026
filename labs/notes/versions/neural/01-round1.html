@@ -1,10 +1,12 @@
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<script src="../../../../embed/lab-embed.js"></script>
 <title>Neural</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@200;300&family=Familjen+Grotesk:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap">
-<link rel="stylesheet" href="shared/lab.css">
+<link rel="stylesheet" href="./shared/lab.css">
 <style>
   /* the network's output sits in its own square; the 2D layer above it is see-through to the pointer */
   .lab-stage { user-select: none; -webkit-user-select: none; }
@@ -15,9 +17,9 @@
   @media (max-width: 899px) { .lab-stage { aspect-ratio: 9 / 17; max-height: none; } }
 </style>
 <script type="module">
-import { createLab } from '../../../shared/lab.js';
-import { logoPath2D, LOGO_FILL } from '../../../shared/logo.js';
-import { ramp, hex } from '../../../shared/palettes.js';
+import { createLab } from './shared/lab.js';
+import { logoPath2D, LOGO_FILL } from './shared/logo.js';
+import { ramp, hex } from './shared/palettes.js';
 
 const N = 512;                 // the target image and the training grid are N × N pixels
 const STEPS = 2400;            // gradient steps a full-speed run takes to reach a crisp mark
