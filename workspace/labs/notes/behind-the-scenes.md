@@ -326,3 +326,9 @@ Scott walked the saved versions in `notes/versions/goop/`.
 
 - **Proudest call:** the iodine clock reaction. "i really wish it was maze within a maze or something more clever, but iodine is just so good looking lol"
 - **The takeaway:** he can direct AI, and he spans disciplines ("people always love that"). Above all: "everything is shit at first and with frank and productive critique, you can reach wonderful results through iteration and experimentation."
+
+## 2026-10-30 — Big Bang: skip the wait, loop the payoff
+
+- **The call:** "start right before the symbol coalesces, and loop from there." The lab now opens partway into the collapse, with the cloud already falling in. It loops from there: coalesce, hold, blast, then back to the same point. The quiet cloud at the very start no longer plays.
+- **Delegated:** "or you can just go for it." Claude picked 45% of the way through the collapse, about 2.4 s before ignition at the default speed. The replay blast now settles into that cloud instead of the original one.
+- **Found on the way:** the earlier start had hidden a square seam in the mid-collapse cloud on tall screens. Opening on that moment exposed it, so the pull field now extends cleanly past its baked square.

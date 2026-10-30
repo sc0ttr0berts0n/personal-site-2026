@@ -85,6 +85,7 @@ const T0 = 1.2;                         // seconds of quiet cloud before gravity
 const LMAX = Math.log(40);              // the cloud ends 40× smaller than it starts
 const SETTLE = 3;                       // seconds after ignition before the hold timer counts
 const TB = 2.4;                         // seconds the replay blast takes to scatter back into cloud
+const LOOP_U = 0.45;                    // the loop starts here in the collapse, just before the mark coalesces
 
 const { canvas } = lab.canvas({ context: 'none' });
 let renderer;
@@ -171,22 +172,24 @@ function buildSdf() {
   const w = Array.from({ length: 2 * R + 1 }, (_, k) => Math.exp(-((k - R) ** 2) / (2 * sig * sig)));
   const ws = w.reduce((a, b) => a + b, 0);
   const tmp = new Float32Array(N * N), blur = new Float32Array(N * N);
-  const cl = v => v < 0 ? 0 : v >= N ? N - 1 : v;
+  // past the edge of the square the field carries on as a straight line (reflected through the edge texel), not
+  // clamped: clamping halves the pull at the edge, which squeezes the gas there and draws the square into the cloud
+  const ext = (a, o, st, v) => v < 0 ? 2 * a[o] - a[o - v * st] : v >= N ? 2 * a[o + (N - 1) * st] - a[o + (2 * N - 2 - v) * st] : a[o + v * st];
   for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
     let s = 0;
-    for (let k = -R; k <= R; k++) s += w[k + R] * sdfData[j * N + cl(i + k)];
+    for (let k = -R; k <= R; k++) s += w[k + R] * ext(sdfData, j * N, 1, i + k);
     tmp[j * N + i] = s / ws;
   }
   for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
     let s = 0;
-    for (let k = -R; k <= R; k++) s += w[k + R] * tmp[cl(j + k) * N + i];
+    for (let k = -R; k <= R; k++) s += w[k + R] * ext(tmp, i, N, j + k);
     blur[j * N + i] = s / ws;
   }
   const out = new Uint16Array(N * N * 4), h = THREE.DataUtils.toHalfFloat;
   for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
     const o = j * N + i;
-    const gx = (blur[j * N + cl(i + 1)] - blur[j * N + cl(i - 1)]) / (2 * TEXEL);
-    const gy = (blur[cl(j + 1) * N + i] - blur[cl(j - 1) * N + i]) / (2 * TEXEL);
+    const gx = (ext(blur, j * N, 1, i + 1) - ext(blur, j * N, 1, i - 1)) / (2 * TEXEL);
+    const gy = (ext(blur, i, N, j + 1) - ext(blur, i, N, j - 1)) / (2 * TEXEL);
     out[o * 4] = h(sdfData[o]); out[o * 4 + 1] = h(blur[o]); out[o * 4 + 2] = h(gx); out[o * 4 + 3] = h(gy);
   }
   const tex = new THREE.DataTexture(out, N, N, THREE.RGBAFormat, THREE.HalfFloatType);
@@ -626,13 +629,17 @@ lab.on('change', key => { if (key === 'quality') sizeNebula(); dirty = 40; });
 
 // ---- the sequence ----
 // 'seq' runs S from the quiet cloud through collapse and ignition into the hold. 'blast' runs B from a
-// snapshot of wherever the sequence was back to the quiet cloud, then hands over to 'seq' at S = 0.
+// snapshot of wherever the sequence was back to the cloud as it is at loopS(), just before the mark coalesces,
+// then hands over to 'seq' there. The lab opens at loopS() too, so it loops collapse, hold, blast.
 // Everything is a pure function of S (or B and the snapshot), so seeking and replaying never pop.
-let mode = 'seq', S = 0, B = 0, churn = 0, beatT = 0, yaw = 0, from = null;
+let mode = 'seq', S = 0, B = 0, enterS = -1, churn = 0, beatT = 0, yaw = 0, from = null;
 const clamp01 = x => Math.max(0, Math.min(1, x));
 function smooth(e0, e1, x) { const t = clamp01((x - e0) / (e1 - e0)); return t * t * (3 - 2 * t); }
 const mix = (a, b, f) => a + (b - a) * f;
 const endS = () => T0 + lab.params.collapse + SETTLE + 3;
+const loopS = () => T0 + LOOP_U * lab.params.collapse;
+// start (or restart) the sequence at the loop point; streaks already mid-fall there fade in rather than pop
+function enterLoop() { mode = 'seq'; S = enterS = loopS(); yaw = 0; }
 
 function seqState(S) {
   const Tc = lab.params.collapse;
@@ -669,16 +676,16 @@ function replay() {
   mode = 'blast'; B = 0; histReset = true;
 }
 function blastState(b) {
-  const F = from, Z = seqState(0);
+  const F = from, Z = seqState(loopS());
   const k = 1 - (1 - clamp01(b / TB)) ** 3, kc = smooth(0, TB, b);
   return {
     u: 0, tau: -T0,
-    L: F.L * (1 - k), Ls: F.Ls * (1 - k), flat: mix(F.flat, 1, k), eat: F.eat * (1 - k), heat: mix(F.heat, Z.heat, k),
-    acc: F.acc * Math.exp(-b * 5), wid: F.wid,
-    cloud: mix(F.cloud, 1, smooth(0, 0.7 * TB, b)), clear: F.clear * (1 - smooth(0, 0.5 * TB, b)),
+    L: mix(F.L, Z.L, k), Ls: mix(F.Ls, Z.Ls, k), flat: mix(F.flat, Z.flat, k), eat: mix(F.eat, Z.eat, k), heat: mix(F.heat, Z.heat, k),
+    acc: F.acc * Math.exp(-b * 5) + Z.acc * kc, wid: mix(F.wid, Z.wid, kc),
+    cloud: mix(F.cloud, Z.cloud, smooth(0, 0.7 * TB, b)), clear: F.clear * (1 - smooth(0, 0.5 * TB, b)),
     spin: F.spin * (1 - k),
     hot: mix(F.hot, 0.35, smooth(0, 0.12, b)), mesh: F.mesh * (1 - smooth(0.05, 0.6, b)),
-    front: F.front * (1 - kc), boost: 1 + (F.boost - 1) * (1 - k) + 1.2 * Math.exp(-b * 4) * smooth(0, 0.04, b),
+    front: mix(F.front, Z.front, kc), boost: mix(F.boost, Z.boost, k) + 1.2 * Math.exp(-b * 4) * smooth(0, 0.04, b),
     flash: 0.5 * Math.max(F.mesh, 0.3) * smooth(0, 0.04, b) * Math.exp(-b * 9) * (1 - smooth(0.15, 0.45, b)),
     halo: F.halo * Math.exp(-b * 5),
     az: F.az * (1 - kc), el: F.el,
@@ -722,6 +729,7 @@ let st = seqState(0);
 const orbitTarget = new THREE.Vector3(), camFwd = new THREE.Vector3(0, 0, -1), _v = new THREE.Vector3();
 const ahead = p => _v.subVectors(p, camera.position).dot(camFwd) > 0.5;
 if (lab.calm) S = endS() + 4;    // reduced motion: the condensed mark, still
+else enterLoop();
 
 function update(dt) {
   const P = lab.params, calm = lab.calm;
@@ -735,7 +743,7 @@ function update(dt) {
       if (P.loop && S > T0 + P.collapse + SETTLE + P.hold) replay();
     } else {
       B += dt * P.time;
-      if (B >= TB) { mode = 'seq'; S = 0; yaw = 0; }
+      if (B >= TB) enterLoop();
     }
   }
   st = mode === 'blast' ? blastState(B) : seqState(S);
@@ -810,7 +818,7 @@ function update(dt) {
   // streaks
   const pos = streakPos.array, col = streakCol.array;
   let n = 0;
-  const shown = P.streaks;
+  const shown = P.streaks, enter = enterS < 0 ? 1 : smooth(enterS, enterS + 0.6, S);
   if (mode === 'seq' && st.u > 0 && st.tau < 0) {
     // infall: r shrinks as (1 - e²) so the parcel accelerates, and it winds round as it falls
     const at = (sp, e, out) => {
@@ -825,7 +833,7 @@ function update(dt) {
       if (e <= 0 || e >= 1) continue;
       const len = 0.02 + 0.035 * e;
       at(sp, Math.max(0, e - len), a); at(sp, Math.max(0, e - len / 2), m); at(sp, e, b);
-      const fade = smooth(0, 0.25, e) * (1 - smooth(0.85, 1, e)) * (0.15 + 1.1 * e * e);
+      const fade = smooth(0, 0.25, e) * (1 - smooth(0.85, 1, e)) * (0.15 + 1.1 * e * e) * enter;
       const c = lut(mix(0.8, 0.05, e ** 1.5)), f0 = fade * 0.1, f1 = fade * 0.5;
       pos.set([...a, ...m, ...m, ...b], n * 6);
       col.set([c.r * f0, c.g * f0, c.b * f0, c.r * f1, c.g * f1, c.b * f1, c.r * f1, c.g * f1, c.b * f1, c.r * fade, c.g * fade, c.b * fade], n * 6);
@@ -886,7 +894,7 @@ window.__lab = {
   renderOnce(t) { if (t !== undefined) churn = t; update(0); render(); hud(); },
   // seek(seconds into the sequence): 0 is the quiet cloud, T0 + collapse is ignition
   seek(seconds, yawDeg) {
-    mode = 'seq'; S = Math.max(0, seconds); histReset = true;
+    mode = 'seq'; S = Math.max(0, seconds); enterS = -1; histReset = true;
     yaw = yawDeg !== undefined ? yawDeg * Math.PI / 180 : S * lab.params.orbit * Math.PI / 180;
     update(0); render(); hud();
   },
@@ -896,6 +904,7 @@ window.__lab = {
     update(0); render(); hud();
   },
   ignition: () => T0 + lab.params.collapse,
+  loopStart: loopS,
   state: () => ({ mode, S, B, ...st })
 };
 
