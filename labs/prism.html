@@ -61,6 +61,7 @@ const lab = createLab({
     waves:      { type: 'range', label: 'Wavelengths traced', min: 3, max: 24, step: 1, value: 7 },
     fresnel:    { type: 'toggle', label: 'Fresnel reflections', value: false },
     bounces:    { type: 'range', label: 'Max bounces per ray', min: 4, max: 60, step: 1, value: 4 },
+    absorb:     { type: 'range', label: 'Glass absorption (lost per mark width)', min: 0, max: 0.9, step: 0.01, value: 0, format: v => Math.round(v * 100), unit: '%' },
     hBeam:      { type: 'heading', label: 'Beam' },
     beam:       { type: 'range', label: 'Beam brightness', min: 0.2, max: 1.5, step: 0.05, value: 0.85 },
     width:      { type: 'range', label: 'Beam width', min: 0.5, max: 4, step: 0.1, value: 1.9, unit: ' px' },
@@ -337,6 +338,8 @@ function trace(o, d, ior, color, I, budget, segs) {
   const p = add(o, mul(d, h.t));
   segs.push(o, p, color, I);
   const entering = dot(d, h.e.n) < 0;
+  // a ray leaving the glass has just crossed it: Beer–Lambert, so long trapped paths fade as real glass makes them
+  if (!entering && lab.params.absorb > 0) I *= Math.pow(1 - lab.params.absorb, h.t / LOGO_W);
   const n = entering ? h.e.n : mul(h.e.n, -1);
   const n1 = entering ? 1 : ior, n2 = entering ? ior : 1;
   const r = refract(d, n, n1 / n2);
