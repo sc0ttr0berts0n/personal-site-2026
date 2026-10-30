@@ -279,9 +279,9 @@ export const LABS = [
     "title": "Splat!",
     "blurb": "The mark is made of slime and falling fast. It splats on the floor, the next mark pops out of the splat, then the floor gives way and down they go.",
     "teaches": "Raw WebGL2: every bead of goo is drawn with instanced rendering into a floating-point field (metaballs), then one composite pass lights the slime and the floors. The zoom is just perspective: a steady fall reads as an accelerating zoom.",
-    "hint": "tap it mid-fall to tilt it",
-    "touch": "tap",
-    "touchHint": "tap it mid-fall to tilt it",
+    "hint": "tap or flick it to send it tumbling",
+    "touch": "drag",
+    "touchHint": "tap or flick it to send it tumbling",
     "href": "labs/splat.html",
     "versions": []
   }

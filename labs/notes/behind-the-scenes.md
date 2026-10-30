@@ -326,3 +326,8 @@ Scott walked the saved versions in `notes/versions/goop/`.
 
 - **Proudest call:** the iodine clock reaction. "i really wish it was maze within a maze or something more clever, but iodine is just so good looking lol"
 - **The takeaway:** he can direct AI, and he spans disciplines ("people always love that"). Above all: "everything is shit at first and with frank and productive critique, you can reach wonderful results through iteration and experimentation."
+
+## 2026-10-30 — Splat: let it tumble
+
+- **The call:** touch tumbles the mark, it never rights itself, it keeps spinning on the momentum you gave it, and it lands however it's turned. This replaces the old lean-on-a-spring, which levelled the mark out just before impact so it always met the floor flat and square.
+- **What that took:** the mark became a free sheet with an orientation and a spin. A tap pokes it and a drag rolls it like a ball (round the rim it spins in place), with light damping so a flick lasts the whole fall. The splat used to assume the canonical pose, so its puddle, fingers, spray, shadow and hole all reached out from the upright outline. Now they all follow the orientation it landed in. The puddle starts as the mark's silhouette, slaps flat face up (or mirrored, if it came down face first) and keeps its heading. The edge that was highest slams down hardest and throws the longest fingers, and spin carries into the goo as a swirl.

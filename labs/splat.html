@@ -38,20 +38,27 @@ const GOOP_V = 0, GOOP_A = 6;   // the old splat's fall into its hole: initial s
 const FADE = [0.4, 1.5];        // s after the drop over which the old splat breaks up and dissolves
 const PASS = 0.975;             // the old floor is dropped once the camera is this fraction of the way down to it
 const fallY = x => P.height * C * x * x;   // distance fallen: free fall from rest, so the drop through the hole eases in
-// Falling feel. A touch mid-fall tilts the mark toward it (its near side dips away from the camera) on an underdamped
-// spring; as the speed builds it flutters like a canopy before it opens, its edges flapping; and the air streams past.
-// All of it levels out just before impact (FLAT), so the mark meets its splat flat, and the flap carries into the goo.
-const TILT = 0.5, TILT_W = 9, TILT_Z = 0.3;   // max lean (radians), spring rate and damping
-const FLUTTER = 0.09, FLAP = 0.03;            // canopy flutter (radians) and edge flap (logo units) at full speed, Flutter 1
-const FLAT = [0.86, 0.985];                   // fraction of the fall over which the mark levels out
+// Falling feel. The mark is a free sheet with an orientation and a spin. A tap pokes it (the side you tap dips away from
+// the camera) and a drag rolls it like a ball under your finger, or spins it if you drag round the rim; let go and it
+// keeps tumbling, barely slowing. Nothing levels it out: it lands however it's turned. As the speed builds it flutters
+// like a canopy before it opens, its edges flapping, and the air streams past.
+// On impact the splat starts as the mark's silhouette, slaps flat onto the floor (face up, or mirrored if it landed
+// face down) and spreads from there. The edge that was highest slams down hardest and throws the longest fingers, and
+// the spin carries into the goo as a swirl.
+const POKE = 7;                     // rad/s a tap at the rim adds
+const BALL = 0.55;                  // radius of the ball a drag rolls (logo units): smaller rolls faster
+const SPIN_DAMP = 0.12;             // spin decay, 1/s: light, so a flick keeps going all the way down
+const SPIN_MAX = 16;                // rad/s (sim time)
+const SLAP = 0.07;                  // s for a tilted mark to slap flat onto the floor
+const FLUTTER = 0.09, FLAP = 0.03;  // canopy flutter (radians) and edge flap (logo units) at full speed, Flutter 1
 
 const lab = createLab({
   number: '12',
   title: 'Splat!',
   blurb: 'The mark is made of slime and falling fast. It splats on the floor, the next mark pops out of the splat, then the floor gives way and down they go.',
   teaches: 'Raw WebGL2: every bead of goo is drawn with instanced rendering into a floating-point field (metaballs), then one composite pass lights the slime and the floors. The zoom is just perspective: a steady fall reads as an accelerating zoom.',
-  hint: 'tap it mid-fall to tilt it',
-  feed: { touch: 'tap', hint: 'tap it mid-fall to tilt it' },
+  hint: 'tap or flick it to send it tumbling',
+  feed: { touch: 'drag', hint: 'tap or flick it to send it tumbling' },
   grid: false,
   palettes: [
     { key: 'slime', name: 'Slime', bg: '#000000', grid: '#16161c', ink: '#f4f4f6', colors: ['#8cff1a', '#ff7a00', '#ff2fa8', '#1ee3ff', '#ffe414', '#9d4dff'] },
@@ -292,7 +299,7 @@ uniform float uScale, uTime, uFieldK, uD, uGloss, uShadowOn;
 uniform vec3 uFloorA, uLineA, uSlimeA, uFloorB, uLineB, uSlimeB;
 uniform float uHB, uSA, uAOn, uSpread, uWobL, uWobS, uFlat, uLanded, uShadowA, uAO;
 uniform float uHole, uHoleIn, uFloorOn, uSG, uErode, uSpreadH, uWobSH, uHoleTime, uSB, uEB, uRiseSh, uGoopA, uFlap, uFlapG, uAir, uAirT;
-uniform vec2 uTilt;
+uniform mat3 uRB, uRG, uRH;   // orientations (columns: the sheet's axes in the world): the mark, the splat, the hole
 out vec4 o;
 const float T = ${T.toFixed(3)}, W = ${EDGE.toFixed(3)}, DOM = ${DOM.toFixed(3)}, C = ${C.toFixed(3)};
 const vec2 LS = vec2(${LS[0].toFixed(3)}, ${LS[1].toFixed(3)});
@@ -324,33 +331,45 @@ float depth(float f){ return W * (sqrt(max(f, T) / T) - 1.); }
 // x = the field that sets the outline, y = the mound: the mark's own body, which stays thick inside the puddle.
 // The mark in the air, at screen scale uSB and grown in by uEB as it rises out of the splat (both 1 once it's
 // locked to the camera, which makes it identical to FG at the moment of impact).
-// The mark tilted by uTilt (its length the angle, its direction the side that dips away): ray-cast the screen point
-// back onto the tilted plane, seen in perspective from the camera C above.
-vec2 tiltQ(vec2 q){
-  float th = length(uTilt);
-  if (th < 1e-4) return q;
-  vec2 d = uTilt / th;
-  float s = dot(q, d), a = s * C / max(C * cos(th) - s * sin(th), .05);
-  return a * d + (q - s * d) * (C + a * sin(th)) / C;
+// A sheet turned by R, through its centre: ray-cast the screen point back onto it, seen in perspective from the camera
+// C above, and return where it lands in the sheet's own coordinates (seen from behind, that's the mirror image). A ray
+// that misses (the sheet edge-on, or turned away past the camera) lands far outside the mark.
+vec2 sheetQ(vec2 q, mat3 R){
+  vec3 n = R[2];
+  float den = C * n.z - dot(n.xy, q);
+  if (abs(den) < 1e-4) return vec2(9.);
+  float t = C * n.z / den;
+  if (t <= 0. || t > 40.) return vec2(9.);
+  return (transpose(R) * vec3(t * q, C * (1. - t))).xy;
 }
+// The same, along the light instead: g is the floor point shifted back to the sheet's centre (see logoShadow).
+vec2 sheetL(vec2 g, mat3 R){
+  vec3 n = R[2];
+  float den = n.z - dot(n.xy, LS);
+  if (abs(den) < .02) return vec2(9.);
+  float z = -dot(n.xy, g) / den;
+  return (transpose(R) * vec3(g - z * LS, z)).xy;
+}
+// the face the camera sees tips the lighting: its normal's slope, in the shading's y-up frame
+vec2 faceTn(mat3 R){ vec3 n = R[2] * sign(R[2].z + 1e-6); return clamp(vec2(n.x, -n.y) / max(n.z, .25), -4., 4.); }
 vec2 FB(vec2 q){
-  vec2 qb = tiltQ(q) / uSB;
+  vec2 qb = sheetQ(q, uRB) / uSB;
   float w = wob(qb, uWobL, 6., .6) + wob(qb, uFlap, 5., 11.) + (1. - uEB) * .08;
   return vec2(Lf(sdfAt(qb) * uSB + w), Lf(sdfSoft(qb) * uSB + w));
 }
-// The splat's goo, at screen scale uSG as it falls away from the camera: the mark's outline dilated into a puddle,
-// plus the beads, eaten into blobs by uErode as it breaks up.
+// The splat's goo, at screen scale uSG as it falls away from the camera: the mark's outline (turned however it landed,
+// uRG, slapping flat) dilated into a puddle, plus the beads, eaten into blobs by uErode as it breaks up.
 vec2 FG(vec2 q, vec2 uv){
-  vec2 qs = q / uSG;
+  vec2 qs = q / uSG, qm = sheetQ(qs, uRG);
   float w = wob(qs, uWobL, 6., .6) + wob(qs, uWobS, 3.2, 2.2) + wob(qs, uFlapG, 5., 11.) + uErode * (.4 + .8 * vnoise(qs * 4.5 + 7.));
-  return vec2(Lf(sdfAt(qs) - uSpread + w) + texture(uField, uv).r / uFieldK, Lf(sdfSoft(qs) - uSpread * .3 + w));
+  return vec2(Lf(sdfAt(qm) - uSpread + w) + texture(uField, uv).r / uFieldK, Lf(sdfSoft(qm) - uSpread * .3 + w));
 }
 // The hole in the old floor (scale uSA as the camera drops past it): the splat's shape frozen when the floor opened.
 // It starts just inside the goo's edge and grows (uHoleIn) to a touch past it, so it opens out from under the goo.
 float FH(vec2 q, vec2 uv){
   vec2 qs = q / uSA;
   float w = wobAt(qs, uWobL, 6., .6, uHoleTime) + wobAt(qs, uWobSH, 3.2, 2.2, uHoleTime);
-  return Lf(sdfAt(qs) - uSpreadH + w - mix(-.02, .012, uHoleIn)) + texture(uField, uv).b / uFieldK * mix(.75, 1.15, uHoleIn);
+  return Lf(sdfAt(sheetQ(qs, uRH)) - uSpreadH + w - mix(-.02, .012, uHoleIn)) + texture(uField, uv).b / uFieldK * mix(.75, 1.15, uHoleIn);
 }
 // The airstream: specks in the air rushing up past the mark toward the camera, each a streak (motion blur) that
 // radiates from the centre and grows as it nears. uAir is the speed (0 at rest, 1 at impact); uAirT its integral.
@@ -388,11 +407,11 @@ float gridA(vec2 q, float h){
   a = max(a, .72 * gridLevel(u / 4., .056 / 4.));
   return max(a, gridLevel(u / 16., .08 / 16.));
 }
-float logoShadow(vec2 q, float h){
+float logoShadow(vec2 q, float h, mat3 R){
   if (h <= 0.) return 0.;
   vec2 u = q * (C + h) / C;
   float b = .015 + .06 * h;
-  return (1. - smoothstep(-b, b, sdfAt(u - h * LS))) * .55 * min(1., 1.6 / (1. + .35 * h));
+  return (1. - smoothstep(-b, b, sdfAt(sheetL(u - h * LS, R)))) * .55 * min(1., 1.6 / (1. + .35 * h));
 }
 // Round profiles: a rolled edge everywhere the slime is, plus the mound of the mark's body (which flattens as it lands).
 float circ(float f, float r){ float x = 1. - min(depth(f) / r, 1.); return sqrt(1. - x * x); }
@@ -421,15 +440,15 @@ void main(){
 
   // the falling mark over its floor
   float aB = gridA(q, uHB);
-  vec3 col = mix(uFloorB, uLineB, aB) * (1. - uShadowOn * logoShadow(q, uHB));
-  vec4 sb = slime(uSlimeB, FB(q), FB(q + dqx), FB(q + dqy), pq, 1., vec2(uTilt.x, -uTilt.y));
+  vec3 col = mix(uFloorB, uLineB, aB) * (1. - uShadowOn * logoShadow(q, uHB, uRB));
+  vec4 sb = slime(uSlimeB, FB(q), FB(q + dqx), FB(q + dqy), pq, 1., faceTn(uRB));
   if (uAOn > .5) {
     vec2 g0 = FG(q, uv), gx = FG(q + dqx, uv + dux), gy = FG(q + dqy, uv + duy);
-    vec4 sa = slime(uSlimeA, g0, gx, gy, pq, uFlat, vec2(0));
+    vec4 sa = slime(uSlimeA, g0, gx, gy, pq, uFlat, faceTn(uRG));
     if (uHole < .5) {
       // the splat on its floor
       vec3 colA = mix(uFloorA, uLineA, gridA(q, 0.));
-      float sh = uShadowOn * uShadowA * logoShadow(q, .001);
+      float sh = uShadowOn * uShadowA * logoShadow(q, .001, uRG);
       float ao = uAO * .45 * smoothstep(0., T, g0.x);
       float ds = uShadowOn * .45 * smoothstep(.03, .6, texture(uField, uv).g / uFieldK);
       col = mix(colA * (1. - sh) * (1. - ao) * (1. - ds), sa.rgb, sa.a);
@@ -450,7 +469,7 @@ void main(){
       col = mix(col, sa.rgb, sa.a * uGoopA * mix(1., inHole, uHoleIn));   // and dissolves away before it is dropped
     }
     // the new mark rising out of the splat throws a soft shadow onto it
-    col *= 1. - .35 * uRiseSh * (1. - smoothstep(-.03, .03, sdfAt((q - LS * .05) / uSB) * uSB));
+    col *= 1. - .35 * uRiseSh * (1. - smoothstep(-.03, .03, sdfAt(sheetL((q - LS * .05) / uSB, uRB)) * uSB));
   }
   col = mix(col, mix(uLineB, vec3(1), .7), .55 * air(q, pq));
   o = vec4(mix(col, sb.rgb, sb.a), 1.);
@@ -488,9 +507,40 @@ const smooth = (a, b, x) => { const t = clamp01((x - a) / (b - a)); return t * t
 // phase 'fall': mark `cycle` is falling; `prev` is the splat it rose out of, falling too, until it's gone.
 let cycle = 0, phase = 'fall', tf = 0, tau = 0, sinceImpact = 1e9, splat = null, prev = null, clock = 0;
 let dirty = true, fieldDirty = true, paused = false;
-// the tilt spring (lean, its velocity, and the target a held touch sets), the canopy's flutter phase, the air's travel
-const tilt = { x: 0, y: 0, vx: 0, vy: 0, tx: 0, ty: 0 };
+// the mark's orientation (a unit quaternion [w, x, y, z]) and spin (rad/s about the world axes: x right, y down the
+// screen, z up toward the camera), the canopy's flutter phase, the air's travel
+let ori = [1, 0, 0, 0];
+const spin = [0, 0, 0];
 let flutterPh = 0, airT = 0;
+const qmul = (a, b) => [a[0] * b[0] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3], a[0] * b[1] + a[1] * b[0] + a[2] * b[3] - a[3] * b[2],
+  a[0] * b[2] - a[1] * b[3] + a[2] * b[0] + a[3] * b[1], a[0] * b[3] + a[1] * b[2] - a[2] * b[1] + a[3] * b[0]];
+const qnorm = q => { const l = Math.hypot(...q) || 1; return q.map(v => v / l); };
+function qrot(x, y, z) {   // the rotation by a rotation vector (axis × angle)
+  const a = Math.hypot(x, y, z);
+  if (a < 1e-9) return [1, 0, 0, 0];
+  const s = Math.sin(a / 2) / a;
+  return [Math.cos(a / 2), x * s, y * s, z * s];
+}
+function qslerp(a, b, t) {
+  let d = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
+  if (d < 0) { b = b.map(v => -v); d = -d; }
+  if (d > 0.9995) return qnorm(a.map((v, i) => v + (b[i] - v) * t));
+  const th = Math.acos(d), sa = Math.sin((1 - t) * th) / Math.sin(th), sb = Math.sin(t * th) / Math.sin(th);
+  return a.map((v, i) => v * sa + b[i] * sb);
+}
+// column-major 3×3: the columns are the sheet's x, y and normal axes in the world
+function qmat(q) {
+  const [w, x, y, z] = q;
+  return new Float32Array([1 - 2 * (y * y + z * z), 2 * (x * y + w * z), 2 * (x * z - w * y),
+    2 * (x * y - w * z), 1 - 2 * (x * x + z * z), 2 * (y * z + w * x),
+    2 * (x * z + w * y), 2 * (y * z - w * x), 1 - 2 * (x * x + y * y)]);
+}
+// the mark as drawn: its orientation, with the canopy's flutter on top
+function markQ(x = phase === 'fall' ? tf / P.fall : 0) {
+  if (phase !== 'fall') return ori;
+  const fa = FLUTTER * smooth(0.25, 0.9, x) * P.flutter, fx = fa * Math.sin(flutterPh), fy = 0.7 * fa * Math.sin(flutterPh * 1.37 + 1);
+  return qmul(qrot(-fy, fx, 0), ori);   // tilt (fx, fy): that side dips away from the camera
+}
 const H0 = () => P.height * C;
 const dropAt = () => P.hold + BEAT;
 const zeta = () => lerp(0.32, 0.75, P.goo), omega = () => lerp(24, 13, P.goo);
@@ -501,29 +551,44 @@ function spring(t, z = zeta(), w = omega()) {
 }
 
 function impact() {
+  // It lands however it's turned (q0) and slaps flat onto whichever face is down (qF: the least turn that lays its
+  // normal on the floor's, so it keeps its heading, and lands mirrored if it came down face first).
+  const q0 = markQ(1), M0 = qmat(q0), nz = M0[8], sg = nz >= 0 ? 1 : -1;
   phase = 'splat'; tau = 0; sinceImpact = 0;
-  Object.assign(tilt, { x: 0, y: 0, vx: 0, vy: 0, tx: 0, ty: 0 });   // it has levelled out by now (FLAT)
+  const ax = M0[7] * sg, ay = -M0[6] * sg, sa = Math.hypot(ax, ay), ang = Math.atan2(sa, Math.abs(nz));
+  const qF = sa > 1e-6 ? qnorm(qmul(qrot(ax / sa * ang, ay / sa * ang, 0), q0)) : q0, MF = qmat(qF);
+  const w = spin.slice();
+  // where an outward direction on the floor meets the mark's edge, and how hard that edge comes down: the side
+  // that was highest slams down last and hardest; the spin adds its own speed there, in the plane as a swirl
+  const rim = (dx, dy) => {
+    const lx = dx * MF[0] + dy * MF[1], ly = dx * MF[3] + dy * MF[4], edge = rayEdge(lx, ly);
+    const h = (M0[2] * lx + M0[5] * ly) * edge;   // height above the floor at impact
+    const rx = dx * edge, ry = dy * edge;
+    const slam = clamp01(h / 0.5) - 0.3 * clamp01(-h / 0.5) + 0.12 * Math.max(0, w[1] * rx - w[0] * ry) / 3;
+    return { edge, boost: Math.max(0.5, 1 + 0.9 * slam), sx: -w[2] * ry * 0.35, sy: w[2] * rx * 0.35 };
+  };
+  ori = [1, 0, 0, 0]; spin.fill(0);   // the next mark rises out of the splat square to the camera, still
   const R = rng(0x5eed + cycle * 7919), g = P.goo;
   const fingers = [], drops = [];
   const nF = P.fingers | 0, off = R() * Math.PI * 2;
   for (let i = 0; i < nF; i++) {
     const th = off + (i + (R() - 0.5) * 0.8) / nF * Math.PI * 2;
-    const dx = Math.cos(th), dy = Math.sin(th), edge = rayEdge(dx, dy);
-    const V = lerp(4.4, 2.3, g) * (0.45 + 1.0 * R() ** 1.4), size = 0.75 + 0.5 * R(), swirl = (R() - 0.5) * 0.5;
+    const dx = Math.cos(th), dy = Math.sin(th), { edge, boost, sx, sy } = rim(dx, dy);
+    const V = lerp(4.4, 2.3, g) * (0.45 + 1.0 * R() ** 1.4) * boost, size = 0.75 + 0.5 * R(), swirl = (R() - 0.5) * 0.5;
     const prof = [0.06, 0.042, 0.031, 0.025, 0.028, 0.03 + 0.032 * R()];
     const nodes = [];
     for (let j = 0; j < NODES; j++) {
       const f = (j / (NODES - 1)) ** 1.35;
-      nodes.push({ x: dx * edge * 0.9, y: dy * edge * 0.9, vx: (dx - dy * swirl) * V * f, vy: (dy + dx * swirl) * V * f, r: prof[j] * size });
+      nodes.push({ x: dx * edge * 0.9, y: dy * edge * 0.9, vx: ((dx - dy * swirl) * V + sx) * f, vy: ((dy + dx * swirl) * V + sy) * f, r: prof[j] * size });
     }
     fingers.push({ dx, dy, edge, nodes, seg: lerp(0.07, 0.045, g) * (0.7 + 0.8 * R()), brk: R() < 0.3, pinch: 0 });
   }
   for (let i = 0, n = P.spray | 0; i < n; i++) {
-    const th = R() * Math.PI * 2, dx = Math.cos(th), dy = Math.sin(th), edge = rayEdge(dx, dy);
-    const U = lerp(4.5, 2.8, g) * (0.35 + R());
-    drops.push({ x: dx * edge * 0.92, y: dy * edge * 0.92, z: 0.02, vx: dx * U, vy: dy * U, vz: 1.2 + 3 * R(), r: 0.012 + 0.03 * R() ** 2, land: 0, flying: true });
+    const th = R() * Math.PI * 2, dx = Math.cos(th), dy = Math.sin(th), { edge, boost, sx, sy } = rim(dx, dy);
+    const U = lerp(4.5, 2.8, g) * (0.35 + R()) * boost;
+    drops.push({ x: dx * edge * 0.92, y: dy * edge * 0.92, z: 0.02, vx: dx * U + sx, vy: dy * U + sy, vz: 1.2 + 3 * R(), r: 0.012 + 0.03 * R() ** 2, land: 0, flying: true });
   }
-  splat = { fingers, drops };
+  splat = { fingers, drops, q0, qF, MF };
   fieldDirty = true;
 }
 
@@ -574,10 +639,11 @@ function stepSplat(h) {
 
 // What to draw right now. A = the splat (if any): its goo, and the floor it landed on, which opens in its shape
 // and rushes past the camera once the new mark drops. B = the mark in the air, its floor far below.
+const I3 = qmat([1, 0, 0, 0]);
 function look() {
   const L = { y: 0, hB: H0(), Bk: cycle, AOn: 0, Ak: cycle - 1, SA: 1, sp: null, tauA: 0, tB: 1e9,
     spread: 0, flat: 1, landed: 0, shadowA: 1, wobS: 0, ao: 0, hole: 0, floorOn: 1, sG: 1, tg: 0, fade: 1, erode: 0,
-    sB: 1, eB: 1, riseSh: 0, tilt: [0, 0], flap: 0, flapG: 0, air: 0 };
+    sB: 1, eB: 1, riseSh: 0, rB: I3, rG: I3, rH: I3, flap: 0, flapG: 0, air: 0 };
   if (phase === 'splat') { L.AOn = 1; L.Ak = cycle; L.Bk = cycle + 1; L.sp = splat; L.tauA = L.tB = tau; }
   else {
     L.y = fallY(tf / P.fall); L.hB = H0() - L.y;
@@ -587,13 +653,16 @@ function look() {
   L.sB = 0.6 + 0.4 * spring(L.tB, 0.42, 12);
   L.eB = smooth(0, 0.16, L.tB);
   L.riseSh = L.eB * (1 - smooth(P.hold, dropAt(), L.tB));
+  L.rB = qmat(markQ());
   if (phase === 'fall') {
-    const x = tf / P.fall, fl = smooth(0.25, 0.9, x), env = 1 - smooth(FLAT[0], FLAT[1], x), fa = FLUTTER * fl * P.flutter;
-    L.tilt = [(tilt.x + fa * Math.sin(flutterPh)) * env, (tilt.y + 0.7 * fa * Math.sin(flutterPh * 1.37 + 1)) * env];
-    L.flap = FLAP * P.flutter * fl;
+    const x = tf / P.fall;
+    L.flap = FLAP * P.flutter * smooth(0.25, 0.9, x);
     L.air = x;
   } else L.air = Math.exp(-10 * tau);   // the air stops with the mark
   if (!L.sp) return L;
+  const sl = clamp01(L.tauA / SLAP);
+  L.rG = sl >= 1 ? L.sp.MF : qmat(qslerp(L.sp.q0, L.sp.qF, sl * sl));   // slapping down, faster as it goes
+  L.rH = L.sp.MF;
   L.flapG = FLAP * P.flutter * Math.exp(-8 * L.tauA);   // the flap at impact, dying away in the goo
   const t = L.tauA, sp = spring(t);
   L.spread = P.spread * sp;
@@ -615,9 +684,11 @@ const wobS = t => P.wobble * (0.07 * Math.exp(-t * 3.2) + 0.012) * smooth(0, 0.0
 function advance(dt) {
   clock += dt;
   const x = phase === 'fall' ? tf / P.fall : 0, n = Math.ceil(dt / SUB), s = dt / n;
-  for (let k = 0; k < n; k++) {
-    tilt.vx += (TILT_W * TILT_W * (tilt.tx - tilt.x) - 2 * TILT_Z * TILT_W * tilt.vx) * s; tilt.x += tilt.vx * s;
-    tilt.vy += (TILT_W * TILT_W * (tilt.ty - tilt.y) - 2 * TILT_Z * TILT_W * tilt.vy) * s; tilt.y += tilt.vy * s;
+  if (spin[0] || spin[1] || spin[2]) {
+    for (let k = 0; k < n; k++) ori = qmul(qrot(spin[0] * s, spin[1] * s, spin[2] * s), ori);
+    ori = qnorm(ori);
+    const k = Math.exp(-SPIN_DAMP * dt);
+    for (let i = 0; i < 3; i++) { spin[i] *= k; if (Math.abs(spin[i]) < 1e-3) spin[i] = 0; }
   }
   flutterPh += dt * 6.2832 * (2 + 7 * x);
   airT += dt * (phase === 'fall' ? x : Math.exp(-10 * tau)) * 1.4;
@@ -786,7 +857,8 @@ function render() {
   gl.uniform1f(u.uHole, L.hole); gl.uniform1f(u.uHoleIn, smooth(0, 0.18, L.tg)); gl.uniform1f(u.uFloorOn, L.floorOn); gl.uniform1f(u.uSG, L.sG); gl.uniform1f(u.uErode, L.erode);
   gl.uniform1f(u.uHoleTime, L.sp?.holeClock ?? 0);
   gl.uniform1f(u.uSB, L.sB); gl.uniform1f(u.uEB, L.eB); gl.uniform1f(u.uRiseSh, L.riseSh); gl.uniform1f(u.uGoopA, smooth(0, 0.35, L.fade));
-  gl.uniform2f(u.uTilt, L.tilt[0], L.tilt[1]); gl.uniform1f(u.uFlap, L.flap); gl.uniform1f(u.uFlapG, L.flapG);
+  gl.uniformMatrix3fv(u.uRB, false, L.rB); gl.uniformMatrix3fv(u.uRG, false, L.rG); gl.uniformMatrix3fv(u.uRH, false, L.rH);
+  gl.uniform1f(u.uFlap, L.flap); gl.uniform1f(u.uFlapG, L.flapG);
   gl.uniform1f(u.uAir, lab.calm ? 0 : L.air); gl.uniform1f(u.uAirT, airT);
   gl.bindVertexArray(tri);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
@@ -804,6 +876,7 @@ function hud() {
 
 // Reduced motion: one good still, the floor giving way under the splat, the new mark locked above it.
 function still() {
+  ori = [1, 0, 0, 0]; spin.fill(0);
   cycle = 0; phase = 'fall'; tf = 0; clock = 1.3; acc = 0; prev = null;
   impact();
   stepFor(P.hold + 0.3);
@@ -812,18 +885,52 @@ function still() {
 }
 
 // ---- wiring ----
-// a touch mid-fall leans the mark toward it, harder the further out; letting go springs it back (with a wobble)
-let touching = false;
-function lean(e) {
-  if (!touching || phase !== 'fall' || lab.calm) { tilt.tx = tilt.ty = 0; return; }
-  const r = canvas.getBoundingClientRect(), fl = fitLogo(lab.square());
-  const qx = (e.clientX - r.left - fl.cx) / fl.scale, qy = (e.clientY - r.top - fl.cy) / fl.scale, d = Math.hypot(qx, qy) || 1;
-  const m = TILT * Math.min(1, d / 0.6);
-  tilt.tx = qx / d * m; tilt.ty = qy / d * m;
+// A tap pokes the mark: the side you tap dips away from the camera, harder the further out. A drag rolls it like a
+// ball under your finger (dragging round the rim spins it in its plane instead), and it keeps whatever spin it has
+// when you let go; stop your finger before you lift and it stops too. Spin is in sim time, so it's divided by the speed.
+const capSpin = () => { const m = Math.hypot(...spin); if (m > SPIN_MAX) for (let i = 0; i < 3; i++) spin[i] *= SPIN_MAX / m; };
+function poke(qx, qy) {
+  const d = Math.hypot(qx, qy);
+  if (d < 1e-3) return;
+  const k = POKE * Math.min(1, d / 0.6) / d / P.speed;
+  spin[0] -= qy * k; spin[1] += qx * k;
+  capSpin(); dirty = true;
 }
-canvas.addEventListener('pointerdown', e => { touching = true; canvas.setPointerCapture?.(e.pointerId); lean(e); });
-canvas.addEventListener('pointermove', lean);
-for (const ev of ['pointerup', 'pointercancel']) canvas.addEventListener(ev, () => { touching = false; tilt.tx = tilt.ty = 0; });
+let grab = null;
+const logoAt = e => {
+  const r = canvas.getBoundingClientRect(), fl = fitLogo(lab.square());
+  return [(e.clientX - r.left - fl.cx) / fl.scale, (e.clientY - r.top - fl.cy) / fl.scale];
+};
+canvas.addEventListener('pointerdown', e => {
+  if (lab.calm || (grab && e.pointerId !== grab.id)) return;
+  canvas.setPointerCapture?.(e.pointerId);
+  const [x, y] = logoAt(e);
+  poke(x, y);
+  grab = { id: e.pointerId, x, y, t: e.timeStamp, moved: 0 };
+});
+canvas.addEventListener('pointermove', e => {
+  if (!grab || e.pointerId !== grab.id) return;
+  const [x, y] = logoAt(e), dt = Math.max(1 / 240, (e.timeStamp - grab.t) / 1000);
+  const vx = (x - grab.x) / dt, vy = (y - grab.y) / dt;
+  grab.moved += Math.hypot(x - grab.x, y - grab.y);
+  if (grab.moved > 0.03) {
+    // split the finger's velocity along and across the radius: along it rolls; across it spins, out at the rim
+    const r = Math.hypot(x, y) || 1e-3, ux = x / r, uy = y / r, vr = vx * ux + vy * uy, vt = vy * ux - vx * uy;
+    const rim = smooth(0.15, 0.5, r), rx = vr * ux - (1 - rim) * vt * uy, ry = vr * uy + (1 - rim) * vt * ux;
+    const target = [-ry / BALL, rx / BALL, rim * vt / r].map(v => v / P.speed);
+    const a = 1 - Math.exp(-dt * 30);
+    for (let i = 0; i < 3; i++) spin[i] += (target[i] - spin[i]) * a;
+    capSpin(); dirty = true;
+  }
+  Object.assign(grab, { x, y, t: e.timeStamp });
+});
+canvas.addEventListener('pointerup', e => {
+  if (!grab || e.pointerId !== grab.id) return;
+  const still = (e.timeStamp - grab.t) / 1000;   // a finger held still before it lifts lets the spin die with it
+  if (grab.moved > 0.03 && still > 0.05) { const k = Math.exp(-(still - 0.05) * 12); for (let i = 0; i < 3; i++) spin[i] *= k; }
+  grab = null;
+});
+canvas.addEventListener('pointercancel', e => { if (grab && e.pointerId === grab.id) grab = null; });
 lab.on('resize', fit);
 lab.on('palette', () => { dirty = true; });
 lab.on('change', key => {
@@ -865,9 +972,11 @@ window.__lab = {
     render(); hud(); return this.state();
   },
   pause(on = true) { paused = on; },
-  lean(x, y) { tilt.tx = x; tilt.ty = y; },   // the target lean, as a held touch sets it
+  poke(x, y) { poke(x, y); return this.state(); },               // a tap at (x, y), logo units
+  spin(x = 0, y = 0, z = 0) { spin[0] = x; spin[1] = y; spin[2] = z; return this.state(); },   // rad/s, sim time
+  orient(x = 0, y = 0, z = 0) { ori = qrot(x, y, z); return this.state(); },                   // a rotation vector
   still() { still(); render(); hud(); return this.state(); },   // the reduced-motion frame
-  state() { const L = look(); return { phase, cycle, tf: +tf.toFixed(3), tau: +tau.toFixed(3), hB: +L.hB.toFixed(3), y: +L.y.toFixed(3), withOldSplat: !!(phase === 'fall' && L.AOn), hole: L.hole, floorOn: L.floorOn, sG: +L.sG.toFixed(3), sB: +L.sB.toFixed(3), beads: nBodies, shadows: nShadows, halfOK, ms: +ms.toFixed(2) }; },
+  state() { const L = look(); return { phase, cycle, tf: +tf.toFixed(3), tau: +tau.toFixed(3), hB: +L.hB.toFixed(3), y: +L.y.toFixed(3), withOldSplat: !!(phase === 'fall' && L.AOn), hole: L.hole, floorOn: L.floorOn, sG: +L.sG.toFixed(3), sB: +L.sB.toFixed(3), beads: nBodies, shadows: nShadows, halfOK, ms: +ms.toFixed(2), normal: [...qmat(markQ()).slice(6)].map(v => +v.toFixed(3)), spin: spin.map(v => +v.toFixed(2)) }; },
   measure(frames = 60) { const t0 = performance.now(); for (let k = 0; k < frames; k++) { advance(1 / 60); render(); } gl.finish(); return (performance.now() - t0) / frames; }
 };
 </script>
