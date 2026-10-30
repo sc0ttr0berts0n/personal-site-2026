@@ -728,7 +728,7 @@ function openSheet(t) {
     <section>
       <span class="label">Process</span>
       ${t.versions.length
-        ? `<p class="stub">Old versions, from before each decisive change (they run on today’s shared code, so some may look a little off).</p>
+        ? `<p class="stub">Old versions, from before each decisive change (each runs on a copy of the shared code frozen on 2026-10-30, not the code it was first built on, so some may look a little off).</p>
            <ul class="versions">${t.versions.map(v => `<li><a href="${esc(v.href)}" target="_blank" rel="noopener">${esc(v.name)}</a></li>`).join('')}</ul>`
         : `<p class="stub">No old versions kept for this one.</p>`}
       <p class="stub">Process notes: coming soon. <a href="labs/notes/behind-the-scenes.md" target="_blank" rel="noopener">Raw notes</a></p>
