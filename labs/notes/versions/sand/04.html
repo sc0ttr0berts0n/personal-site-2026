@@ -1,10 +1,12 @@
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<script src="../../../../embed/lab-embed.js"></script>
 <title>Falling Sand</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@200;300&family=Familjen+Grotesk:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap">
-<link rel="stylesheet" href="shared/lab.css">
+<link rel="stylesheet" href="./shared/lab.css">
 <style>
   /* element palette, top-left of the stage, like the old web toys */
   .sand-tools { position: absolute; left: 12px; top: 10px; z-index: 3; display: flex; flex-wrap: wrap; gap: 4px; max-width: min(60%, 470px); }
@@ -21,8 +23,8 @@
   .lab-stage > canvas { cursor: crosshair; }
 </style>
 <script type="module">
-import { createLab } from '../../../shared/lab.js';
-import { LOGO_PIECES, fitLogo, logoPolygons } from '../../../shared/logo.js';
+import { createLab } from './shared/lab.js';
+import { LOGO_PIECES, fitLogo, logoPolygons } from './shared/logo.js';
 
 // =====================================================================================
 // Knobs that aren't sliders. Everything Scott might want to argue with lives up here.
