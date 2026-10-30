@@ -39,7 +39,7 @@ export const LABS = [
     "title": "Neon Oil",
     "blurb": "The mark rises out of a pool of black oil. Sheets of it slide off, long ropes stretch back down to the pool and snap, and the clean mark shows through.",
     "teaches": "Beautiful eye candy for its own sake. Raw WebGL2, no library: the logo’s outline is baked into a half-float texture, and one large shader draws the oil, the drips and the reflections. It’s the heaviest shader on the site, so it compiles in the background while the page stays responsive.",
-    "hint": "drag to orbit the camera around the mark",
+    "hint": "drag to turn the camera around the mark",
     "touch": "drag",
     "touchHint": "drag to orbit",
     "href": "labs/goop.html",

@@ -42,7 +42,7 @@ const lab = createLab({
   title: 'Neon Oil',
   blurb: 'The mark rises out of a pool of black oil. Sheets of it slide off, long ropes stretch back down to the pool and snap, and the clean mark shows through.',
   teaches: 'Beautiful eye candy for its own sake. Raw WebGL2, no library: the logo’s outline is baked into a half-float texture, and one large shader draws the oil, the drips and the reflections. It’s the heaviest shader on the site, so it compiles in the background while the page stays responsive.',
-  hint: 'drag to orbit the camera around the mark',
+  hint: 'drag to turn the camera around the mark',
   feed: { touch: 'drag', hint: 'drag to orbit' },
   palettes: [OIL, HONEY, SLIME, GRAPE, NEON],
   defaultPalette: 'neon',
@@ -970,7 +970,7 @@ function render() {
     const pit = h * D * (0.38 * Math.sin(t * 0.53) + 0.2 * Math.sin(t * 1.37 + 2.0) + 0.04 * Math.sin(t * 4.1 + 0.7));
     const rol = h * D * (0.3 * Math.sin(t * 0.71 + 0.3) + 0.1 * Math.sin(t * 1.9 + 1.1));
     // the camera sits on a sphere around the mark's center at the orbit's angles; the shake turns it in place
-    const oP = clamp(phi + orb.pitch, PITCH_LO, PITCH_HI), os = Math.sin(oP), oc = Math.cos(oP), oy = Math.sin(orb.yaw), ox = Math.cos(orb.yaw);
+    const oP = phi + pitchIn(orb.pitch), os = Math.sin(oP), oc = Math.cos(oP), oy = Math.sin(orb.yaw), ox = Math.cos(orb.yaw);
     const ph = oP + pit, s2 = Math.sin(ph), c2 = Math.cos(ph), sy = Math.sin(orb.yaw + yaw), cy = Math.cos(orb.yaw + yaw);
     const fwd = [-c2 * sy, -s2, -c2 * cy], rt = [cy, 0, -sy];
     const up = [rt[1] * fwd[2] - rt[2] * fwd[1], rt[2] * fwd[0] - rt[0] * fwd[2], rt[0] * fwd[1] - rt[1] * fwd[0]];
@@ -1019,22 +1019,23 @@ function hud() {
   lab.hud(s);
 }
 
-// ---- pointer: a drag orbits the camera around the mark; let go and it coasts, then drifts home ----
+// ---- pointer: a drag turns the camera around the mark; let go and it blends back to the front view ----
 // Only the camera moves, so a drag costs nothing in the shader. (Taps used to drop rings into the pool, and every
 // live ring is another pass of the pool's wave loop at every march step: 24 of them made an open-pool frame up to ~12× dearer.)
 let lastInteract = -1e9;
 const nowS = () => performance.now() / 1000;
 function wake() { lastInteract = nowS(); dirty = true; }
-// Yaw goes all the way round (the back of the mark reads well, mirrored); pitch stays between skimming the pool
-// and the camera-tilt slider's top, past which the pool turns to a black floor.
-const D2R = Math.PI / 180, PITCH_LO = 3 * D2R, PITCH_HI = 45 * D2R;
-const wrap = a => a - 2 * Math.PI * Math.round(a / (2 * Math.PI));
-const orb = { yaw: 0, pitch: 0, vy: 0, vp: 0, free: 0 };   // free: seconds since it was let go
+// Limits: 30° either way around, up to 45° over the top, and never down below the oil. The low stop follows the
+// surface (the pool's highest swell plus a margin), so it rises and falls with the lift.
+const D2R = Math.PI / 180, YAW_MAX = 30 * D2R, PITCH_HI = 45 * D2R;
+const pitchLo = () => Math.asin(clamp((poolY + hAmp + 0.3 - YC) / DIST, -1, 1));
+const pitchIn = p => { const base = P.tilt * D2R; return clamp(base + p, Math.min(pitchLo(), PITCH_HI), PITCH_HI) - base; };
+const orb = { yaw: 0, pitch: 0, vy: 0, vp: 0 };
 let drag = null;
 canvas.style.touchAction = 'none';
 canvas.style.cursor = 'grab';
 canvas.tabIndex = 0;
-canvas.setAttribute('aria-label', 'A pool of black oil with the mark standing in it. Drag to orbit the camera around the mark. Enter pours on the mark, space drops a stone.');
+canvas.setAttribute('aria-label', 'A pool of black oil with the mark standing in it. Drag to turn the camera around the mark. Enter pours on the mark, space drops a stone.');
 canvas.addEventListener('pointerdown', e => {
   if (drag) return;
   drag = { id: e.pointerId, x: e.clientX, y: e.clientY, t: e.timeStamp };
@@ -1045,11 +1046,10 @@ canvas.addEventListener('pointerdown', e => {
 });
 canvas.addEventListener('pointermove', e => {
   if (!drag || drag.id !== e.pointerId) return;
-  // a drag across the whole square turns the camera ~200°
-  const k = 3.5 / sq.size, ddx = e.clientX - drag.x, ddy = e.clientY - drag.y, dt = Math.max(e.timeStamp - drag.t, 1) / 1000;
-  const dy = -ddx * k, dp = ddy * k;
-  const yaw = orb.yaw + dy, base = P.tilt * D2R, pitch = clamp(base + orb.pitch + dp, PITCH_LO, PITCH_HI) - base;
-  // velocity for the coast: a smoothed rate, so the last jittery move before letting go doesn't decide it
+  // a drag across the whole square is ~70°, so the 30° stop is a bit past the middle to the edge
+  const k = 1.2 / sq.size, dt = Math.max(e.timeStamp - drag.t, 1) / 1000;
+  const yaw = clamp(orb.yaw - (e.clientX - drag.x) * k, -YAW_MAX, YAW_MAX), pitch = pitchIn(orb.pitch + (e.clientY - drag.y) * k);
+  // the hand's speed, smoothed, so letting go hands it on to the blend back instead of jolting
   const a = Math.min(1, dt / 0.05);
   orb.vy = mix(orb.vy, (yaw - orb.yaw) / dt, a); orb.vp = mix(orb.vp, (pitch - orb.pitch) / dt, a);
   orb.yaw = yaw; orb.pitch = pitch;
@@ -1058,22 +1058,22 @@ canvas.addEventListener('pointermove', e => {
 });
 const endDrag = e => {
   if (!drag || drag.id !== e.pointerId) return;
-  if (e.timeStamp - drag.t > 80) orb.vy = orb.vp = 0;   // held still before letting go: no coast
-  drag = null; orb.free = 0;
+  if (e.timeStamp - drag.t > 80) orb.vy = orb.vp = 0;   // held still before letting go: no carry
+  drag = null;
   canvas.style.cursor = 'grab';
   wake();
 };
 canvas.addEventListener('pointerup', endDrag); canvas.addEventListener('pointercancel', endDrag);
 function orbit(dt) {
+  // the low stop moves with the oil, so it holds even while a drag is held still
+  const p = pitchIn(orb.pitch); if (p !== orb.pitch) { orb.pitch = p; orb.vp = Math.max(orb.vp, 0); if (drag) return true; }
   if (drag) return false;
   if (!orb.yaw && !orb.pitch && !orb.vy && !orb.vp) return false;
-  orb.free += dt;
-  // coast: the flick's speed bleeds off over about a third of a second; pitch stops dead at its limits
-  const f = Math.exp(-dt * 3.2), base = P.tilt * D2R;
-  orb.yaw = wrap(orb.yaw + orb.vy * dt); orb.pitch += orb.vp * dt; orb.vy *= f; orb.vp *= f;
-  if (base + orb.pitch < PITCH_LO || base + orb.pitch > PITCH_HI) { orb.pitch = clamp(base + orb.pitch, PITCH_LO, PITCH_HI) - base; orb.vp = 0; }
-  // home: after a beat, drift back to the front view slowly, so it settles rather than snaps
-  if (orb.free > 1.5) { const g = 1 - Math.exp(-dt * 0.9 * Math.min(1, (orb.free - 1.5) / 1.5)); orb.yaw -= orb.yaw * g; orb.pitch -= orb.pitch * g; }
+  // let go: a critically damped spring back to the front view, starting from the hand's speed, so it eases out of
+  // the drag and settles in about a second and a half with no overshoot
+  const w = 3.2;
+  orb.vy += (-w * w * orb.yaw - 2 * w * orb.vy) * dt; orb.vp += (-w * w * orb.pitch - 2 * w * orb.vp) * dt;
+  orb.yaw = clamp(orb.yaw + orb.vy * dt, -YAW_MAX, YAW_MAX); orb.pitch = pitchIn(orb.pitch + orb.vp * dt);
   if (Math.abs(orb.yaw) + Math.abs(orb.pitch) < 2e-4 && Math.abs(orb.vy) + Math.abs(orb.vp) < 1e-3) orb.yaw = orb.pitch = orb.vy = orb.vp = 0;
   return true;
 }
