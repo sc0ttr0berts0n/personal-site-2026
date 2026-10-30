@@ -1022,11 +1022,18 @@ function hud() {
 let lastInteract = -1e9;
 const nowS = () => performance.now() / 1000;
 function wake() { lastInteract = nowS(); dirty = true; }
-// Limits: 30° either way around, up to 45° over the top, and never down below the oil. The low stop follows the
-// surface (the pool's highest swell plus a margin), so it rises and falls with the lift.
-const D2R = Math.PI / 180, YAW_MAX = 30 * D2R, PITCH_HI = 45 * D2R;
+// Limits: 30° either way around, up to 45° over the top, and never down below the oil. Each is a rubber band: a drag
+// carries on a little past it, against more and more pull, and never more than GIVE past. The waterline is the one
+// hard floor, so the low band sits above it: its stop is LO_GIVE up from the oil and it stretches down to the surface.
+// The waterline follows the pool's highest swell plus a margin, so it rises and falls with the lift.
+const D2R = Math.PI / 180, YAW_MAX = 30 * D2R, PITCH_HI = 45 * D2R, GIVE = 7 * D2R, LO_GIVE = 4 * D2R;
 const pitchLo = () => Math.asin(clamp((poolY + hAmp + 0.3 - YC) / DIST, -1, 1));
-const pitchIn = p => { const base = P.tilt * D2R; return clamp(base + p, Math.min(pitchLo(), PITCH_HI), PITCH_HI) - base; };
+const pitchIn = p => { const base = P.tilt * D2R; return clamp(base + p, Math.min(pitchLo(), PITCH_HI), PITCH_HI + GIVE) - base; };
+// x past a stop → how far it really goes (follows the hand at first, never reaches r); and back
+const give = (x, r) => r * x / (r + x), ungive = (y, r) => r * Math.min(y, r * 0.99) / (r - Math.min(y, r * 0.99));
+const band = (v, lo, hi, rLo, rHi, f) => v > hi ? hi + f(v - hi, rHi) : v < lo ? lo - f(lo - v, rLo) : v;
+const yawBand = (v, f) => band(v, -YAW_MAX, YAW_MAX, GIVE, GIVE, f);
+const pitchBand = (v, f) => { const lo = Math.min(pitchLo() + LO_GIVE, PITCH_HI); return band(v, lo, PITCH_HI, LO_GIVE, GIVE, f); };   // absolute pitch
 const orb = { yaw: 0, pitch: 0, vy: 0, vp: 0 };
 let drag = null;
 canvas.style.touchAction = 'none';
@@ -1035,7 +1042,9 @@ canvas.tabIndex = 0;
 canvas.setAttribute('aria-label', 'A pool of black oil with the mark standing in it. Drag to turn the camera around the mark. Enter pours on the mark, space drops a stone.');
 canvas.addEventListener('pointerdown', e => {
   if (drag) return;
-  drag = { id: e.pointerId, x: e.clientX, y: e.clientY, t: e.timeStamp };
+  // the hand's own angles, unbanded, picked up from wherever the view is now (maybe mid-stretch) so nothing jumps
+  const base = P.tilt * D2R;
+  drag = { id: e.pointerId, x: e.clientX, y: e.clientY, t: e.timeStamp, yaw: yawBand(orb.yaw, ungive), pitch: pitchBand(base + orb.pitch, ungive) };
   orb.vy = orb.vp = 0;
   canvas.setPointerCapture(e.pointerId);
   canvas.style.cursor = 'grabbing';
@@ -1045,7 +1054,8 @@ canvas.addEventListener('pointermove', e => {
   if (!drag || drag.id !== e.pointerId) return;
   // a drag across the whole square is ~70°, so the 30° stop is a bit past the middle to the edge
   const k = 1.2 / sq.size, dt = Math.max(e.timeStamp - drag.t, 1) / 1000;
-  const yaw = clamp(orb.yaw - (e.clientX - drag.x) * k, -YAW_MAX, YAW_MAX), pitch = pitchIn(orb.pitch + (e.clientY - drag.y) * k);
+  drag.yaw -= (e.clientX - drag.x) * k; drag.pitch += (e.clientY - drag.y) * k;
+  const yaw = yawBand(drag.yaw, give), pitch = pitchIn(pitchBand(drag.pitch, give) - P.tilt * D2R);
   // the hand's speed, smoothed, so letting go hands it on to the blend back instead of jolting
   const a = Math.min(1, dt / 0.05);
   orb.vy = mix(orb.vy, (yaw - orb.yaw) / dt, a); orb.vp = mix(orb.vp, (pitch - orb.pitch) / dt, a);
@@ -1056,6 +1066,10 @@ canvas.addEventListener('pointermove', e => {
 const endDrag = e => {
   if (!drag || drag.id !== e.pointerId) return;
   if (e.timeStamp - drag.t > 80) orb.vy = orb.vp = 0;   // held still before letting go: no carry
+  // let go while stretched past a stop: the band takes over, nothing flings it further out
+  const ap = P.tilt * D2R + orb.pitch;
+  if (Math.abs(orb.yaw) > YAW_MAX && orb.vy * orb.yaw > 0) orb.vy = 0;
+  if ((ap > PITCH_HI && orb.vp > 0) || (ap < pitchLo() + LO_GIVE && orb.vp < 0)) orb.vp = 0;
   drag = null;
   canvas.style.cursor = 'grab';
   wake();
@@ -1070,7 +1084,7 @@ function orbit(dt) {
   // the drag and settles in about a second and a half with no overshoot
   const w = 3.2;
   orb.vy += (-w * w * orb.yaw - 2 * w * orb.vy) * dt; orb.vp += (-w * w * orb.pitch - 2 * w * orb.vp) * dt;
-  orb.yaw = clamp(orb.yaw + orb.vy * dt, -YAW_MAX, YAW_MAX); orb.pitch = pitchIn(orb.pitch + orb.vp * dt);
+  orb.yaw = clamp(orb.yaw + orb.vy * dt, -YAW_MAX - GIVE, YAW_MAX + GIVE); orb.pitch = pitchIn(orb.pitch + orb.vp * dt);
   if (Math.abs(orb.yaw) + Math.abs(orb.pitch) < 2e-4 && Math.abs(orb.vy) + Math.abs(orb.vp) < 1e-3) orb.yaw = orb.pitch = orb.vy = orb.vp = 0;
   return true;
 }
