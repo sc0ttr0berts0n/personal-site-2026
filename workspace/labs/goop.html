@@ -173,7 +173,7 @@ function stepLift(dt) {
   // jumping there, so at the start of a dunk the sheen creeps back up from the oil over about a second instead of
   // popping onto a mark that has drained clean.
   const pinned = poolY > prev + 1e-7 || (P.loop && (cyc.phase === 'under' || cyc.phase === 'sink'));
-  if (pinned && poolY > drainY) drainY += (poolY - drainY) * (1 - Math.exp(-dt * 1.2));
+  if (pinned) { if (poolY > drainY) drainY += (poolY - drainY) * (1 - Math.exp(-dt * 1.2)); }
   else drainY = Math.max(POOL_LO - 8, drainY - drainV() * dt);
 }
 
