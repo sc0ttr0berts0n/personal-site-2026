@@ -77,6 +77,9 @@
       html.lab-page.held .lab-hold { border-color: var(--ink); background-color: rgb(0 0 0 / .35); }
       html.lab-page.locked .lab-hold { opacity: 0; pointer-events: none; }
       html.lab-page.locked .lab-lock { border-color: var(--ink); background-color: var(--ink); color: var(--bg); }
+      /* a palette is held down to peek at the toy, which iOS would read as a long press: select text, callout, tap flash */
+      .lab-page .palettes, html.lab-page:is(.held, .tuning) body { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+      .lab-page :is(.pal, .lab-pip, .ctl.track, .lab-peek, .lab-holdbar button) { -webkit-tap-highlight-color: transparent; }
       html.lab-page.held .lab-panel { opacity: 0; pointer-events: none; }
       html.lab-page.held .lab-top { opacity: .35; }
 
@@ -163,7 +166,7 @@
     };
     // let go anywhere: the panel (and the button pressed) may have faded out from under the finger
     const release = () => { removeEventListener('pointerup', release); removeEventListener('pointercancel', release); hold(false); };
-    const press = () => { hold(true); addEventListener('pointerup', release); addEventListener('pointercancel', release); };
+    const press = () => { getSelection()?.removeAllRanges(); hold(true); addEventListener('pointerup', release); addEventListener('pointercancel', release); };
     holdBtn.addEventListener('pointerdown', e => { e.preventDefault(); press(); });
     holdBtn.addEventListener('contextmenu', e => e.preventDefault());
     holdBtn.addEventListener('keydown', e => { if ((e.key === ' ' || e.key === 'Enter') && !e.repeat) { e.preventDefault(); hold(true); } });
@@ -214,6 +217,7 @@
     pipSync();
 
     // a palette picks as soon as it's pressed, and the toy shows in it until you let go
+    panel.querySelector('.palettes')?.addEventListener('contextmenu', e => { if (phone.matches) e.preventDefault(); });
     panel.querySelector('.palettes')?.addEventListener('pointerdown', e => {
       const b = e.target.closest('.pal');
       if (!b || !phone.matches) return;
