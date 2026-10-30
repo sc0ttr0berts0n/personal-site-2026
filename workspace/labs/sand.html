@@ -316,13 +316,14 @@ pickTool(tool);
 const RING_CELLS = 3, GAP_CELLS = 2, TOP_SPAN = Math.PI / 2;   // buttons sit RING_CELLS sand cells off the ring, GAP_CELLS apart
 const CAP_HALF = 0.365;    // half the height of a JetBrains Mono capital, in ems
 let labelFs = 12.5;
+let pxCells = 1;            // sand cells per button pixel: 2 on a big ring (desktop), so its blocks are as chunky as a phone's
 const CORNER = 1.4;        // the corner triangles, against the top buttons
 function layoutTools() {
   if (!fit) return;
   const cx = fit.cx + ENC.x * fit.scale, cy = fit.cy + ENC.y * fit.scale, R = (ENC.r + P.ringGap * BAR) * fit.scale;
   // a small ring (phones) gets slimmer buttons, so the label fills its block; the corners shrink with them
   const compact = R < 190, th = compact ? 22 : 38, fs = compact ? 11.5 : 14.5, grow = th / (compact ? 20 : 24);
-  toolBox.classList.toggle('compact', compact); toolBox.style.setProperty('--fs', fs + 'px'); labelFs = fs;
+  toolBox.classList.toggle('compact', compact); toolBox.style.setProperty('--fs', fs + 'px'); labelFs = fs; pxCells = compact ? 1 : 2;
   const safe = window.labSafeArea?.() || null;   // in the feed: the part of the stage clear of its bars and edge zones
   const cell = cd / dpr, off = RING_CELLS * cell, rc = R + off + th / 2, gap = GAP_CELLS * cell / rc, top = TOOLS.slice(0, 6);
   // equal widths when they all fit the quarter turn; past that (a small ring) each is as wide as its own label, so
@@ -359,7 +360,7 @@ const grain = (x, y) => { let h = Math.imul(x, 374761393) + Math.imul(y, 6682652
 let pxQueued = false;
 function drawButtons() {
   if (!fit || !cd) return;
-  const cell = cd / dpr, sw = canvas.clientWidth, sh = canvas.clientHeight;
+  const cell = cd / dpr * pxCells, sw = canvas.clientWidth, sh = canvas.clientHeight;   // one button pixel, CSS px
   if (!sw || !sh) return;
   // line the pixels up with the sand's own cells
   const ox = ((offX / dpr) % cell) - cell, oy = ((offY / dpr) % cell) - cell;
@@ -367,7 +368,7 @@ function drawButtons() {
   if (pxCv.width !== w || pxCv.height !== h) { pxCv.width = maskCv.width = w; pxCv.height = maskCv.height = h; }
   Object.assign(pxCv.style, { left: ox + 'px', top: oy + 'px', width: w * cell + 'px', height: h * cell + 'px' });
   const out = pxCtx.createImageData(w, h), o = out.data;
-  const depth = Math.max(2, Math.round(5 / cell));     // the side: about 5 CSS px, at least two cells
+  const depth = Math.max(pxCells > 1 ? 1 : 2, Math.round(6 / cell));   // the side: about 6 CSS px
   const ink = hex(lab.palette.ink || '#f4f4f6');
   const set = (i, c, a = 255) => { o[i * 4] = c[0]; o[i * 4 + 1] = c[1]; o[i * 4 + 2] = c[2]; o[i * 4 + 3] = a; };
   const shapes = [...TOOLS.map(t => t.btn), resetBtn].map(g => ({ el: g, p: new Path2D(g.querySelector('path.seg').getAttribute('d') || '') }));
