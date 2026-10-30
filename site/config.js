@@ -1,7 +1,7 @@
 // The one place to reorder the feed or fill in the artist card.
 
 // Feed order, by lab file name. Labs missing from this list are appended in lab-number order.
-// Vessel first, then lab-number order.
+// Lab-number order.
 export const ORDER = ['fluid', 'prism', 'goop', 'knockout', 'bigbang', 'godrays', 'maze', 'pachinko', 'neural', 'sand', 'life', 'splat'];
 
 // Which toy a bare link (no #toy) opens on. null = the first in ORDER.
