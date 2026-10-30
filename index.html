@@ -2,10 +2,25 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<script>{ // lab/<slug>/ pages are copies of this page (npm run share): every relative URL resolves from the site's root
+  const m = location.pathname.match(/^(.*\/)lab\/[^/]+\/?$/), b = document.createElement('base');
+  b.href = m ? m[1] : location.pathname.replace(/[^/]*$/, ''); document.head.prepend(b); }</script>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Scott Robertson</title>
 <meta name="description" content="Scott Robertson: Creative Developer">
 <meta name="theme-color" content="#000000">
+<!-- share -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Scott Robertson">
+<meta property="og:title" content="Scott Robertson · Creative Developer">
+<meta property="og:description" content="Each chevron is a sealed glass vessel, part-filled with liquid. Tilt it and watch the surface slosh, then settle level again.">
+<meta property="og:url" content="https://sc0ttr0berts0n.github.io/personal-site-2026/">
+<meta property="og:image" content="https://sc0ttr0berts0n.github.io/personal-site-2026/share/fluid.jpg?v=61b6b259">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="1200">
+<meta property="og:image:alt" content="Vessel, lab 01 by Scott Robertson">
+<meta name="twitter:card" content="summary_large_image">
+<!-- /share -->
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>

@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<base href="../../">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Life · Scott Robertson</title>
+<meta name="description" content="The mark, built as a still life in Conway’s Game of Life. One glider is enough to unravel it, and when the chaos burns out, it rebuilds.">
+<meta name="theme-color" content="#000000">
+<!-- share -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Scott Robertson">
+<meta property="og:title" content="Life · Scott Robertson">
+<meta property="og:description" content="The mark, built as a still life in Conway’s Game of Life. One glider is enough to unravel it, and when the chaos burns out, it rebuilds.">
+<meta property="og:url" content="https://sc0ttr0berts0n.github.io/personal-site-2026/lab/life/">
+<meta property="og:image" content="https://sc0ttr0berts0n.github.io/personal-site-2026/share/life.jpg?v=cddb6594">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="1200">
+<meta property="og:image:alt" content="Life, lab 11 by Scott Robertson">
+<meta name="twitter:card" content="summary_large_image">
+<!-- /share -->
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@200;300&family=Familjen+Grotesk:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="site/feed.css">
+</head>
+<body>
+<main class="feed" id="feed" aria-roledescription="carousel" aria-label="Labs">
+  <div class="slides" id="slides" aria-live="polite"></div>
+</main>
+
+<header class="topbar">
+  <button type="button" class="artist" id="artist-btn" aria-haspopup="dialog">
+    <span class="avatar" id="avatar"></span><span class="nm" id="artist-name"></span>
+  </button>
+  <div class="topright">
+    <span class="count" id="count" aria-hidden="true"></span>
+    <button type="button" class="icon" id="grid-btn" aria-haspopup="dialog" aria-label="All labs">
+      <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M1 1h6v6H1zM9 1h6v6H9zM1 9h6v6H1zM9 9h6v6H9z" fill="none" stroke="currentColor"/></svg>
+    </button>
+  </div>
+</header>
+
+<button type="button" class="nav prev" id="prev" aria-label="Previous lab">
+  <svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true"><path d="M10 2 4 8l6 6" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>
+</button>
+<button type="button" class="nav next" id="next" aria-label="Next lab">
+  <svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true"><path d="m6 2 6 6-6 6" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>
+</button>
+
+<dialog class="sheet" id="sheet" aria-labelledby="sheet-title"><div class="sheet-body" id="sheet-body"></div></dialog>
+<dialog class="sheet card" id="artist" aria-labelledby="artist-title"><div class="sheet-body" id="artist-body"></div></dialog>
+<dialog class="overview" id="overview" aria-labelledby="overview-title">
+  <div class="ov-head">
+    <h2 id="overview-title"><span class="num">experiments</span> <span id="ov-count"></span></h2>
+    <button type="button" class="icon" data-close aria-label="Close">
+      <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="m3 3 10 10M13 3 3 13" stroke="currentColor" stroke-width="1.2"/></svg>
+    </button>
+  </div>
+  <ol class="tiles" id="tiles"></ol>
+</dialog>
+
+<div class="stats" id="stats" hidden></div>
+<script type="module" src="site/feed.js"></script>
+</body>
+</html>

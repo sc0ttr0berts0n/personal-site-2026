@@ -1,0 +1,47 @@
+<!doctype html>
+<!-- The square share card for one lab, screenshotted by scripts/share.mjs: share-card.html?slug=fluid. Not part of the site. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@200;300&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../site/feed.css">
+<style>
+  html, body { margin: 0; width: 600px; height: 600px; overflow: hidden; background: var(--bg); }
+  .card { position: absolute; inset: 0; display: grid; grid-template-rows: auto 1fr auto; grid-template-columns: minmax(0, 1fr); padding: 26px 28px 24px; gap: 14px; }
+  .head { display: flex; align-items: center; gap: 14px; color: var(--ink); }
+  .head svg { flex: none; }
+  .name { font: 500 25px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; }
+  .stage { position: relative; margin: 0 -28px; }
+  .stage iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+  .hint { position: absolute; top: 14px; right: 30px; font: 400 13px/1 var(--mono); letter-spacing: .06em; color: var(--dim); }
+  .foot { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; }
+  .title { font: 200 84px/.9 var(--display); letter-spacing: -.02em; color: var(--ink); white-space: nowrap; }
+  .num { font: 400 15px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--dim); padding-bottom: 6px; white-space: nowrap; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="head"><span id="mark"></span><span class="name" id="name"></span></div>
+  <div class="stage"><iframe id="toy" allow="clipboard-write"></iframe><span class="hint" id="hint"></span></div>
+  <div class="foot"><span class="title" id="title"></span><span class="num" id="num"></span></div>
+</div>
+<script type="module">
+  import { LABS } from '../labs/manifest.js';
+  import { ARTIST } from '../site/config.js';
+  import { logoSVG } from '../labs/shared/logo.js';
+  const slug = new URLSearchParams(location.search).get('slug');
+  const t = LABS.find(l => l.slug === slug) || LABS[0];
+  document.getElementById('mark').innerHTML = logoSVG({ size: 34 });
+  document.getElementById('name').textContent = ARTIST.name;
+  document.getElementById('title').textContent = t.title;
+  document.getElementById('num').textContent = 'lab ' + t.number;
+  document.getElementById('hint').textContent = (t.touchHint || t.hint || '').split('<br>')[0];
+  // shrink a long title until it fits beside the lab number
+  const title = document.getElementById('title'), num = document.getElementById('num'), foot = title.parentElement;
+  await document.fonts.load('200 84px Unbounded');
+  const room = () => foot.clientWidth - num.offsetWidth - 16;
+  for (let s = 84; s > 40 && title.scrollWidth > room(); s -= 2) title.style.fontSize = s + 'px';
+  document.getElementById('toy').src = `../${t.href}?embed=1`;
+</script>
+</body>
+</html>

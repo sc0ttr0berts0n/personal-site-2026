@@ -6,6 +6,7 @@
     "sync": "node scripts/sync-labs.mjs",
     "serve": "node scripts/serve.mjs 8123",
     "posters": "node scripts/posters.mjs",
+    "share": "node scripts/share.mjs",
     "load-times": "node scripts/load-times.mjs"
   },
   "devDependencies": {

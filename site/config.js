@@ -38,6 +38,13 @@ export const TOUCH = {
 };
 
 // Placeholders: Scott supplies the mugshot, bio and links.
+// Where the site lives: share previews need absolute links to their pictures. Re-run npm run share after changing it.
+export const SITE_URL = 'https://sc0ttr0berts0n.github.io/personal-site-2026/';
+
+// Share cards (npm run share): how long each toy runs before its picture is taken, in ms. Default 6000.
+// Vessel at 12 s is mid-way through a color front; Neon Oil needs its shader compiled first.
+export const SHARE_AT = { fluid: 12000, goop: 22000 };
+
 export const ARTIST = {
   name: 'Scott Robertson',
   avatar: null,                      // e.g. 'site/img/scott.jpg'; null shows the mark
