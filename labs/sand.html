@@ -9,29 +9,50 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@200;300&family=Familjen+Grotesk:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap">
 <link rel="stylesheet" href="shared/lab.css">
 <style>
-  /* element ring: arc segments hugging the bedrock circle, like the rings on a watch face. Six elements across the
-     top, the eraser and reset tucked into the bottom corners beside it. Hidden in the feed (lab-embed). */
+  /* Element buttons, in the site's own button language: a dark scrim, a 1px line border, mono caps, and ink when
+     picked. Each material keeps a small swatch square, the only colour on a button. Two layouts while Scott picks:
+     ring (arc segments hugging the bedrock circle, eraser and reset in the corners beside it) and strip (flat chips
+     in two rows above the basin). The feed shows them too (lab-embed.js lets [data-feed] stage controls through). */
   .sand-tools { position: absolute; inset: 0; z-index: 3; width: 100%; height: 100%; pointer-events: none; overflow: visible; --fs: 12.5px; }
-  .sand-tools g { pointer-events: auto; cursor: pointer; outline: none; touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
-  .sand-tools path.seg { fill: color-mix(in srgb, var(--sw, var(--bg)) 30%, var(--bg)); stroke: var(--line); stroke-width: 1; transition: fill .15s, stroke .15s; }
-  .sand-tools g:hover path.seg { stroke: var(--dim); }
+  .sand-tools g { pointer-events: auto; cursor: pointer; outline: none; touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
+  .sand-tools path.seg { fill: rgb(0 0 0 / .62); stroke: var(--line); stroke-width: 1; transition: fill .15s, stroke .15s; }
+  .sand-tools g:hover path.seg { stroke: var(--ink); }
   .sand-tools g:focus-visible path.seg { stroke: var(--ink); stroke-width: 1.5; }
-  .sand-tools g[aria-pressed="true"] path.seg { fill: color-mix(in srgb, var(--sw) 88%, var(--bg)); stroke: var(--ink); }
-  .sand-tools g.erase path.seg, .sand-tools g.reset path.seg { fill: color-mix(in srgb, var(--bg) 80%, transparent); }
-  .sand-tools g.erase path.seg { stroke-dasharray: 3 3; stroke: var(--dim); }
-  .sand-tools g.erase[aria-pressed="true"] path.seg { stroke: var(--ink); }
+  .sand-tools g[aria-pressed="true"] path.seg { fill: var(--ink); stroke: var(--ink); }
+  .sand-tools g[aria-pressed="true"] text { fill: var(--bg); }
   /* reset is a hold: an ink trace runs round the button while it's held, and the button flashes when it fires */
   .sand-tools path.prog { fill: none; stroke: var(--ink); stroke-width: 2.5; stroke-linejoin: round; stroke-dasharray: 1 1; stroke-dashoffset: 1; opacity: 0; pointer-events: none; transition: stroke-dashoffset .25s ease-out, opacity .25s; }
   .sand-tools g.holding path.prog { stroke-dashoffset: 0; opacity: 1; transition: stroke-dashoffset var(--hold) linear, opacity .1s; }
-  .sand-tools g.holding path.seg { fill: color-mix(in srgb, var(--ink) 14%, var(--bg)); }
   .sand-tools g.fired path.seg { fill: var(--ink); transition: none; }
   .sand-tools g.fired text { fill: var(--bg); }
-  .sand-tools text { font: 400 var(--fs) var(--mono); letter-spacing: .06em; text-transform: uppercase; fill: var(--ink); pointer-events: none; }
-  .sand-tools g.light[aria-pressed="true"] text { fill: #111; }
+  .sand-tools text { font: 400 var(--fs) var(--mono); letter-spacing: .08em; text-transform: uppercase; fill: var(--ink); pointer-events: none; }
+  .sand-tools tspan.sw { fill: var(--sw); }
   .sand-tools tspan.k { fill: var(--dim); }
-  .sand-tools g[aria-pressed="true"] tspan.k { fill: inherit; fill-opacity: .55; }
-  .sand-tools.compact tspan.k { display: none; }
-  html.lab-embed .sand-tools { display: none; }
+  .sand-tools g[aria-pressed="true"] tspan.k { fill: var(--bg); fill-opacity: .55; }
+  .sand-tools.compact :is(tspan.k, tspan.sw) { display: none; }
+
+  .sand-strip { position: absolute; z-index: 3; left: 0; right: 0; top: 0; display: grid; justify-items: center; gap: 6px; padding: 0 8px; pointer-events: none; }
+  .sand-strip .row { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; }
+  .sand-strip button { pointer-events: auto; position: relative; display: inline-flex; align-items: center; gap: 7px; overflow: hidden;
+    font: 400 12px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--ink);
+    padding: 9px 11px; border: 1px solid var(--line); border-radius: 2px; background: rgb(0 0 0 / .62); cursor: pointer;
+    touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
+  .sand-strip button:hover { border-color: var(--ink); }
+  .sand-strip button:focus-visible { outline: 1.5px solid var(--ink); outline-offset: 1px; }
+  .sand-strip button[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+  .sand-strip .sw { width: 8px; height: 8px; border-radius: 1px; background: var(--sw); flex: none; }
+  .sand-strip .k { color: var(--dim); }
+  .sand-strip button[aria-pressed="true"] .k { color: inherit; opacity: .55; }
+  .sand-strip.compact :is(.k, .hold) { display: none; }
+  .sand-strip.compact { display: flex; flex-wrap: wrap; justify-content: center; }
+  .sand-strip.compact .row { display: contents; }
+  .sand-strip.compact button { padding: 8px 8px; gap: 6px; font-size: 11px; letter-spacing: .05em; }
+  /* the hold to reset: an ink bar fills the button while it's held */
+  .sand-strip button::after { content: ""; position: absolute; left: 0; bottom: 0; height: 2px; width: 100%; background: var(--ink); transform: scaleX(0); transform-origin: left; transition: transform .25s ease-out; }
+  .sand-strip button.holding::after { transform: scaleX(1); transition: transform var(--hold) linear; }
+  .sand-strip button.fired { background: var(--ink); color: var(--bg); transition: none; }
+  .lab-stage[data-tools="ring"] .sand-strip, .lab-stage[data-tools="strip"] .sand-tools { display: none; }
+  .lab-stage[data-tools="strip"] .lab-hint { display: none; }   /* the strip sits where the hint was, and shows the keys itself */
   .lab-hint { max-width: 36%; }
   .lab-stage > canvas { cursor: crosshair; }
 </style>
@@ -145,6 +166,22 @@ for (const s of SPECIES) {
   });
 }
 
+// The materials keep their natural colours. A palette only recolours the dirt (the bedrock's banded ombre, top to
+// floor) and the skeletons in it (their own ombre, laid over the rock by `boneMix`); its swatch bar is that dirt
+// and those bones. Nature is the original grey rock.
+const SAND_PALETTES = [
+  { key: 'nature', name: 'Nature', rock: [[104, 103, 106], [30, 30, 33]], bone: [[214, 206, 192], [214, 206, 192]], boneMix: 0.2 },
+  { key: 'loam', name: 'Loam', rock: [[156, 118, 80], [96, 64, 40], [34, 22, 16]], bone: [[246, 236, 214], [216, 190, 150]], boneMix: 0.45 },
+  { key: 'clay', name: 'Clay', rock: [[214, 128, 84], [150, 64, 46], [48, 18, 20]], bone: [[255, 236, 214], [240, 196, 160]], boneMix: 0.5 },
+  { key: 'desert', name: 'Desert', rock: [[232, 190, 120], [196, 120, 64], [92, 44, 30]], bone: [[255, 250, 236], [250, 226, 190]], boneMix: 0.5 },
+  { key: 'moss', name: 'Moss', rock: [[124, 128, 82], [70, 74, 48], [20, 22, 16]], bone: [[236, 232, 196], [190, 200, 150]], boneMix: 0.45 },
+  { key: 'slate', name: 'Slate', rock: [[110, 132, 156], [54, 66, 96], [14, 16, 32]], bone: [[226, 240, 248], [150, 200, 230]], boneMix: 0.5 },
+  { key: 'dusk', name: 'Dusk', rock: [[226, 150, 110], [150, 70, 110], [52, 30, 80], [14, 10, 30]], bone: [[255, 226, 200], [220, 190, 255]], boneMix: 0.5 },
+  { key: 'glowbone', name: 'Glow Bones', rock: [[60, 54, 78], [12, 10, 22]], bone: [[120, 255, 220], [200, 120, 255]], boneMix: 0.75 }
+].map(p => ({ bg: '#000000', grid: '#17171d', ink: '#f4f4f6', ...p,
+  colors: [...p.rock, p.bone[0], p.bone[1]].map(c => '#' + c.map(v => v.toString(16).padStart(2, '0')).join('')) }));
+const NATURE = SAND_PALETTES[0];
+
 // =====================================================================================
 const lab = createLab({
   number: '10',
@@ -153,10 +190,7 @@ const lab = createLab({
   teaches: 'A cellular automaton on Canvas 2D, writing raw pixels through ImageData, one pixel per grain. A seeded random number generator means each loop replays exactly until you paint on it.',
   hint: 'drag to paint · keys 1–7 pick · [ ] brush',
   feed: { touch: 'drag', hint: 'drag to paint' },
-  palettes: [
-    { key: 'nature', name: 'Nature', bg: '#000000', grid: '#17171d', ink: '#f4f4f6', colors: ['#2a74ea', '#8a5530', '#ff7a14', '#e8304a', '#3c9a40'] }
-    // the materials keep their natural colors, so a vivid palette only tinted the backdrop; Bench (grey) and Nature it is
-  ],
+  palettes: SAND_PALETTES,
   defaultPalette: 'nature',
   params: {
     hSim:      { type: 'heading', label: 'Simulation' },
@@ -199,6 +233,7 @@ const lab = createLab({
     outline:   { type: 'toggle', label: 'Body outline', value: true },
     shimmer:   { type: 'toggle', label: 'Shimmer', value: true },
     glow:      { type: 'toggle', label: 'Lava glow', value: true },
+    tools:     { type: 'select', label: 'Buttons (trying both)', value: 'ring', options: [['ring', 'Ring round the basin'], ['strip', 'Flat strip above it']] },
     hTools:    { type: 'heading', label: 'Brush' },
     brush:     { type: 'range', label: 'Brush radius', min: 1, max: 16, step: 1, value: 4, unit: ' cells' }
   },
@@ -221,27 +256,20 @@ const TOOLS = [
   { key: 'erase', el: EMPTY, label: 'Eraser', sw: 'transparent', density: 1 }
 ];
 let tool = TOOLS[0];
-const SVGNS = 'http://www.w3.org/2000/svg', LIGHT = ['lava', 'ash', 'seed'];   // swatches light enough for dark text
+const SVGNS = 'http://www.w3.org/2000/svg';
 const svgEl = (tag, attrs = {}) => { const e = document.createElementNS(SVGNS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); return e; };
 const toolBox = svgEl('svg', { class: 'sand-tools', role: 'group', 'aria-label': 'Paint element' });
 lab.stage.appendChild(toolBox);
 // one ring button: a rounded arc (or, in the bottom corners, a rounded triangle) with its label set along an arc.
 // `hold` makes it fire only after being held that long, an ink trace running round its edge meanwhile.
 const HOLD = 0.8;
-function ringButton(label, key, cls, onPress, hold = 0) {
-  const g = svgEl('g', { role: 'button', tabindex: 0, 'aria-label': hold ? `Hold to ${label.toLowerCase()}` : label, class: cls });
-  const seg = svgEl('path', { class: 'seg' }), line = svgEl('path', { id: 'sand-arc-' + cls.split(' ')[0], fill: 'none' });
-  const text = svgEl('text', { 'text-anchor': 'middle', 'dominant-baseline': 'central' }), tp = svgEl('textPath', { startOffset: '50%', href: '#' + line.id });
-  tp.append(label);
-  if (key) { const k = svgEl('tspan', { class: 'k', dx: 6 }); k.textContent = key; tp.append(k); }
-  text.append(tp); g.append(line, seg, text);
-  g.chars = label.length + (key ? 2 : 0);
+// press handling shared by the ring and the strip: a click, or with `hold` a press held that long
+function wirePress(g, onPress, hold) {
   if (!hold) {
+    if (g.tagName !== 'BUTTON') g.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onPress(); } });
     g.addEventListener('click', onPress);
-    g.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onPress(); } });
   } else {
-    const prog = svgEl('path', { class: 'prog', pathLength: 1 });
-    g.append(prog); g.prog = prog; g.style.setProperty('--hold', hold + 's');
+    g.style.setProperty('--hold', hold + 's');
     let timer = 0;
     const start = () => {
       clearTimeout(timer); g.classList.add('holding');
@@ -259,7 +287,19 @@ function ringButton(label, key, cls, onPress, hold = 0) {
     g.addEventListener('keyup', e => { if (e.key === 'Enter' || e.key === ' ') cancel(); });
     g.addEventListener('blur', cancel);
   }
-  const P = (cx, cy, a, r) => (cx + r * Math.cos(a)).toFixed(2) + ' ' + (cy + r * Math.sin(a)).toFixed(2);
+}
+function ringButton(label, key, cls, onPress, hold = 0) {
+  const g = svgEl('g', { role: 'button', tabindex: 0, 'aria-label': hold ? `Hold to ${label.toLowerCase()}` : label, class: cls });
+  const seg = svgEl('path', { class: 'seg' }), line = svgEl('path', { id: 'sand-arc-' + cls.split(' ')[0], fill: 'none' });
+  const text = svgEl('text', { 'text-anchor': 'middle', 'dominant-baseline': 'central' }), tp = svgEl('textPath', { startOffset: '50%', href: '#' + line.id });
+  if (cls !== 'erase' && cls !== 'reset') { const sw = svgEl('tspan', { class: 'sw', dx: 0 }); sw.textContent = '■ '; tp.append(sw); }
+  tp.append(label);
+  if (key) { const k = svgEl('tspan', { class: 'k', dx: 6 }); k.textContent = key; tp.append(k); }
+  text.append(tp); g.append(line, seg, text);
+  g.chars = label.length + (key ? 2 : 0) + (cls !== 'erase' && cls !== 'reset' ? 2 : 0);
+  if (hold) { const prog = svgEl('path', { class: 'prog', pathLength: 1 }); g.append(prog); g.prog = prog; }
+  wirePress(g, onPress, hold);
+  const P =(cx, cy, a, r) => (cx + r * Math.cos(a)).toFixed(2) + ' ' + (cy + r * Math.sin(a)).toFixed(2);
   const label_ = (cx, cy, r, a0, a1, flip) => line.setAttribute('d', flip
     ? `M${P(cx, cy, a1, r)} A${r} ${r} 0 0 0 ${P(cx, cy, a0, r)}` : `M${P(cx, cy, a0, r)} A${r} ${r} 0 0 1 ${P(cx, cy, a1, r)}`);
   // an arc: centre (cx, cy), centre-line radius rc, thickness th, from angle a0 to a1 (clockwise, radians); flip runs
@@ -287,12 +327,32 @@ function ringButton(label, key, cls, onPress, hold = 0) {
   toolBox.append(g);
   return g;
 }
+// the strip: the same buttons as flat chips, materials in one row, eraser and reset in a second
+const strip = document.createElement('div');
+strip.className = 'sand-strip'; strip.dataset.feed = ''; strip.setAttribute('role', 'group'); strip.setAttribute('aria-label', 'Paint element');
+const stripRows = [document.createElement('div'), document.createElement('div')];
+stripRows.forEach(r => { r.className = 'row'; strip.append(r); });
+lab.stage.appendChild(strip);
+toolBox.dataset.feed = '';
+function chipButton(label, key, sw, row, onPress, hold = 0) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.innerHTML = (sw ? '<span class="sw"></span>' : '') + `<span>${label}</span>` + (key ? `<span class="k">${key}</span>` : '');
+  if (sw) b.style.setProperty('--sw', sw);
+  if (hold) b.setAttribute('aria-label', 'Hold to reset');
+  wirePress(b, onPress, hold);
+  stripRows[row].append(b);
+  return b;
+}
 TOOLS.forEach((t, k) => {
-  t.btn = ringButton(t.label, String(k + 1), t.key + (LIGHT.includes(t.key) ? ' light' : ''), () => { pickTool(t); touch(); });
+  const pick = () => { pickTool(t); touch(); };
+  t.btn = ringButton(t.label, String(k + 1), t.key, pick);
   t.btn.style.setProperty('--sw', t.sw);
+  t.chip = chipButton(t.el === EMPTY ? 'Erase' : t.label, String(k + 1), t.el === EMPTY ? '' : t.sw, t.el === EMPTY ? 1 : 0, pick);
 });
 const resetBtn = ringButton('Reset', '', 'reset', () => { startDrain(); touch(); }, HOLD);
-function pickTool(t) { tool = t; TOOLS.forEach(u => u.btn.setAttribute('aria-pressed', u === t ? 'true' : 'false')); }
+chipButton('<span class="hold">Hold to </span>Reset', '', '', 1, () => { startDrain(); touch(); }, HOLD);
+function pickTool(t) { tool = t; TOOLS.forEach(u => { const on = u === t ? 'true' : 'false'; u.btn.setAttribute('aria-pressed', on); u.chip.setAttribute('aria-pressed', on); }); }
 pickTool(tool);
 // Lay the ring out just outside the bedrock's inner edge (stage CSS px). The six elements share about a quarter turn
 // over the top (more on a small ring if their labels need it); Eraser and Reset fill the two bottom corners as
@@ -302,16 +362,24 @@ const CORNER = 1.4;        // the corner triangles, against the top buttons
 function layoutTools() {
   if (!fit) return;
   const cx = fit.cx + ENC.x * fit.scale, cy = fit.cy + ENC.y * fit.scale, R = (ENC.r + P.ringGap * BAR) * fit.scale;
-  const compact = R < 190, th = compact ? 30 : 38, fs = compact ? 13 : 14.5, grow = th / (compact ? 20 : 24);
+  const compact = R < 190, th = compact ? 28 : 38, fs = compact ? 11.5 : 14.5, grow = th / (compact ? 20 : 24);
   toolBox.classList.toggle('compact', compact); toolBox.style.setProperty('--fs', fs + 'px');
+  lab.stage.dataset.tools = P.tools;
+  // strip: two rows of chips, their foot a little above the basin (or pinned to the top of the stage if there's no room)
+  strip.classList.toggle('compact', compact || lab.square().w < 520);
+  const safe = window.labSafeArea?.() || null;   // in the feed: the part of the stage clear of its bars and edge zones
+  strip.style.top = Math.max(safe ? safe.top + 6 : 8, cy - R - 10 - strip.offsetHeight) + 'px';
   const cell = cd / dpr, off = RING_CELLS * cell, rc = R + off + th / 2, gap = GAP_CELLS * cell / rc, top = TOOLS.slice(0, 6);
-  const need = Math.max(...top.map(t => (compact ? t.btn.chars - 2 : t.btn.chars) * fs * 0.68)) + th * 0.9;
-  const da = Math.max((TOP_SPAN - (top.length - 1) * gap) / top.length, need / rc);
-  const a = -Math.PI / 2 - (top.length * da + (top.length - 1) * gap) / 2;
-  top.forEach((t, k) => { const a0 = a + k * (da + gap); t.btn.place(cx, cy, rc, th, a0, a0 + da, false); });
+  // equal widths when they all fit the quarter turn; past that (a small ring) each is as wide as its own label, so
+  // the end buttons stay on screen. A compact ring drops the keys and the swatches.
+  const need = top.map(t => ((compact ? t.btn.chars - 4 : t.btn.chars) * fs * 0.68 + th * 0.9) / rc), n = top.length;
+  const even = Math.max(...need) * n + (n - 1) * gap <= TOP_SPAN, sum = even ? 0 : need.reduce((p, q) => p + q, 0);
+  const da = k => even ? (TOP_SPAN - (n - 1) * gap) / n : need[k];
+  let a0 = -Math.PI / 2 - (even ? TOP_SPAN : sum + (n - 1) * gap) / 2;
+  top.forEach((t, k) => { t.btn.place(cx, cy, rc, th, a0, a0 + da(k), false); a0 += da(k) + gap; });
   // corners: aim each triangle at its corner of the box above the floor, lift it until its lower base corner clears
   // the floor, and keep its point inside the box
-  const ri = R + off, W_ = lab.square().w, floorY = floorDev / dpr - 4, base = (compact ? 54 : 84) * grow * CORNER / ri;
+  const ri = R + off, W_ = lab.square().w, floorY = Math.min(floorDev / dpr, safe ? safe.bottom - 6 : 1e9) - 4, base = (compact ? 54 : 84) * grow * CORNER / ri;
   const room = m => { const c = Math.cos(m), sn = Math.sin(m); return Math.min(sn > 0 ? (floorY - cy) / sn : 1e9, c > 0 ? (W_ - 4 - cx) / c : c < 0 ? (4 - cx) / c : 1e9) - ri; };
   const corner = right => {
     let m = Math.atan2(floorY - cy, (right ? W_ : 0) - cx), low = () => cy + ri * Math.sin(right ? m + base / 2 : m - base / 2);
@@ -948,12 +1016,13 @@ function buildColors() {
   L(LAVA, (k, s) => { const tri = s < 8 ? s / 8 : (16 - s) / 8; return pack(...ramp3([[176, 28, 0], [250, 92, 0], [255, 196, 60]], tri)); });
   L(WOOD, k => pack(...mix3(WOOD_RGB[0], WOOD_RGB[1], k)));
   L(STONE, k => pack(...mix3([54, 54, 62], [92, 90, 100], k)));
-  // bedrock is a stepped ombre, ROCK_STEPS bands from light grey at the top to near black at the floor; fossils follow
-  // it a little lighter
+  // bedrock is a stepped ombre, ROCK_STEPS bands from the palette's top colour down to its floor colour; fossils lay
+  // their own ombre over it (Bench has neither, so it greys Nature's)
+  const pal = lab.palette.rock ? lab.palette : NATURE;
   for (let l = 0; l < ROCK_STEPS; l++) for (let s = 0; s < 8; s++) {
-    const r = mix3(mix3([104, 103, 106], [30, 30, 33], l / (ROCK_STEPS - 1)), [0, 0, 0], s * 0.018);
+    const k = l / (ROCK_STEPS - 1), r = mix3(ramp3(pal.rock, k), [0, 0, 0], s * 0.018);
     ROCK[l * 8 + s] = pack(...r);
-    BONE[l * 8 + s] = pack(...mix3(r, [214, 206, 192], 0.2 + s * 0.012));
+    BONE[l * 8 + s] = pack(...mix3(r, ramp3(pal.bone, k), pal.boneMix + s * 0.012));
   }
   L(ASH, k => pack(...mix3([122, 120, 122], [178, 174, 170], k)));
   L(STEAM, k => pack(...mix3([186, 196, 212], [226, 232, 242], k), 95 + k * 60));
@@ -1247,7 +1316,8 @@ addEventListener('keydown', e => {
 
 // ---- wiring ----
 lab.on('change', key => {
-  if (key === 'res') rebuild();
+  if (key === 'tools') layoutTools();
+  else if (key === 'res') rebuild();
   else if (key === 'seed' || key === 'thaw' || key === 'hold') reset();
   else if (key === 'ring' || key === 'ringGap' || key === 'fossils') {
     // swap the old bedrock for the new in place; anything it lands on is simply replaced
@@ -1257,11 +1327,13 @@ lab.on('change', key => {
   }
   touch();
 });
-lab.on('palette', () => { buildColors(); render(); });
-lab.on('resize', () => { if (!built) return; if (geometry()) rebuild(); else render(); layoutTools(); });
+lab.on('palette', () => { buildColors(); if (built) render(); });
+lab.on('resize', () => { if (!built) { if (canvas.width) rebuild(); return; } if (geometry()) rebuild(); else render(); layoutTools(); });
+addEventListener('labsafearea', layoutTools);
 
 buildColors();
-rebuild();
+// a stage with no size yet (a hidden tab) waits for its first resize to build
+if (canvas.width) rebuild();
 
 let hudTick = 0, ms = 0;
 function hud() {
@@ -1272,7 +1344,7 @@ function hud() {
 }
 let paused = false;
 lab.loop(dt => {
-  if (paused) return;
+  if (paused || !built) return;
   const t0 = performance.now();
   frame(dt);
   if (!lab.calm) fr++;

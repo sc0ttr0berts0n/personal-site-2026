@@ -326,3 +326,9 @@ Scott walked the saved versions in `notes/versions/goop/`.
 
 - **Proudest call:** the iodine clock reaction. "i really wish it was maze within a maze or something more clever, but iodine is just so good looking lol"
 - **The takeaway:** he can direct AI, and he spans disciplines ("people always love that"). Above all: "everything is shit at first and with frank and productive critique, you can reach wonderful results through iteration and experimentation."
+
+## 2026-10-30 — Falling Sand: quieter buttons, buttons in the feed, palettes for the dirt
+
+- **The element buttons lost their texture.** Scott disliked the material-coloured arc buttons. They now speak the site's button language: a dark scrim, a 1px line, mono caps, ink when picked. A small swatch square is the only colour left on each. Two layouts went to him to pick from: the ring round the basin, and a flat strip of chips above it.
+- **Buttons in the feed.** They had been hidden in the feed on purpose ("controls belong to the lab's own page"). Scott wanted them there too. They now lay themselves out clear of the feed's top bar, edge zones and caption.
+- **Palettes for the dirt and the bones only.** Earlier he'd said Sand needs no alternate palettes, since recolouring water or lava breaks the materials. Now he wants ombre palettes, but only for the dirt (the bedrock bands) and the skeletons in it. Every other material keeps its natural colour.

@@ -43,13 +43,33 @@
     html.lab-embed, html.lab-embed body { height: 100%; overflow: hidden; }
     html.lab-embed body { padding: 0; display: block; }
     html.lab-embed .lab-top, html.lab-embed .lab-panel, html.lab-embed .lab-hint, html.lab-embed .lab-hud { display: none !important; }
-    /* controls a lab puts on its stage (Sand's element picker) belong to its own page, not the feed */
-    html.lab-embed .lab-stage > :is(button, input, select, :has(button, input, select)) { display: none !important; }
+    /* controls a lab puts on its stage belong to its own page, not the feed, unless it marks them [data-feed] (Sand's element buttons) */
+    html.lab-embed .lab-stage > :is(button, input, select, :has(button, input, select)):not([data-feed]) { display: none !important; }
     html.lab-embed .lab { display: block; height: 100%; }
     html.lab-embed .lab-stage { width: 100%; height: 100%; aspect-ratio: auto; max-height: none; border: 0; }
     /* a finger on the toy is the toy's: no panning, no text selection or long-press callout */
     html.lab-embed .lab-stage, html.lab-embed .lab-stage * { touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }`;
   document.head.appendChild(css);
+
+  // The part of the stage a person can use in the feed: below the top bar and the top edge zone, above the caption
+  // and the bottom edge zone, inside the side ones (the toy's iframe runs under all of them). In this frame's CSS px.
+  // A lab that puts controls on its stage (Sand) lays them out inside it, and hears 'labsafearea' when it may have moved.
+  window.labSafeArea = () => {
+    const f = window.frameElement;
+    if (!f) return null;
+    const r = f.getBoundingClientRect(), pw = f.ownerDocument.defaultView, vw = pw.innerWidth, vh = pw.innerHeight;
+    let top = Math.max(0, -r.top), bottom = Math.min(r.height, vh - r.top), left = Math.max(0, -r.left), right = Math.min(r.width, vw - r.left);
+    const slide = f.closest('.slide'), doc = f.ownerDocument;
+    const els = [...doc.querySelectorAll('.topbar'), ...(slide ? slide.querySelectorAll('.edge, .caption') : [])];
+    for (const el of els) {
+      const b = el.getBoundingClientRect();
+      if (!b.width || !b.height || b.right <= r.left || b.left >= r.right) continue;
+      if (b.height > vh * 0.6) { if (b.left + b.width / 2 < vw / 2) left = Math.max(left, b.right - r.left); else right = Math.min(right, b.left - r.left); }
+      else if (b.top + b.height / 2 < vh / 2) top = Math.max(top, b.bottom - r.top);
+      else bottom = Math.min(bottom, b.top - r.top);
+    }
+    return { top, bottom, left, right };
+  };
 
   const post = (msg, transfer) => parent.postMessage({ ...msg, slug: location.pathname.split('/').pop().replace(/\.html$/, '') }, location.origin, transfer);
 
@@ -96,7 +116,7 @@
   function setPlaying(v) {
     if (v === playing) return;
     playing = v;
-    if (v) { warm = 0; liveWanted = true; touched = false; release(); post({ feed: 'playing' }); }
+    if (v) { warm = 0; liveWanted = true; touched = false; release(); post({ feed: 'playing' }); dispatchEvent(new Event('labsafearea')); }
     else {
       // a grab or snap asked for just before the pause still gets its frame
       if (grabs.length || snapWidth) { warm = Math.max(warm, 1); release(); }
