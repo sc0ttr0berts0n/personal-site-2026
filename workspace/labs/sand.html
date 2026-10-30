@@ -6,10 +6,9 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@200;300&family=Familjen+Grotesk:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap">
 <link rel="stylesheet" href="shared/lab.css">
 <style>
-  /* Element buttons, in the site's own button language: a dark scrim, a 1px line border, mono caps, and ink when
-     picked. Each material keeps a small swatch square, the only colour on a button. Two layouts while Scott picks:
-     ring (arc segments hugging the bedrock circle, eraser and reset in the corners beside it) and strip (flat chips
-     in two rows above the basin). The feed shows them too (lab-embed.js lets [data-feed] stage controls through). */
+  /* Element ring: arc segments hugging the bedrock circle, eraser and reset in the corners beside it. They're pixel
+     blocks drawn on the sand grid (canvas.sand-px), mono caps on top, ink when picked; each material keeps a small
+     swatch square. The feed shows them too (lab-embed.js lets [data-feed] stage controls through). */
   .sand-tools { position: absolute; inset: 0; z-index: 3; width: 100%; height: 100%; pointer-events: none; overflow: visible; --fs: 12.5px; }
   .sand-tools g { pointer-events: auto; cursor: pointer; outline: none; touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
   /* the blocks themselves are pixels on canvas.sand-px; these shapes only take the presses */
@@ -25,29 +24,8 @@
   .sand-tools tspan.k { fill: var(--dim); }
   .sand-tools g[aria-pressed="true"] tspan.k { fill: var(--bg); fill-opacity: .55; }
   .sand-tools.compact :is(tspan.k, tspan.sw) { display: none; }
-
-  .sand-strip { position: absolute; z-index: 3; left: 0; right: 0; top: 0; display: grid; justify-items: center; gap: 6px; padding: 0 8px; pointer-events: none; }
-  .sand-strip .row { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; }
-  .sand-strip button { pointer-events: auto; position: relative; display: inline-flex; align-items: center; gap: 7px; overflow: hidden;
-    font: 400 12px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--ink);
-    padding: 9px 11px; border: 0; border-radius: 0; background: none; cursor: pointer;
-    touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
-  .sand-strip button:focus-visible { outline: 1.5px solid var(--ink); outline-offset: 1px; }
-  .sand-strip button[aria-pressed="true"] { color: var(--bg); }
-  .sand-strip .sw { width: 8px; height: 8px; border-radius: 1px; background: var(--sw); flex: none; }
-  .sand-strip .k { color: var(--dim); }
-  .sand-strip button[aria-pressed="true"] .k { color: inherit; opacity: .55; }
-  .sand-strip.compact :is(.k, .hold) { display: none; }
-  .sand-strip.compact { display: flex; flex-wrap: wrap; justify-content: center; }
-  .sand-strip.compact .row { display: contents; }
-  .sand-strip.compact button { padding: 8px 8px; gap: 6px; font-size: 11px; letter-spacing: .05em; }
-  /* the hold to reset: an ink bar fills the button while it's held */
-  .sand-strip button::after { content: ""; position: absolute; left: 0; bottom: 0; height: 2px; width: 100%; background: var(--ink); transform: scaleX(0); transform-origin: left; transition: transform .25s ease-out; }
-  .sand-strip button.holding::after { transform: scaleX(1); transition: transform var(--hold) linear; }
-  .sand-strip button.fired { color: var(--bg); }
   .sand-px { position: absolute; z-index: 2; inset: auto; pointer-events: none; image-rendering: pixelated; }
-  .lab-stage[data-tools="ring"] .sand-strip, .lab-stage[data-tools="strip"] .sand-tools { display: none; }
-  .lab-stage[data-tools="strip"] .lab-hint { display: none; }   /* the strip sits where the hint was, and shows the keys itself */
+
   .lab-hint { max-width: 36%; }
   .lab-stage > canvas { cursor: crosshair; }
 </style>
@@ -228,7 +206,6 @@ const lab = createLab({
     outline:   { type: 'toggle', label: 'Body outline', value: true },
     shimmer:   { type: 'toggle', label: 'Shimmer', value: true },
     glow:      { type: 'toggle', label: 'Lava glow', value: true },
-    tools:     { type: 'select', label: 'Buttons (trying both)', value: 'ring', options: [['ring', 'Ring round the basin'], ['strip', 'Flat strip above it']] },
     hTools:    { type: 'heading', label: 'Brush' },
     brush:     { type: 'range', label: 'Brush radius', min: 1, max: 16, step: 1, value: 4, unit: ' cells' }
   },
@@ -258,10 +235,10 @@ lab.stage.appendChild(toolBox);
 // one ring button: a rounded arc (or, in the bottom corners, a rounded triangle) with its label set along an arc.
 // `hold` makes it fire only after being held that long, an ink trace running round its edge meanwhile.
 const HOLD = 0.8;
-// press handling shared by the ring and the strip: a click, or with `hold` a press held that long
+// press handling: a click, or with `hold` a press held that long
 function wirePress(g, onPress, hold) {
   if (!hold) {
-    if (g.tagName !== 'BUTTON') g.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onPress(); } });
+    g.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onPress(); } });
     g.addEventListener('click', onPress);
   } else {
     g.style.setProperty('--hold', hold + 's');
@@ -324,32 +301,14 @@ function ringButton(label, key, cls, onPress, hold = 0) {
   toolBox.append(g);
   return g;
 }
-// the strip: the same buttons as flat chips, materials in one row, eraser and reset in a second
-const strip = document.createElement('div');
-strip.className = 'sand-strip'; strip.dataset.feed = ''; strip.setAttribute('role', 'group'); strip.setAttribute('aria-label', 'Paint element');
-const stripRows = [document.createElement('div'), document.createElement('div')];
-stripRows.forEach(r => { r.className = 'row'; strip.append(r); });
-lab.stage.appendChild(strip);
 toolBox.dataset.feed = '';
-function chipButton(label, key, sw, row, onPress, hold = 0) {
-  const b = document.createElement('button');
-  b.type = 'button';
-  b.innerHTML = (sw ? '<span class="sw"></span>' : '') + `<span>${label}</span>` + (key ? `<span class="k">${key}</span>` : '');
-  if (sw) b.style.setProperty('--sw', sw);
-  if (hold) b.setAttribute('aria-label', 'Hold to reset');
-  wirePress(b, onPress, hold);
-  stripRows[row].append(b);
-  return b;
-}
 TOOLS.forEach((t, k) => {
   const pick = () => { pickTool(t); touch(); };
   t.btn = ringButton(t.label, String(k + 1), t.key, pick);
   t.btn.style.setProperty('--sw', t.sw);
-  t.chip = chipButton(t.el === EMPTY ? 'Erase' : t.label, String(k + 1), t.el === EMPTY ? '' : t.sw, t.el === EMPTY ? 1 : 0, pick);
 });
 const resetBtn = ringButton('Reset', '', 'reset', () => { startDrain(); touch(); }, HOLD);
-chipButton('<span class="hold">Hold to </span>Reset', '', '', 1, () => { startDrain(); touch(); }, HOLD);
-function pickTool(t) { tool = t; TOOLS.forEach(u => { const on = u === t ? 'true' : 'false'; u.btn.setAttribute('aria-pressed', on); u.chip.setAttribute('aria-pressed', on); }); }
+function pickTool(t) { tool = t; TOOLS.forEach(u => { const on = u === t ? 'true' : 'false'; u.btn.setAttribute('aria-pressed', on); }); }
 pickTool(tool);
 // Lay the ring out just outside the bedrock's inner edge (stage CSS px). The six elements share about a quarter turn
 // over the top (more on a small ring if their labels need it); Eraser and Reset fill the two bottom corners as
@@ -364,11 +323,7 @@ function layoutTools() {
   // a small ring (phones) gets slimmer buttons, so the label fills its block; the corners shrink with them
   const compact = R < 190, th = compact ? 22 : 38, fs = compact ? 11.5 : 14.5, grow = th / (compact ? 20 : 24);
   toolBox.classList.toggle('compact', compact); toolBox.style.setProperty('--fs', fs + 'px'); labelFs = fs;
-  lab.stage.dataset.tools = P.tools;
-  // strip: two rows of chips, their foot a little above the basin (or pinned to the top of the stage if there's no room)
-  strip.classList.toggle('compact', compact || lab.square().w < 520);
   const safe = window.labSafeArea?.() || null;   // in the feed: the part of the stage clear of its bars and edge zones
-  strip.style.top = Math.max(safe ? safe.top + 6 : 8, cy - R - 10 - strip.offsetHeight) + 'px';
   const cell = cd / dpr, off = RING_CELLS * cell, rc = R + off + th / 2, gap = GAP_CELLS * cell / rc, top = TOOLS.slice(0, 6);
   // equal widths when they all fit the quarter turn; past that (a small ring) each is as wide as its own label, so
   // the end buttons stay on screen. A compact ring drops the keys and the swatches.
@@ -413,15 +368,9 @@ function drawButtons() {
   Object.assign(pxCv.style, { left: ox + 'px', top: oy + 'px', width: w * cell + 'px', height: h * cell + 'px' });
   const out = pxCtx.createImageData(w, h), o = out.data;
   const depth = Math.max(2, Math.round(5 / cell));     // the side: about 5 CSS px, at least two cells
-  const sr = lab.stage.getBoundingClientRect();
   const ink = hex(lab.palette.ink || '#f4f4f6');
   const set = (i, c, a = 255) => { o[i * 4] = c[0]; o[i * 4 + 1] = c[1]; o[i * 4 + 2] = c[2]; o[i * 4 + 3] = a; };
-  const shapes = P.tools === 'strip'
-    ? [...strip.querySelectorAll('button')].map(b => { const r = b.getBoundingClientRect(), x = r.left - sr.left, y = r.top - sr.top, c = cell * 1.6, p = new Path2D();
-        // a pixel block: a cell cut from each corner
-        p.moveTo(x + c, y); p.lineTo(x + r.width - c, y); p.lineTo(x + r.width, y + c); p.lineTo(x + r.width, y + r.height - c); p.lineTo(x + r.width - c, y + r.height);
-        p.lineTo(x + c, y + r.height); p.lineTo(x, y + r.height - c); p.lineTo(x, y + c); p.closePath(); return { el: b, p }; })
-    : [...TOOLS.map(t => t.btn), resetBtn].map(g => ({ el: g, p: new Path2D(g.querySelector('path.seg').getAttribute('d') || '') }));
+  const shapes = [...TOOLS.map(t => t.btn), resetBtn].map(g => ({ el: g, p: new Path2D(g.querySelector('path.seg').getAttribute('d') || '') }));
   for (const { el, p } of shapes) {
     maskCtx.setTransform(1, 0, 0, 1, 0, 0); maskCtx.clearRect(0, 0, w, h);
     maskCtx.setTransform(1 / cell, 0, 0, 1 / cell, -ox / cell, -oy / cell);
@@ -454,13 +403,11 @@ function drawButtons() {
   }
   pxCtx.putImageData(out, 0, 0);
 }
-// redraw on a pick, a hold, or a hover (once per frame at most)
+// redraw on a pick, a hold, or a hover (batched)
 const redrawButtons = () => { if (pxQueued) return; pxQueued = true; queueMicrotask(() => { pxQueued = false; drawButtons(); }); };
 const pxWatch = new MutationObserver(redrawButtons);
-for (const el of [toolBox, strip]) {
-  pxWatch.observe(el, { subtree: true, attributes: true, attributeFilter: ['class', 'aria-pressed'] });
-  el.addEventListener('pointerover', redrawButtons); el.addEventListener('pointerout', redrawButtons);
-}
+pxWatch.observe(toolBox, { subtree: true, attributes: true, attributeFilter: ['class', 'aria-pressed'] });
+toolBox.addEventListener('pointerover', redrawButtons); toolBox.addEventListener('pointerout', redrawButtons);
 
 // ---- canvas, layout, grid ----
 const { canvas, ctx } = lab.canvas();
@@ -1387,8 +1334,7 @@ addEventListener('keydown', e => {
 
 // ---- wiring ----
 lab.on('change', key => {
-  if (key === 'tools') layoutTools();
-  else if (key === 'res') rebuild();
+  if (key === 'res') rebuild();
   else if (key === 'seed' || key === 'thaw' || key === 'hold') reset();
   else if (key === 'ring' || key === 'ringGap' || key === 'fossils') {
     // swap the old bedrock for the new in place; anything it lands on is simply replaced
