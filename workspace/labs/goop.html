@@ -39,28 +39,31 @@ const lab = createLab({
   title: 'Neon Oil',
   blurb: 'The mark rises out of a pool of black oil. Sheets of it slide off, long ropes stretch back down to the pool and snap, and the clean mark shows through.',
   teaches: 'Beautiful eye candy for its own sake. Raw WebGL2, no library: the logo’s outline is baked into a half-float texture, and one large shader draws the oil, the drips and the reflections. It’s the heaviest shader on the site, so it compiles in the background while the page stays responsive.',
-  hint: 'tap the pool for a ripple · drag through it for a wake<br>tap the mark to pour a drip',
-  feed: { touch: 'drag', hint: 'tap the pool · tap the mark' },
+  hint: 'drag to turn the camera around the mark',
+  feed: { touch: 'drag', hint: 'drag to orbit' },
   palettes: [OIL, HONEY, SLIME, GRAPE, NEON],
   defaultPalette: 'neon',
   grid: false,
   params: {
-    viscosity: { type: 'range', label: 'Viscosity μ', min: 0, max: 1, step: 0.01, value: 1, format: v => Math.round(muOf(v)) + ' Pa·s' },
-    drips:     { type: 'range', label: 'Drip rate', min: 0, max: 2, step: 0.05, value: 0.2, unit: '×' },
-    stretch:   { type: 'range', label: 'Thread stretch', min: 0.4, max: 2.5, step: 0.05, value: 2.5, unit: '×' },
+    hLiquid:   { type: 'heading', label: 'Liquid' },
+    viscosity: { type: 'range', label: 'Viscosity μ', min: 0, max: 1.4, step: 0.01, value: 1, format: v => Math.round(muOf(v)) + ' Pa·s' },
     coat:      { type: 'range', label: 'Coat thickness', min: 0, max: 1, step: 0.01, value: 0.14 },
-    meniscus:  { type: 'range', label: 'Meniscus', min: 0, max: 1, step: 0.01, value: 1 },
-    ripple:    { type: 'range', label: 'Surface ripple', min: 0, max: 2, step: 0.05, value: 2, unit: '×' },
-    gloss:     { type: 'range', label: 'Gloss', min: 0, max: 1, step: 0.01, value: 0.86 },
-    handheld:  { type: 'range', label: 'Handheld camera', min: 0, max: 1, step: 0.01, value: 0.5 },
-    tilt:      { type: 'range', label: 'Camera tilt', min: 6, max: 45, step: 1, value: 10, unit: '°' },
-    under:     { type: 'select', label: 'Logo underneath', value: 'neon', options: [['neon', 'Neon glow'], ['lacquer', 'Lacquer'], ['oil', 'Black (oil all the way)']] },
-    quality:   { type: 'select', label: 'Quality', value: 'high', options: [['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['ultra', 'Ultra (4× cost)']] },
-    liftHead:  { type: 'heading', label: 'Lift' },
-    rise:      { type: 'range', label: 'Lift duration', min: 2, max: 15, step: 0.5, value: 4, unit: ' s' },
+    stretch:   { type: 'range', label: 'Thread stretch', min: 0.4, max: 4, step: 0.05, value: 2.5, unit: '×' },
+    drips:     { type: 'range', label: 'Drip rate', min: 0, max: 2, step: 0.05, value: 0.2, unit: '×' },
     wobble:    { type: 'range', label: 'Hanging wobble', min: 0, max: 1, step: 0.01, value: 0.4 },
+    hPool:     { type: 'heading', label: 'Pool' },
+    meniscus:  { type: 'range', label: 'Meniscus (pool climbs the mark)', min: 0, max: 2, step: 0.01, value: 1 },
+    ripple:    { type: 'range', label: 'Surface ripple', min: 0, max: 4, step: 0.05, value: 2, unit: '×' },
+    gloss:     { type: 'range', label: 'Gloss', min: 0, max: 1, step: 0.01, value: 0.86 },
+    under:     { type: 'select', label: 'Mark underneath', value: 'neon', options: [['neon', 'Neon glow'], ['lacquer', 'Lacquer'], ['oil', 'Black (oil all the way)']] },
+    liftHead:  { type: 'heading', label: 'Lift' },
     loop:      { type: 'toggle', label: 'Lift, drain, dunk on a loop', value: true },
-    lift:      { type: 'range', label: 'Scrub lift (pauses the loop)', min: 0, max: 1, step: 0.005, value: 0, format: v => Math.round(v * 100) + '%' }
+    rise:      { type: 'range', label: 'Lift duration', min: 2, max: 15, step: 0.5, value: 4, unit: ' s', when: P => P.loop },
+    lift:      { type: 'range', label: 'Scrub lift (pauses the loop)', min: 0, max: 1, step: 0.005, value: 0, format: v => Math.round(v * 100) + '%' },
+    hCamera:   { type: 'heading', label: 'Camera' },
+    tilt:      { type: 'range', label: 'Camera tilt', min: 6, max: 45, step: 1, value: 10, unit: '°' },
+    handheld:  { type: 'range', label: 'Handheld shake', min: 0, max: 1, step: 0.01, value: 0.5 },
+    quality:   { type: 'select', label: 'Quality', value: 'high', options: [['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['ultra', 'Ultra (4× cost)']] }
   },
   actions: [
     { label: 'Pour on the mark', primary: true, action: () => { pourAll(); wake(); } },
@@ -166,9 +169,11 @@ function stepLift(dt) {
   poolY = poolAt(lc);
   // The coat drains on its own clock, from the top down, whatever the lift does: the line it has drained
   // to creeps down at a viscous pace. While the oil is coming up (a dunk) or the mark sits under it, the
-  // coat is pinned to the surface: everything that has been under is fully wet again.
+  // coat catches up with the surface: everything that has been under is fully wet again. It eases up rather than
+  // jumping there, so at the start of a dunk the sheen creeps back up from the oil over about a second instead of
+  // popping onto a mark that has drained clean.
   const pinned = poolY > prev + 1e-7 || (P.loop && (cyc.phase === 'under' || cyc.phase === 'sink'));
-  if (pinned && poolY > drainY) drainY = poolY;
+  if (pinned) { if (poolY > drainY) drainY += (poolY - drainY) * (1 - Math.exp(-dt * 1.2)); }
   else drainY = Math.max(POOL_LO - 8, drainY - drainV() * dt);
 }
 
@@ -954,7 +959,7 @@ function render() {
   pack();
   const Q = QUALITY[P.quality] || QUALITY.medium;
   gl.viewport(0, 0, canvas.width, canvas.height);
-  const phi = P.tilt * Math.PI / 180, sn = Math.sin(phi), cs = Math.cos(phi);
+  const phi = P.tilt * Math.PI / 180;
   u3('uView', canvas.width / 2, canvas.height / 2, pxPerUnit);
   {
     // handheld: slow drift in yaw, pitch and roll plus a little sway of the body, from overlapping sines
@@ -963,13 +968,15 @@ function render() {
     const yaw = h * D * (0.45 * Math.sin(t * 0.41 + 1.0) + 0.22 * Math.sin(t * 1.13) + 0.05 * Math.sin(t * 3.7 + 2.0));
     const pit = h * D * (0.38 * Math.sin(t * 0.53) + 0.2 * Math.sin(t * 1.37 + 2.0) + 0.04 * Math.sin(t * 4.1 + 0.7));
     const rol = h * D * (0.3 * Math.sin(t * 0.71 + 0.3) + 0.1 * Math.sin(t * 1.9 + 1.1));
-    const ph = phi + pit, s2 = Math.sin(ph), c2 = Math.cos(ph), sy = Math.sin(yaw), cy = Math.cos(yaw);
+    // the camera sits on a sphere around the mark's center at the orbit's angles; the shake turns it in place
+    const oP = phi + pitchIn(orb.pitch), os = Math.sin(oP), oc = Math.cos(oP), oy = Math.sin(orb.yaw), ox = Math.cos(orb.yaw);
+    const ph = oP + pit, s2 = Math.sin(ph), c2 = Math.cos(ph), sy = Math.sin(orb.yaw + yaw), cy = Math.cos(orb.yaw + yaw);
     const fwd = [-c2 * sy, -s2, -c2 * cy], rt = [cy, 0, -sy];
     const up = [rt[1] * fwd[2] - rt[2] * fwd[1], rt[2] * fwd[0] - rt[0] * fwd[2], rt[0] * fwd[1] - rt[1] * fwd[0]];
     const cr = Math.cos(rol), sr = Math.sin(rol);
     const R = rt.map((v, k) => v * cr + up[k] * sr), Up = up.map((v, k) => v * cr - rt[k] * sr);
     const dx = h * 0.05 * Math.sin(t * 0.37 + 0.4), dy = h * 0.035 * Math.sin(t * 0.61 + 2.2);
-    u3('uCam', dx, YC + DIST * sn + dy, DIST * cs); u3('uFwd', ...fwd); u3('uUp', ...Up); u3('uRight', ...R);
+    u3('uCam', DIST * oc * oy + dx * ox, YC + DIST * os + dy, DIST * oc * ox - dx * oy); u3('uFwd', ...fwd); u3('uUp', ...Up); u3('uRight', ...R);
   }
   u1('uDist', DIST); u1('uTime', time);
   {
@@ -1011,51 +1018,78 @@ function hud() {
   lab.hud(s);
 }
 
-// ---- pointer: the pool takes ripples and wakes, the mark takes a glob that pours into a drip ----
+// ---- pointer: a drag turns the camera around the mark; let go and it blends back to the front view ----
+// Only the camera moves, so a drag costs nothing in the shader. (Taps used to drop rings into the pool, and every
+// live ring is another pass of the pool's wave loop at every march step: 24 of them made an open-pool frame up to ~12× dearer.)
 let lastInteract = -1e9;
 const nowS = () => performance.now() / 1000;
 function wake() { lastInteract = nowS(); dirty = true; }
-function pick(e) {
-  const r = canvas.getBoundingClientRect();
-  const sx = (e.clientX - r.left - r.width / 2) / sq.size * SQ, sy = -(e.clientY - r.top - r.height / 2) / sq.size * SQ;
-  const phi = P.tilt * Math.PI / 180, sn = Math.sin(phi), cs = Math.cos(phi);
-  const ro = [0, YC + DIST * sn, DIST * cs];
-  const rd = [sx, -sn * DIST + cs * sy, -cs * DIST - sn * sy];
-  // the mark's front face
-  const zf = HT + 0.05;
-  const tf = (zf - ro[2]) / rd[2];
-  const fx = ro[0] + rd[0] * tf, fy = ro[1] + rd[1] * tf;
-  const u = fx / LW, v = (YC - fy) / LW;
-  if (fy > poolY + 0.05 && sd2(u, v) < 0.012) return { logo: true, u, v };
-  if (rd[1] >= 0) return null;
-  const tp = (poolY - ro[1]) / rd[1];
-  return { logo: false, x: ro[0] + rd[0] * tp, z: ro[2] + rd[2] * tp };
-}
+// Limits: 30° either way around, up to 45° over the top, and never down below the oil. Each is a rubber band: a drag
+// carries on a little past it, against more and more pull, and never more than GIVE past. The waterline is the one
+// hard floor, so the low band sits above it: its stop is LO_GIVE up from the oil and it stretches down to the surface.
+// The waterline follows the pool's highest swell plus a margin, so it rises and falls with the lift.
+const D2R = Math.PI / 180, YAW_MAX = 30 * D2R, PITCH_HI = 45 * D2R, GIVE = 7 * D2R, LO_GIVE = 4 * D2R;
+const pitchLo = () => Math.asin(clamp((poolY + hAmp + 0.3 - YC) / DIST, -1, 1));
+const pitchIn = p => { const base = P.tilt * D2R; return clamp(base + p, Math.min(pitchLo(), PITCH_HI), PITCH_HI + GIVE) - base; };
+// x past a stop → how far it really goes (follows the hand at first, never reaches r); and back
+const give = (x, r) => r * x / (r + x), ungive = (y, r) => r * Math.min(y, r * 0.99) / (r - Math.min(y, r * 0.99));
+const band = (v, lo, hi, rLo, rHi, f) => v > hi ? hi + f(v - hi, rHi) : v < lo ? lo - f(lo - v, rLo) : v;
+const yawBand = (v, f) => band(v, -YAW_MAX, YAW_MAX, GIVE, GIVE, f);
+const pitchBand = (v, f) => { const lo = Math.min(pitchLo() + LO_GIVE, PITCH_HI); return band(v, lo, PITCH_HI, LO_GIVE, GIVE, f); };   // absolute pitch
+const orb = { yaw: 0, pitch: 0, vy: 0, vp: 0 };
 let drag = null;
-canvas.style.touchAction = 'pan-y';
-canvas.style.cursor = 'pointer';
+canvas.style.touchAction = 'none';
+canvas.style.cursor = 'grab';
 canvas.tabIndex = 0;
-canvas.setAttribute('aria-label', 'A pool of black oil with the mark standing in it. Tap the pool for a ripple, tap the mark to pour a drip. Enter pours on the mark, space drops a stone.');
+canvas.setAttribute('aria-label', 'A pool of black oil with the mark standing in it. Drag to turn the camera around the mark. Enter pours on the mark, space drops a stone.');
 canvas.addEventListener('pointerdown', e => {
-  const h = pick(e); if (!h) return;
+  if (drag) return;
+  // the hand's own angles, unbanded, picked up from wherever the view is now (maybe mid-stretch) so nothing jumps
+  const base = P.tilt * D2R;
+  drag = { id: e.pointerId, x: e.clientX, y: e.clientY, t: e.timeStamp, yaw: yawBand(orb.yaw, ungive), pitch: pitchBand(base + orb.pitch, ungive) };
+  orb.vy = orb.vp = 0;
+  canvas.setPointerCapture(e.pointerId);
+  canvas.style.cursor = 'grabbing';
   wake();
-  if (h.logo) {
-    const sd = sd2(h.u, h.v);
-    if (newBlob(h.u, sd < -0.006 ? h.v : h.v - 0.012, 1.35, 0.3) === null) { const c = columnFrom(h.u, h.v); if (c) newDrip(c, { z: HT * 0.5, fast: true }); }
-    drag = null;
-  } else {
-    addRing(h.x, h.z, 0.13 * P.ripple);
-    drag = { x: h.x, z: h.z, id: e.pointerId };
-  }
 });
 canvas.addEventListener('pointermove', e => {
   if (!drag || drag.id !== e.pointerId) return;
-  const h = pick(e); if (!h || h.logo) return;
-  const d = Math.hypot(h.x - drag.x, h.z - drag.z);
-  if (d > 0.3) { addRing(h.x, h.z, Math.min(0.07, 0.03 + d * 0.02) * P.ripple); drag.x = h.x; drag.z = h.z; wake(); }
+  // a drag across the whole square is ~70°, so the 30° stop is a bit past the middle to the edge
+  const k = 1.2 / sq.size, dt = Math.max(e.timeStamp - drag.t, 1) / 1000;
+  drag.yaw -= (e.clientX - drag.x) * k; drag.pitch += (e.clientY - drag.y) * k;
+  const yaw = yawBand(drag.yaw, give), pitch = pitchIn(pitchBand(drag.pitch, give) - P.tilt * D2R);
+  // the hand's speed, smoothed, so letting go hands it on to the blend back instead of jolting
+  const a = Math.min(1, dt / 0.05);
+  orb.vy = mix(orb.vy, (yaw - orb.yaw) / dt, a); orb.vp = mix(orb.vp, (pitch - orb.pitch) / dt, a);
+  orb.yaw = yaw; orb.pitch = pitch;
+  drag.x = e.clientX; drag.y = e.clientY; drag.t = e.timeStamp;
+  wake();
 });
-const endDrag = () => { drag = null; };
-canvas.addEventListener('pointerup', endDrag); canvas.addEventListener('pointercancel', endDrag); canvas.addEventListener('pointerleave', endDrag);
+const endDrag = e => {
+  if (!drag || drag.id !== e.pointerId) return;
+  if (e.timeStamp - drag.t > 80) orb.vy = orb.vp = 0;   // held still before letting go: no carry
+  // let go while stretched past a stop: the band takes over, nothing flings it further out
+  const ap = P.tilt * D2R + orb.pitch;
+  if (Math.abs(orb.yaw) > YAW_MAX && orb.vy * orb.yaw > 0) orb.vy = 0;
+  if ((ap > PITCH_HI && orb.vp > 0) || (ap < pitchLo() + LO_GIVE && orb.vp < 0)) orb.vp = 0;
+  drag = null;
+  canvas.style.cursor = 'grab';
+  wake();
+};
+canvas.addEventListener('pointerup', endDrag); canvas.addEventListener('pointercancel', endDrag);
+function orbit(dt) {
+  // the low stop moves with the oil, so it holds even while a drag is held still
+  const p = pitchIn(orb.pitch); if (p !== orb.pitch) { orb.pitch = p; orb.vp = Math.max(orb.vp, 0); if (drag) return true; }
+  if (drag) return false;
+  if (!orb.yaw && !orb.pitch && !orb.vy && !orb.vp) return false;
+  // let go: a critically damped spring back to the front view, starting from the hand's speed, so it eases out of
+  // the drag and settles in about a second and a half with no overshoot
+  const w = 3.2;
+  orb.vy += (-w * w * orb.yaw - 2 * w * orb.vy) * dt; orb.vp += (-w * w * orb.pitch - 2 * w * orb.vp) * dt;
+  orb.yaw = clamp(orb.yaw + orb.vy * dt, -YAW_MAX - GIVE, YAW_MAX + GIVE); orb.pitch = pitchIn(orb.pitch + orb.vp * dt);
+  if (Math.abs(orb.yaw) + Math.abs(orb.pitch) < 2e-4 && Math.abs(orb.vy) + Math.abs(orb.vp) < 1e-3) orb.yaw = orb.pitch = orb.vy = orb.vp = 0;
+  return true;
+}
 canvas.addEventListener('keydown', e => {
   if (e.key === 'Enter') { pourAll(); wake(); e.preventDefault(); }
   if (e.key === ' ') { addRing(0.4 - 1.6 * rand(), 2.2 + 1.2 * rand(), 0.16 * P.ripple); wake(); e.preventDefault(); }
@@ -1101,10 +1135,12 @@ window.__lab = {
   step(n = 1, dt = 1 / 60) { return this.frames(n, dt); },
   ripple(x = 0, z = 3, amp = 0.13) { addRing(x, z, amp); render(); },
   pour() { pourAll(); },
+  // Hold the orbit at yaw / pitch offsets (degrees from the front view), then draw.
+  view(yaw = 0, pitch = 0) { orb.yaw = yaw * D2R; orb.pitch = pitch * D2R; orb.vy = orb.vp = 0; render(); },
   drip(u = -0.3, v = 0) { const c = columnFrom(u, v); return c ? !!newDrip(c, { z: HT * 0.5, fast: true }) : false; },
   // GPU time per frame: n synchronous renders, timed between two pixel reads.
   perf(n = 30) { const px = new Uint8Array(4); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); const t0 = performance.now(); for (let i = 0; i < n; i++) { simulate(1 / 60); render(); } gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); return +((performance.now() - t0) / n).toFixed(2); },
-  state: () => ({ time, anchors: ANCHORS.length, drips: drips.map(d => ({ phase: d.phase, x: +d.x.toFixed(2), y: +d.y.toFixed(2), z: +d.z.toFixed(2), yT: +d.yT.toFixed(2), R: +d.R.toFixed(3), L: +d.L.toFixed(2), rn: +d.rn.toFixed(4), toPool: d.toPool, lower: !!d.lower })), lift: +lc.toFixed(3), phase: cyc.phase, poolY: +poolY.toFixed(2), drainY: +drainY.toFixed(2), blobs: blobs.length, merges, rings: rings.length, strands: nS, canvas: [canvas.width, canvas.height] }),
+  state: () => ({ time, anchors: ANCHORS.length, drips: drips.map(d => ({ phase: d.phase, x: +d.x.toFixed(2), y: +d.y.toFixed(2), z: +d.z.toFixed(2), yT: +d.yT.toFixed(2), R: +d.R.toFixed(3), L: +d.L.toFixed(2), rn: +d.rn.toFixed(4), toPool: d.toPool, lower: !!d.lower })), lift: +lc.toFixed(3), phase: cyc.phase, poolY: +poolY.toFixed(2), drainY: +drainY.toFixed(2), blobs: blobs.length, merges, rings: rings.length, strands: nS, canvas: [canvas.width, canvas.height], orbit: [+(orb.yaw / D2R).toFixed(1), +(orb.pitch / D2R).toFixed(1)] }),
   params: P, set: (k, v) => lab.set(k, v)
 };
 
@@ -1112,6 +1148,7 @@ let hudTick = 0;
 lab.loop(dt => {
   if (!gl) return;
   if (warming) { if (!failed && compileReady()) finishWarming(); return; }
+  if (orbit(dt)) wake();
   const active = !lab.calm || nowS() - lastInteract < 10;
   if (active) simulate(dt);
   if (active || dirty) render();

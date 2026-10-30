@@ -4,7 +4,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@200;300&family=Familjen+Grotesk:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap">
-<link rel="stylesheet" href="shared/lab.css">
+<link rel="stylesheet" href="./shared/lab.css">
 <script type="importmap">
 { "imports": {
   "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
@@ -19,9 +19,9 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { FXAAShader } from 'three/addons/shaders/FXAAShader.js';
-import { createLab } from '../../../shared/lab.js';
-import { logoPolygons, LOGO_FILL, LOGO_DEPTH } from '../../../shared/logo.js';
-import { ramp } from '../../../shared/palettes.js';
+import { createLab } from './shared/lab.js';
+import { logoPolygons, LOGO_FILL, LOGO_DEPTH } from './shared/logo.js';
+import { ramp } from './shared/palettes.js';
 
 // Raymarch quality: render scale (of the device pixels, so >1 supersamples) and step budgets.
 const QUALITY = {

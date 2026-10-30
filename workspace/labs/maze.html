@@ -36,30 +36,34 @@ const lab = createLab({
   palettes: [MONO],
   defaultPalette: 'mono',
   params: {
-    band:       { type: 'range', label: 'Cells across a band', min: 4, max: 24, step: 1, value: 8 },
+    hMaze:      { type: 'heading', label: 'Maze' },
+    band:       { type: 'range', label: 'Cells across a band', min: 4, max: 12, step: 1, value: 8 },
     algorithm:  { type: 'select', label: 'Generator', value: 'backtracker', options: Object.entries(ALGS) },
     braid:      { type: 'range', label: 'Braid (dead ends opened)', min: 0, max: 100, step: 5, value: 70, unit: '%' },
+    hCarve:     { type: 'heading', label: 'Carving' },
+    animateGen: { type: 'toggle', label: 'Animate generation', value: true },
+    tilt:       { type: 'range', label: 'Tilt while carving', min: 0, max: 60, step: 1, value: 46, unit: '°', when: P => P.animateGen },
+    flatten:    { type: 'range', label: 'Tilt back to flat over', min: 0.5, max: 4, step: 0.1, value: 2, unit: ' s', when: P => P.animateGen && P.tilt > 0 },
+    zoom:       { type: 'range', label: 'Zoom while carving', min: 1, max: 2.5, step: 0.05, value: 1.5, unit: '×', when: P => P.animateGen && P.tilt > 0 },
+    technical:  { type: 'toggle', label: 'Technical drawing while tilted', value: true, when: P => P.animateGen && P.tilt > 0 },
+    depth:      { type: 'range', label: 'Slab depth', min: 0.1, max: 1, step: 0.05, value: 0.5, unit: ' bands', when: P => P.animateGen && P.tilt > 0 },
+    explode:    { type: 'range', label: 'Exploded gap', min: 0, max: 4, step: 0.1, value: 2.2, unit: ' bands', when: P => P.animateGen && P.tilt > 0 },
+    hSearch:    { type: 'heading', label: 'Search' },
     heuristic:  { type: 'select', label: 'Heuristic h', value: 'manhattan', options: Object.entries(HEURISTICS) },
-    weight:     { type: 'range', label: 'Weight w in f = g + w·h', min: 1, max: 5, step: 0.1, value: 1.8, unit: '×' },
+    weight:     { type: 'range', label: 'Weight w in f = g + w·h', min: 1, max: 5, step: 0.1, value: 1.8, unit: '×', when: P => P.heuristic !== 'none' },
     speed:      { type: 'range', label: 'Search speed', min: 0, max: 9, step: 1, value: 0, format: v => String(RATE(v)), unit: ' expansions/s' },
-    placing:    { type: 'select', label: 'Tap places', value: 'start', options: [['start', 'Start'], ['goal', 'Goal']] },
     explored:   { type: 'toggle', label: 'Show open and closed sets', value: true },
     dead:       { type: 'select', label: 'Dead branches', value: 'pulse', options: [['off', 'Keep their color'], ['ash', 'Wilt to ash'], ['pulse', 'Retract pulse, then ash']] },
-    animateGen: { type: 'toggle', label: 'Animate generation', value: true },
-    tilt:       { type: 'range', label: 'Tilt while carving', min: 0, max: 60, step: 1, value: 46, unit: '°' },
-    flatten:    { type: 'range', label: 'Tilt back to flat over', min: 0.5, max: 4, step: 0.1, value: 2, unit: ' s' },
-    zoom:       { type: 'range', label: 'Zoom while carving', min: 1, max: 2.5, step: 0.05, value: 1.5, unit: '×' },
-    technical:  { type: 'toggle', label: 'Technical drawing while tilted', value: true },
-    depth:      { type: 'range', label: 'Slab depth', min: 0.1, max: 1, step: 0.05, value: 0.5, unit: ' bands' },
-    explode:    { type: 'range', label: 'Exploded gap', min: 0, max: 4, step: 0.1, value: 2.2, unit: ' bands' },
+    placing:    { type: 'select', label: 'Tap places', value: 'start', options: [['start', 'Start'], ['goal', 'Goal']] },
+    hEnd:       { type: 'heading', label: 'When solved' },
     finale:     { type: 'toggle', label: 'Invert when solved', value: false },
-    loop:       { type: 'toggle', label: 'Loop: dive into the centre mark', value: true },
+    loop:       { type: 'toggle', label: 'Loop: dive into the center mark', value: true },
     look:       { type: 'heading', label: 'Look' },
     border:     { type: 'range', label: 'Outer border width', min: 0.5, max: 8, step: 0.1, value: 4, unit: ' px' },
     wall:       { type: 'range', label: 'Wall width', min: 0.5, max: 4, step: 0.25, value: 2, unit: ' device px' },
-    gap:        { type: 'range', label: 'Explored cell gap', min: 0, max: 40, step: 1, value: 0, unit: '%' },
-    shade:      { type: 'range', label: 'Explored cell opacity', min: 10, max: 100, step: 1, value: 40, unit: '%' },
-    bead:       { type: 'range', label: 'Frontier bead size', min: 15, max: 90, step: 1, value: 56, unit: '%' },
+    gap:        { type: 'range', label: 'Explored cell gap', min: 0, max: 40, step: 1, value: 0, unit: '%', when: P => P.explored },
+    shade:      { type: 'range', label: 'Explored cell opacity', min: 10, max: 100, step: 1, value: 40, unit: '%', when: P => P.explored },
+    bead:       { type: 'range', label: 'Frontier bead size', min: 15, max: 90, step: 1, value: 56, unit: '%', when: P => P.explored },
     trail:      { type: 'range', label: 'Path width', min: 0.3, max: 2.5, step: 0.05, value: 0.75, unit: '×' },
     glow:       { type: 'range', label: 'Path glow', min: 0, max: 30, step: 1, value: 15, unit: ' px' },
     marker:     { type: 'range', label: 'Dot and flag size', min: 0.5, max: 2, step: 0.05, value: 1, unit: '×' }
@@ -457,8 +461,8 @@ function tiltTo(deg, dur, at = clock) { view = { from: tiltDeg(), to: deg, t0: a
 // While it carves, the exploded drawing turns slowly about the mark's centre, like a part on a turntable; as the view
 // pans back up to flat it unwinds the shorter way to its normal pose, arriving just as the tilt does.
 const SPIN = -10 * Math.PI / 180, SPIN_EASE = 0.8;        // rad/s, and how long it takes to get up to speed
-let spinT0 = Infinity;
-const spinAt = t => { const u = Math.max(0, t - spinT0); return SPIN * (u - SPIN_EASE * (1 - Math.exp(-u / SPIN_EASE))); };
+let spinT0 = Infinity, spinOff = 0;   // spinOff: the angle a spin starts from, so a restarted one picks up where the last left off
+const spinAt = t => { const u = Math.max(0, t - spinT0); return spinOff + SPIN * (u - SPIN_EASE * (1 - Math.exp(-u / SPIN_EASE))); };
 function spinNow() {
   if (techAmt() <= 0) return 0;
   if (view.to === 0 && view.dur > 0 && clock >= view.t0) {
@@ -693,7 +697,11 @@ function drawTitle(c, a) {
 function rebuild(animate, landed = false) {
   dive = null;
   if (geo && !landed) ghostFrame(lab.calm ? T_FADE : T_GHOST);   // the old maze fades out over the new one
-  if (animate && !lab.calm && P.tilt > 0) { tiltTo(P.tilt, 0.7); spinT0 = clock; } else if (lab.calm || !animate) view = { from: 0, to: 0, t0: 0, dur: 0 };
+  if (animate && !lab.calm && P.tilt > 0) {
+    // a new maze while the drawing is still turning keeps turning on the spot; otherwise the spin starts from the pose now
+    if (!(techAmt() > 0 && view.to > 0)) { spinOff = techAmt() > 0 ? spinNow() : 0; spinT0 = clock; }
+    tiltTo(P.tilt, 0.7);
+  } else if (lab.calm || !animate) view = { from: 0, to: 0, t0: 0, dur: 0 };
   const K = effectiveK();
   G = buildGrid(K);
   pass = new Uint8Array(G.T);

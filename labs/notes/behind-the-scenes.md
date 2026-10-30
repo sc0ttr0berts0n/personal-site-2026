@@ -207,3 +207,136 @@ After the five-shot volley, Scott asked for every ball to burst into five, and e
 - **Settled means "just drips":** Scott: "its settled once its kind of just raining and its down to just drips". The settle detector now counts only visible change: a lone falling drop doesn't count, and nor do slow trickles such as lava cooling or roots drinking. It also has some slack, so one blip doesn't restart the clock. A cycle went from about 48 s to about 20 s.
 - **Hands off once touched:** "do not loop if they interact ever. make that manual at that point." Any interaction ends the auto loop for good, and Reset becomes a 0.8 s hold with an ink trace round the button.
 - **Watch-face controls:** "in the style of the apple watch ring … rounded arcs kind of between a rounded rect and a stroke arc." The element picker became arc buttons hugging the bedrock circle, with the labels set along each arc. Six across the top take about 90° of the ring. Eraser and Reset are rounded triangles in the bottom corners, curved where they touch the ring.
+
+## 2026-10-29 — Interview: how Scott reviews
+
+> "i usually think its working somewhat and i chip away at the bad until there is only good. Theres always a seed of good in there."
+
+- **The method:** Scott doesn't restart from scratch. He finds the part that works and removes everything around it, one cut at a time. The saved versions in `notes/versions/` are that process, step by step.
+- **His role, in his words:** "I'm a developer with the taste of someone who's extensively done creative work." Having worn many creative hats lets him switch between director, designer, critic and developer inside one session.
+- **Big Bang, confirmed:** the explosion was scrapped because the logo left the screen. That broke the series' one rule.
+
+## 2026-10-29 — Maze: cutting the eye candy
+
+> "I didn't ask for rainbow. the system did. and i liked it at first, but slow noticed it wasn't communicating anything. just eye candy."
+
+- **The longest arc of the twelve.** The rainbow search fill was Claude's idea, not Scott's. He liked it, lived with it, then asked what it was *for*. Little by little he cut the fluff until the fill only showed the dead paths.
+- **Colour got a second chance and lost:** colour was briefly going to show how far a path had reached. When that still wasn't clear enough, it went to plain grey.
+- **Recursion came from watching the zoom.** The zoom-in loop already existed, and staring at it raised the question of why the tiny logo couldn't literally be the next maze.
+- **The burst finale was noise:** "too much noise. I wanted the key focus to be the reveal that a maze within a maze was hidden in plain sight. so i spent a lot of time removed flashy elements that distracted from that truth."
+- **Hidden because surprise is the payoff.** If you can see the next maze coming, the dive is just a zoom. Hidden, it's a discovery.
+- **Versions:** `notes/versions/maze/01-pre-technical-drawing` (rainbow) → `12` → `13-burst-finale` → `13b-pre-loop` → `14-recursive-visible` → live.
+
+## 2026-10-29 — Interview: working with AI
+
+> "I have a vison, I pitch it, i get 80% of what i want on the first try, plus some shit I dont want that i need to tune out, plus some shit i didnt expect which I can foster."
+
+- **Novelty for free:** "working with AI is great because I can often generate novelty for free." Every pitch comes back in three parts: what he asked for, what he cuts, and the surprises worth growing. The Maze rainbow went through all three: an unasked-for surprise, liked, then cut.
+- **Bold swings:** "its been nice to get to a point where i can take bold swings and succeed."
+
+## 2026-10-29 — Falling Sand: the drain was a friend's joke
+
+- **Origin:** a friend suggested the drain. Scott laughed: cool, but silly. He kept coming back to it and came round to it.
+- **What made it work:** simulate everything with the water rule but keep each element's look, so the change in *behaviour* is the surprise. It drained fast enough not to be annoying loop after loop, so it stayed.
+- **The habit this shows:** an idea that sounds silly gets a second look rather than a no.
+
+## 2026-10-29 — Splat: chasing the seam
+
+> "if a lab goes on a journey, its more fun if it loops. novel loop 'seams' are something i'm always chasing."
+
+- **Every Splat revision was about recursion:** each version made the next drop come out of the last one more directly.
+- **Still open:** "I'm not married to some elements of splat." He'd like a putty or clay consistency, but feels it's too "2D" now. It might be more fun if the mark tumbles and can land in any orientation.
+
+## 2026-10-29 — Pachinko: solve from the mark outward
+
+- **Mostly right out of the tube.** The work was reflowing the pixel pitch, finding the right tuning knobs, and a fair amount of refactoring.
+- **The one note:** solve the peg lattice from the logo outward, rather than dropping the logo on an existing grid. The peg edges now line up with the visually critical element, the mark, instead of the walls, so it composes well. It's the same instinct as the Maze's rhombic lattice: the mark sets the grid.
+- **Version:** `notes/versions/pachinko/01-pre-lattice`.
+
+## 2026-10-29 — Logo Light: honest about the weak one
+
+> "its fiiiiiine."
+
+- **Mostly a slider tune.** Scott rates it the bottom middle of the pack.
+- **The shake-up:** violent rainbow bursts, because rainbow light is something he loves to flash into his designs wherever he can. He admits it's still "something people have seen before."
+- **Versions:** `notes/versions/logo-light/05-pre-burst` → `06-burst` → `07-burst-wander`.
+
+## 2026-10-29 — Vessel: the iodine clock reaction
+
+> "i noticed it was an ombre of color and for some reasons it fired off a neuron in my brain about iodine clock reactions."
+
+- **The biggest Vessel call, bigger than the flip.** The liquid's palette was an ombre, and the ombre reminded Scott of an iodine clock reaction. Now fronts nucleate somewhere under the surface and sweep the whole vessel. Behind each front, the colour steps one place along the palette, and a thin rainbow sheen rides the front, like colour passing over a cuttlefish.
+- **Why it matters:** "its just beautiful and appropriate for this particular effect." Without it, Vessel is a nice liquid sim; with it, the lab has an identity. People often name it as their favourite. Scott's aim is "something visually striking and thats hard to forget."
+- **Arrived between** `notes/versions/vessel/09` (no reaction) **and** `13-pre-gravity-flip` (reaction, before the flip).
+- **Next:** a tap drops a reagent, seeding a front where you touched. Nudges move the liquid as well.
+
+## 2026-10-29 — Neural and Prism, briefly
+
+- **Neural was colour from day one.** Round 1 was chosen to be as different from the end result as possible, so the journey from noise to the mark looks dramatic.
+- **Prism set the bench look:** the black-and-white optics-bench style started here and became the whole series' base.
+
+## 2026-10-29 — Goop: the arc, version by version
+
+Scott walked the saved versions in `notes/versions/goop/`.
+
+- **04, a pool you poke:** tap for ripples, pour drips on the mark. The lift was in the brief from the start, but "the agent missed it in the end". Part of reviewing is catching what was dropped, not just what was added.
+- **05, the lift:** lift, drain and dunk on a loop. The planned story finally showed up.
+- **07 → 10, drips with character:** every drip behaved the same, which was too uniform. Now drips creep downhill along sloped edges, each at its own pace. Two that meet merge, their volumes add and the thread thickens. Broken threads snap back into the pool instead of standing up as spikes.
+- **12, the rainbow sold it:** the solid mark under the oil shows bare where the coat is thin and smoky where it's thick. A thin-film interference rainbow runs along the draining front. That rainbow is what made "the solid shape wins" beautiful, and not just correct.
+- **Live, off the tripod:** a handheld camera and a hanging wobble, because the locked-off camera felt too much like a render.
+  - **Also sleight of hand:** the wobble keeps the eye moving, so you don't dwell on the aliasing. Motion hides what a locked-off frame would expose.
+
+## 2026-10-29 — Vessel: one cause for two events
+
+- **Every smack starts a front.** In `notes/versions/vessel/13-pre-gravity-flip`, each idle smack starts a clock-reaction front where it lands, instead of the fronts running on their own timer.
+- **Why:** two separate rhythms were too busy. One cause also unifies them: "the reason for both could reasonably be a nudge."
+
+## 2026-10-29 — Knockout: passive first, then a surprise
+
+- **The order of calls:**
+  - At first it didn't auto-shoot, so it was boring if you just watched. Scott added the auto-volley.
+  - Then the left/right alternating attack.
+  - Much later, he decided it needed a surprise: the split-pop cascade (5 → 25 → 125).
+- **The chalk outline is the series rule again:** "I want my logo mark to persist on all lab toys, so when its destroyed it needs to stay around." It's the same reason he first disliked Big Bang ("no logo for so long"). He might still find a way to keep the mark on screen through the bang.
+- **Where the trick was found:** Knockout is where Scott discovered the ghost outline, a way to keep the mark present while it's destroyed. He has reused it elsewhere since (2026-10-29 comment).
+- **The habit this shows:** make it watchable without a visitor first, then add the surprise.
+
+## 2026-10-29 — Life: coarse so you can see the steps
+
+> "I love a big busy game of life, but the simpler the grid the more visible the steps are, so i comitted to just going as coarse as possible."
+
+- **Coarse on purpose:** each generation should be readable, so the grid went as coarse as it could. That's on top of the regularity argument above.
+- **Diamonds:** "I loved doing diamonds as well because it made this a unique game of life with respect to the classic." Taking the grain from the mark set it apart from every other Game of Life.
+- **Versions:** `notes/versions/life/02-square-grid` → `03-dense-lattice-pitch3` → live.
+
+## 2026-10-29 — Big Bang: the whole arc, and whose idea the collapse was
+
+- **Started as an astrophotographer's test:** Scott wanted to be convinced, as an astrophotographer, that the nebula was reasonably real. He eventually decided that wasn't a fair ask.
+- **Several directions at once:** he set it off in a few directions to see where it landed, and fed it Shadertoy examples he liked, steering toward a metaball-deforming blob. The current nebula came "out of the blue" while his attention was on other labs, and he tuned it until he liked it.
+- **The collapse was Claude's answer to his question.** Correcting the earlier entry: Scott spotted the problem (no logo on screen) and asked what to do about it. Claude suggested reversing the bang into a collapse, and he loved it. By then the nebula was good enough, so it stayed.
+- **Candid status:** "i may still move on i'm kind of bored by it." He'd like to see something accreting into the logo. The current ending reads as a black hole, and he might "go louder with it and get weird."
+- **Versions:** `notes/versions/bigbang/01-explosion-original` → `02-v1` → `03-v2` → `04-v3` → `05-collapse-rework` → live.
+
+## 2026-10-29 — Falling Sand: the genre's DNA
+
+- **Known DNA:** "i've played so many falling sand games over the years i knew the basic dna." After the simple elements, he kept adding what he expected to find. Embers light wood (`02`), ash is left behind (`03`), lily pads and lotus grow in water (`05`).
+- **Where it became his:** the stage (bedrock ring → quarry, `07`–`08`), the fossils (`09`), and the drain. Those go past the genre's expected DNA.
+
+## 2026-10-29 — Interview wrap: what Scott wants people to take away
+
+- **Proudest call:** the iodine clock reaction. "i really wish it was maze within a maze or something more clever, but iodine is just so good looking lol"
+- **The takeaway:** he can direct AI, and he spans disciplines ("people always love that"). Above all: "everything is shit at first and with frank and productive critique, you can reach wonderful results through iteration and experimentation."
+
+## 2026-10-30: Neon Oil, touch becomes a camera
+
+- **Scott cut the ripples:** the tap-and-drag ripple touch "isnt doing it for me", and it was expensive. His call: "maybe the touch should be orbit camera only."
+- **Why it was expensive:** each tap or wake dropped a ring into the pool, and every live ring is one more pass of the pool's wave loop at every ray-march step. A drag filled all 24 slots. In the phases where the drips leave the pool calm, that took a frame from about 1.4 ms to about 7 ms (desktop, 2494×1914).
+- **What replaced it:** a drag turns the camera around the mark, all the way round, since the mirrored back reads well. Pitch runs from skimming the oil to 45°. A flick coasts, and after a beat the view drifts slowly home rather than snapping, the same instinct as Maze's exploded view.
+- **Scott's limits, after trying it on his phone:** "30 degrees left and right. never below the waterline down, and over top is fine." Letting go "smoothly blends back to conventional view": no coast. The low stop follows the oil as it drains, so with the mark lifted the camera can drop to the surface and look up at it.
+- **The dunk seam:** Scott saw the sheen come back "in a jumpy way" as the dip began, after the mark had drained clean, and asked to connect the two halves of the loop. The coat had been snapping up to the oil line the moment the dunk started. Now it eases up from the oil over about a second, so the mark goes into the dunk clean and the sheen creeps back on.
+
+## 2026-10-30 — Splat: let it tumble
+
+- **The call:** touch tumbles the mark, it never rights itself, it keeps spinning on the momentum you gave it, and it lands however it's turned. This replaces the old lean-on-a-spring, which levelled the mark out just before impact so it always met the floor flat and square.
+- **What that took:** the mark became a free sheet with an orientation and a spin. A tap pokes it and a drag rolls it like a ball (round the rim it spins in place), with light damping so a flick lasts the whole fall. The splat used to assume the canonical pose, so its puddle, fingers, spray, shadow and hole all reached out from the upright outline. Now they all follow the orientation it landed in. The puddle starts as the mark's silhouette, slaps flat face up (or mirrored, if it came down face first) and keeps its heading. The edge that was highest slams down hardest and throws the longest fingers, and spin carries into the goo as a swirl.
+- **Then: give it thickness.** Scott: "can it have thickness? so when it tumbles its got a gooey edge?" The flat sheet vanished edge-on. Now it is a slab whose edge is one round bead of goo, ray-marched and lit with its true normal, so the rim catches the light as it rolls. Edge-on it is a rod of goo, and face-on it looks exactly as before. The thickness squashes into the puddle as it slaps down, and it has a Thickness slider.

@@ -1,0 +1,44 @@
+<!doctype html>
+<!-- The square share card for one lab, screenshotted by scripts/share.mjs: share-card.html?slug=fluid. Not part of the site. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@200;300&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../site/feed.css">
+<style>
+  html, body { margin: 0; width: 600px; height: 600px; overflow: hidden; background: var(--bg); }
+  .card { position: absolute; inset: 0; display: grid; grid-template-rows: auto 1fr auto; grid-template-columns: minmax(0, 1fr); padding: 24px 28px; gap: 18px; }
+  /* the head and foot are one size, so the name and the lab read as equals */
+  .head, .foot { display: flex; align-items: center; gap: 12px; white-space: nowrap; font: 400 20px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--dim); }
+  .head svg { flex: none; color: var(--ink); }
+  .name { font-weight: 500; color: var(--ink); }
+  .rule { flex: none; width: 1px; height: 20px; background: var(--line); }
+  .title { font: 300 22px/1 var(--display); letter-spacing: .01em; text-transform: none; color: var(--ink); }
+  .stage { position: relative; margin: 0 -28px; }
+  .stage iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+  .hint { position: absolute; top: 14px; right: 30px; font: 400 13px/1 var(--mono); letter-spacing: .06em; color: var(--dim); }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="head"><span id="mark"></span><span class="name" id="name"></span><i class="rule"></i><span id="line"></span></div>
+  <div class="stage"><iframe id="toy" allow="clipboard-write"></iframe><span class="hint" id="hint"></span></div>
+  <div class="foot"><span id="num"></span><i class="rule"></i><span class="title" id="title"></span></div>
+</div>
+<script type="module">
+  import { LABS } from '../labs/manifest.js';
+  import { ARTIST } from '../site/config.js';
+  import { logoSVG } from '../labs/shared/logo.js';
+  const slug = new URLSearchParams(location.search).get('slug');
+  const t = LABS.find(l => l.slug === slug) || LABS[0];
+  document.getElementById('mark').innerHTML = logoSVG({ size: 28 });
+  document.getElementById('name').textContent = ARTIST.name;
+  document.getElementById('line').textContent = ARTIST.line;
+  document.getElementById('title').textContent = t.title;
+  document.getElementById('num').textContent = 'lab ' + t.number;
+  document.getElementById('hint').textContent = (t.touchHint || t.hint || '').split('<br>')[0];
+  await document.fonts.load('300 22px Unbounded');
+  document.getElementById('toy').src = `../${t.href}?embed=1`;
+</script>
+</body>
+</html>

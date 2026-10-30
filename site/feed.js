@@ -177,7 +177,11 @@ function readHash() {
   let h = location.hash.slice(1);
   try { h = decodeURIComponent(h); } catch (e) {}
   const i = h.indexOf('/');
-  const slug = i < 0 ? h : h.slice(0, i), code = i < 0 ? '' : h.slice(i + 1);
+  let slug = i < 0 ? h : h.slice(0, i), code = i < 0 ? '' : h.slice(i + 1);
+  // lab/<slug>/#code is each lab's own page (made by npm run share), so a shared link previews that lab;
+  // an old-style #slug/code link still wins
+  const path = location.pathname.match(/\/lab\/([^/]+)\/?$/);
+  if (path && bySlug.has(path[1]) && !bySlug.has(slug)) { slug = path[1]; code = h; }
   if (!bySlug.has(slug)) return null;
   if (code) codes.set(slug, code); else codes.delete(slug);
   return slug;
@@ -186,7 +190,7 @@ const pageHref = t => t.href + (codes.get(t.slug) ? '#' + codes.get(t.slug) : ''
 const frameSrc = (t, play) => `${t.href}?embed=1${play ? '' : '&paused=1'}${codes.get(t.slug) ? '#' + codes.get(t.slug) : ''}`;
 function writeHash() {
   const t = toys[cur], code = codes.get(t.slug);
-  history.replaceState(null, '', '#' + t.slug + (code ? '/' + code : ''));
+  history.replaceState(null, '', `lab/${t.slug}/${location.search}` + (code ? '#' + code : ''));
   document.title = `${t.title} · ${ARTIST.name}`;
   $('count').textContent = `${t.number} / ${String(N).padStart(2, '0')}`;
 }
@@ -724,7 +728,7 @@ function openSheet(t) {
     <section>
       <span class="label">Process</span>
       ${t.versions.length
-        ? `<p class="stub">Old versions, from before each decisive change (they run on today’s shared code, so some may look a little off).</p>
+        ? `<p class="stub">Old versions, from before each decisive change (each runs on a copy of the shared code frozen on 2026-10-30, not the code it was first built on, so some may look a little off).</p>
            <ul class="versions">${t.versions.map(v => `<li><a href="${esc(v.href)}" target="_blank" rel="noopener">${esc(v.name)}</a></li>`).join('')}</ul>`
         : `<p class="stub">No old versions kept for this one.</p>`}
       <p class="stub">Process notes: coming soon. <a href="labs/notes/behind-the-scenes.md" target="_blank" rel="noopener">Raw notes</a></p>

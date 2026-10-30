@@ -1,7 +1,7 @@
 // The one place to reorder the feed or fill in the artist card.
 
 // Feed order, by lab file name. Labs missing from this list are appended in lab-number order.
-// Vessel first, then lab-number order.
+// Lab-number order.
 export const ORDER = ['fluid', 'prism', 'goop', 'knockout', 'bigbang', 'godrays', 'maze', 'pachinko', 'neural', 'sand', 'life', 'splat'];
 
 // Which toy a bare link (no #toy) opens on. null = the first in ORDER.
@@ -25,7 +25,7 @@ export const NO_PRELOAD = [];
 export const TOUCH = {
   prism:    { touch: 'drag', hint: 'drag to aim · drag the emitter to move it' },
   fluid:    { touch: 'drag', hint: 'drag to tilt · flick to slosh' },
-  goop:     { touch: 'drag', hint: 'tap the pool · tap the mark' },
+  goop:     { touch: 'drag', hint: 'drag to orbit' },
   knockout: { touch: 'drag', hint: 'pull back · let go to throw' },
   bigbang:  { touch: 'drag', hint: 'drag to orbit · tap to replay' },
   godrays:  { touch: 'drag', hint: 'drag to steer the light · lift to pin it' },
@@ -34,10 +34,17 @@ export const TOUCH = {
   neural:   { touch: 'drag', hint: 'draw on it' },
   sand:     { touch: 'drag', hint: 'drag to paint' },
   life:     { touch: 'drag', hint: 'tap or drag to draw cells' },
-  splat:    { touch: 'tap',  hint: 'tap it mid-fall to tilt it' }
+  splat:    { touch: 'drag', hint: 'tap or flick it to send it tumbling' }
 };
 
 // Placeholders: Scott supplies the mugshot, bio and links.
+// Where the site lives: share previews need absolute links to their pictures. Re-run npm run share after changing it.
+export const SITE_URL = 'https://sc0ttr0berts0n.github.io/personal-site-2026/';
+
+// Share cards (npm run share): how long each toy runs before its picture is taken, in ms. Default 6000.
+// Vessel at 12 s is mid-way through a color front; Neon Oil needs its shader compiled first.
+export const SHARE_AT = { fluid: 12000, goop: 22000 };
+
 export const ARTIST = {
   name: 'Scott Robertson',
   avatar: null,                      // e.g. 'site/img/scott.jpg'; null shows the mark

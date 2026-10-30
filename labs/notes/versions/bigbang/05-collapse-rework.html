@@ -1,10 +1,12 @@
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<script src="../../../../embed/lab-embed.js"></script>
 <title>Big Bang</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@200;300&family=Familjen+Grotesk:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap">
-<link rel="stylesheet" href="shared/lab.css">
+<link rel="stylesheet" href="./shared/lab.css">
 <script type="importmap">
 { "imports": {
   "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
@@ -20,9 +22,9 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
-import { createLab } from '../../../shared/lab.js';
-import { logoPolygons, logoShapes, LOGO_FILL, LOGO_DEPTH } from '../../../shared/logo.js';
-import { ramp } from '../../../shared/palettes.js';
+import { createLab } from './shared/lab.js';
+import { logoPolygons, logoShapes, LOGO_FILL, LOGO_DEPTH } from './shared/logo.js';
+import { ramp } from './shared/palettes.js';
 
 // Each palette is a filter set: the ramp runs from the hottest, densest gas to the faintest, coldest wisps.
 const FILTERS = [

@@ -34,7 +34,7 @@ const QUALITY = {
 };
 
 const lab = createLab({
-  number: '02',
+  number: '01',
   title: 'Vessel',
   blurb: 'Each chevron is a sealed glass vessel, part-filled with liquid. Tilt it and watch the surface slosh, then settle level again.',
   teaches: 'Inspired in part by Valve’s liquid-in-a-bottle work: no fluid solver, just a level surface plus damped sloshing waves. The whole scene is one full-screen raymarching shader in three.js, tracing the glass and liquid through distance fields baked from the logo. It’s heavy, so it compiles in the background and the page never stalls.',
@@ -44,24 +44,29 @@ const lab = createLab({
   defaultPalette: 'reef',
   grid: false,
   params: {
+    hLiquid:   { type: 'heading', label: 'Liquid' },
     fill:      { type: 'range', label: 'Fill', min: 0, max: 100, step: 1, value: 90, unit: '%' },
     viscosity: { type: 'range', label: 'Viscosity', min: 0, max: 4, step: 0.01, value: 2.54,
                  format: v => { const nu = 10 ** v; return nu < 10 ? nu.toFixed(1) : String(Math.round(nu)); }, unit: ' cSt' },
     gravity:   { type: 'range', label: 'Gravity', min: 1.6, max: 24.8, step: 0.1, value: 4.1, unit: ' m/s²' },
-    contact:   { type: 'range', label: 'Contact angle', min: 0, max: 150, step: 1, value: 139, unit: '°' },
+    contact:   { type: 'range', label: 'Contact angle (wetting)', min: 0, max: 150, step: 1, value: 139, unit: '°' },
+    bubbles:   { type: 'range', label: 'Bubbles', min: 0, max: 1, step: 0.01, value: 0 },
+    hGlass:    { type: 'heading', label: 'Glass' },
     ior:       { type: 'range', label: 'Glass IOR', min: 1, max: 2, step: 0.01, value: 1.27 },
     tint:      { type: 'range', label: 'Glass tint', min: 0, max: 1, step: 0.01, value: 0 },
-    bubbles:   { type: 'range', label: 'Bubbles', min: 0, max: 1, step: 0.01, value: 0 },
     glow:      { type: 'range', label: 'Glow', min: 0, max: 2, step: 0.05, value: 1.05 },
+    hMotion:   { type: 'heading', label: 'Idle motion' },
     rock:      { type: 'toggle', label: 'Idle smacks and fill drift', value: true },
     flip:      { type: 'toggle', label: 'Flip over now and then', value: true },
-    flipEvery: { type: 'range', label: 'Flip every', min: 3, max: 15, step: 0.5, value: 5, unit: ' s' },
+    flipEvery: { type: 'range', label: 'Flip every', min: 3, max: 15, step: 0.5, value: 5, unit: ' s', when: P => P.flip },
     hChroma:   { type: 'heading', label: 'Color reaction' },
     chroma:    { type: 'toggle', label: 'Clock reaction waves', value: true },
-    waveSpeed: { type: 'range', label: 'Front speed', min: 0.3, max: 5, step: 0.1, value: 1.4, unit: ' u/s' },
-    waveEvery: { type: 'range', label: 'New front every (smacks off)', min: 0.6, max: 10, step: 0.1, value: 3, unit: ' s' },
-    sheen:     { type: 'range', label: 'Front sheen and ripples', min: 0, max: 1, step: 0.01, value: 0.6 },
-    ragged:    { type: 'range', label: 'Front waviness', min: 0, max: 1, step: 0.01, value: 0.7 },
+    waveSpeed: { type: 'range', label: 'Front speed', min: 0.3, max: 5, step: 0.1, value: 1.4, when: P => P.chroma },
+    // with smacks on, each smack starts a front; this timer only runs with them off
+    waveEvery: { type: 'range', label: 'New front every', min: 0.6, max: 10, step: 0.1, value: 3, unit: ' s', when: P => P.chroma && !P.rock },
+    sheen:     { type: 'range', label: 'Front sheen and ripples', min: 0, max: 1, step: 0.01, value: 0.6, when: P => P.chroma },
+    ragged:    { type: 'range', label: 'Front waviness', min: 0, max: 1, step: 0.01, value: 0.7, when: P => P.chroma },
+    hView:     { type: 'heading', label: 'View' },
     quality:   { type: 'select', label: 'Quality', value: 'high', options: Object.entries(QUALITY).map(([k, q]) => [k, q.label]) }
   },
   actions: [
