@@ -78,6 +78,7 @@ const lab = createLab({
     lookH: { type: 'heading', label: 'Look' },
     gloss: { type: 'range', label: 'Gloss', min: 0, max: 1, step: 0.05, value: 0.6 },
     wobble: { type: 'range', label: 'Jiggle', min: 0, max: 1, step: 0.05, value: 0.75 },
+    thick: { type: 'range', label: 'Thickness', min: 0, max: 0.08, step: 0.005, value: 0.035 },
     shadow: { type: 'toggle', label: 'Shadows', value: true },
     grid: { type: 'range', label: 'Floor grid density', min: 6, max: 40, step: 1, value: 10 }
   },
@@ -297,6 +298,7 @@ uniform vec3 uFloorA, uLineA, uSlimeA, uFloorB, uLineB, uSlimeB;
 uniform float uHB, uSA, uAOn, uSpread, uWobL, uWobS, uFlat, uLanded, uShadowA, uAO;
 uniform float uHole, uHoleIn, uFloorOn, uSG, uErode, uSpreadH, uWobSH, uHoleTime, uSB, uEB, uRiseSh, uGoopA, uFlap, uFlapG, uAir, uAirT;
 uniform mat3 uRB, uRG, uRH;   // orientations (columns: the sheet's axes in the world): the mark, the splat, the hole
+uniform float uThick, uThickG;   // the sheet's half-thickness (the radius of its round edge): the mark's, the splat's
 out vec4 o;
 const float T = ${T.toFixed(3)}, W = ${EDGE.toFixed(3)}, DOM = ${DOM.toFixed(3)}, C = ${C.toFixed(3)};
 const vec2 LS = vec2(${LS[0].toFixed(3)}, ${LS[1].toFixed(3)});
@@ -349,17 +351,74 @@ vec2 sheetL(vec2 g, mat3 R){
 }
 // the face the camera sees tips the lighting: its normal's slope, in the shading's y-up frame
 vec2 faceTn(mat3 R){ vec3 n = R[2] * sign(R[2].z + 1e-6); return clamp(vec2(n.x, -n.y) / max(n.z, .25), -4., 4.); }
+// The sheet has thickness: the outline swept by a ball of radius h (so its edge is one round bead of goo), turned by R
+// and scaled by sc. Sphere-trace the camera ray through it and return the least distance along the ray (x; the
+// deepest point inside, at most -h, when it hits) and the same from the blurred outline at that point (y), both in
+// world units, which is screen units at the mark. Face-on this is the flat sheet; turned, the bead shows as a rim.
+float slabD(vec3 p, float h, out float soft){
+  float z2 = p.z * p.z;
+  soft = sqrt(pow(max(sdfSoft(p.xy) + h, 0.), 2.) + z2) - h;
+  return sqrt(pow(max(sdfAt(p.xy) + h, 0.), 2.) + z2) - h;
+}
+vec2 slab(vec2 q, mat3 R, float sc, float h){
+  vec3 ro = vec3(0., 0., C), rd = normalize(vec3(q, -C));
+  float rb = .78 * sc, b = dot(ro, rd), disc = b * b - (C * C - rb * rb);
+  if (disc < 0.) return vec2(9.);
+  float t = -b - sqrt(disc), t1 = -b + sqrt(disc), m = 9., ms = 9., soft, hs = h / sc;
+  mat3 Rt = transpose(R);
+  bool inside = false;
+  for (int i = 0; i < 48; i++) {
+    float d = sc * slabD(Rt * (ro + rd * t) / sc, hs, soft);
+    if (d < m) { m = d; ms = sc * soft; }
+    if (d < 0.) inside = true;
+    t += inside ? .4 * h : max(d, .0015);   // inside, walk on through it to find the deepest point
+    if (t > t1 || (inside && d > 0.)) break;
+  }
+  return vec2(m, ms);
+}
+// The lighting of a turned sheet: march to where the ray first meets it and light it with the true normal there, so
+// the bead catches the light as it rolls past. Face-on this is just the face's own tilt and the height map does the
+// rest (k: how far it has turned); turned, the screen-space height map means less and fades out.
+float slabD0(vec3 p, float h){ return sqrt(pow(max(sdfAt(p.xy) + h, 0.), 2.) + p.z * p.z) - h; }
+vec3 slabTn(vec2 q, mat3 R, float sc, float h){
+  vec2 fb = faceTn(R);
+  float k = smoothstep(0., .5, 1. - abs(R[2].z));
+  if (h < 1e-3 || k < 1e-3) return vec3(fb, 1.);
+  vec3 ro = vec3(0., 0., C), rd = normalize(vec3(q, -C));
+  float rb = .78 * sc, b = dot(ro, rd), disc = b * b - (C * C - rb * rb);
+  if (disc < 0.) return vec3(fb, 1.);
+  float t = -b - sqrt(disc), t1 = -b + sqrt(disc), hs = h / sc;
+  mat3 Rt = transpose(R);
+  for (int i = 0; i < 48; i++) {
+    vec3 p = Rt * (ro + rd * t) / sc;
+    float d = sc * slabD0(p, hs);
+    if (d < .001) {
+      const vec2 e = vec2(.004, -.004);
+      vec3 g = e.xyy * slabD0(p + e.xyy, hs) + e.yyx * slabD0(p + e.yyx, hs) + e.yxy * slabD0(p + e.yxy, hs) + e.xxx * slabD0(p + e.xxx, hs);
+      vec3 n = R * normalize(g);
+      if (n.z < 0.) n = -n;
+      return vec3(mix(fb, clamp(vec2(n.x, -n.y) / max(n.z, .25), -4., 4.), k), 1. - k);
+    }
+    t += max(d, .0008);
+    if (t > t1) break;
+  }
+  return vec3(fb, 1. - k);
+}
 vec2 FB(vec2 q){
-  vec2 qb = sheetQ(q, uRB) / uSB;
-  float w = wob(qb, uWobL, 6., .6) + wob(qb, uFlap, 5., 11.) + (1. - uEB) * .08;
-  return vec2(Lf(sdfAt(qb) * uSB + w), Lf(sdfSoft(qb) * uSB + w));
+  vec2 qs = q / uSB, qb = sheetQ(q, uRB) / uSB;
+  float w = wob(qs, uWobL, 6., .6) + wob(qs, uFlap, 5., 11.) + (1. - uEB) * .08;
+  float s = sdfAt(qb) * uSB, ss = sdfSoft(qb) * uSB;
+  if (uThick > 1e-3 && s > -uThick * uSB) { vec2 sl = slab(q, uRB, uSB, uThick * uSB); s = min(s, sl.x); ss = min(ss, sl.y); }
+  return vec2(Lf(s + w), Lf(ss + w));
 }
 // The splat's goo, at screen scale uSG as it falls away from the camera: the mark's outline (turned however it landed,
 // uRG, slapping flat) dilated into a puddle, plus the beads, eaten into blobs by uErode as it breaks up.
 vec2 FG(vec2 q, vec2 uv){
   vec2 qs = q / uSG, qm = sheetQ(qs, uRG);
   float w = wob(qs, uWobL, 6., .6) + wob(qs, uWobS, 3.2, 2.2) + wob(qs, uFlapG, 5., 11.) + uErode * (.4 + .8 * vnoise(qs * 4.5 + 7.));
-  return vec2(Lf(sdfAt(qm) - uSpread + w) + texture(uField, uv).r / uFieldK, Lf(sdfSoft(qm) - uSpread * .3 + w));
+  float s = sdfAt(qm), ss = sdfSoft(qm);
+  if (uThickG > 1e-3 && s > -uThickG) { vec2 sl = slab(qs, uRG, 1., uThickG); s = min(s, sl.x); ss = min(ss, sl.y); }
+  return vec2(Lf(s - uSpread + w) + texture(uField, uv).r / uFieldK, Lf(ss - uSpread * .3 + w));
 }
 // The hole in the old floor (scale uSA as the camera drops past it): the splat's shape frozen when the floor opened.
 // It starts just inside the goo's edge and grows (uHoleIn) to a touch past it, so it opens out from under the goo.
@@ -414,12 +473,12 @@ float logoShadow(vec2 q, float h, mat3 R){
 float circ(float f, float r){ float x = 1. - min(depth(f) / r, 1.); return sqrt(1. - x * x); }
 float dome(float f, float r){ float x = min(depth(f) / r, 1.); return x * (2. - x); }
 float hgt(vec2 f, float k){ return .02 * circ(f.x, .022) + .045 * k * dome(f.y, .09); }
-vec4 slime(vec3 base, vec2 f0, vec2 fx, vec2 fy, float pq, float k, vec2 tn){
+vec4 slime(vec3 base, vec2 f0, vec2 fx, vec2 fy, float pq, float k, vec3 tn){
   float g = length(vec2(fx.x - f0.x, fy.x - f0.x));
   float a = clamp((f0.x - T) / max(g, 1e-6) + .5, 0., 1.);
   float h0 = hgt(f0, k);
   vec2 dh = vec2(hgt(fx, k) - h0, -(hgt(fy, k) - h0)) / pq;
-  vec3 n = normalize(vec3(-dh + tn, 1.));
+  vec3 n = normalize(vec3(-dh * tn.z + tn.xy, 1.));
   float diff = max(dot(n, L1), 0.);
   float s1 = max(dot(n, normalize(L1 + vec3(0, 0, 1))), 0.), s2 = max(dot(n, normalize(L2 + vec3(0, 0, 1))), 0.);
   float spec = pow(s1, 90.) * 1.3 + pow(s1, 14.) * .16 + pow(s2, 60.) * .35;
@@ -438,10 +497,10 @@ void main(){
   // the falling mark over its floor
   float aB = gridA(q, uHB);
   vec3 col = mix(uFloorB, uLineB, aB) * (1. - uShadowOn * logoShadow(q, uHB, uRB));
-  vec4 sb = slime(uSlimeB, FB(q), FB(q + dqx), FB(q + dqy), pq, 1., faceTn(uRB));
+  vec4 sb = slime(uSlimeB, FB(q), FB(q + dqx), FB(q + dqy), pq, 1., slabTn(q, uRB, uSB, uThick * uSB));
   if (uAOn > .5) {
     vec2 g0 = FG(q, uv), gx = FG(q + dqx, uv + dux), gy = FG(q + dqy, uv + duy);
-    vec4 sa = slime(uSlimeA, g0, gx, gy, pq, uFlat, faceTn(uRG));
+    vec4 sa = slime(uSlimeA, g0, gx, gy, pq, uFlat, uThickG > 1e-3 ? slabTn(q / uSG, uRG, 1., uThickG) : vec3(faceTn(uRG), 1.));
     if (uHole < .5) {
       // the splat on its floor
       vec3 colA = mix(uFloorA, uLineA, gridA(q, 0.));
@@ -640,7 +699,7 @@ const I3 = qmat([1, 0, 0, 0]);
 function look() {
   const L = { y: 0, hB: H0(), Bk: cycle, AOn: 0, Ak: cycle - 1, SA: 1, sp: null, tauA: 0, tB: 1e9,
     spread: 0, flat: 1, landed: 0, shadowA: 1, wobS: 0, ao: 0, hole: 0, floorOn: 1, sG: 1, tg: 0, fade: 1, erode: 0,
-    sB: 1, eB: 1, riseSh: 0, rB: I3, rG: I3, rH: I3, flap: 0, flapG: 0, air: 0 };
+    sB: 1, eB: 1, riseSh: 0, rB: I3, rG: I3, rH: I3, thickG: 0, flap: 0, flapG: 0, air: 0 };
   if (phase === 'splat') { L.AOn = 1; L.Ak = cycle; L.Bk = cycle + 1; L.sp = splat; L.tauA = L.tB = tau; }
   else {
     L.y = fallY(tf / P.fall); L.hB = H0() - L.y;
@@ -660,6 +719,7 @@ function look() {
   const sl = clamp01(L.tauA / SLAP);
   L.rG = sl >= 1 ? L.sp.MF : qmat(qslerp(L.sp.q0, L.sp.qF, sl * sl));   // slapping down, faster as it goes
   L.rH = L.sp.MF;
+  L.thickG = P.thick * (1 - sl);   // squashed into the puddle as it slaps down
   L.flapG = FLAP * P.flutter * Math.exp(-8 * L.tauA);   // the flap at impact, dying away in the goo
   const t = L.tauA, sp = spring(t);
   L.spread = P.spread * sp;
@@ -855,6 +915,7 @@ function render() {
   gl.uniform1f(u.uHoleTime, L.sp?.holeClock ?? 0);
   gl.uniform1f(u.uSB, L.sB); gl.uniform1f(u.uEB, L.eB); gl.uniform1f(u.uRiseSh, L.riseSh); gl.uniform1f(u.uGoopA, smooth(0, 0.35, L.fade));
   gl.uniformMatrix3fv(u.uRB, false, L.rB); gl.uniformMatrix3fv(u.uRG, false, L.rG); gl.uniformMatrix3fv(u.uRH, false, L.rH);
+  gl.uniform1f(u.uThick, P.thick); gl.uniform1f(u.uThickG, L.thickG);
   gl.uniform1f(u.uFlap, L.flap); gl.uniform1f(u.uFlapG, L.flapG);
   gl.uniform1f(u.uAir, lab.calm ? 0 : L.air); gl.uniform1f(u.uAirT, airT);
   gl.bindVertexArray(tri);
