@@ -326,3 +326,11 @@ Scott walked the saved versions in `notes/versions/goop/`.
 
 - **Proudest call:** the iodine clock reaction. "i really wish it was maze within a maze or something more clever, but iodine is just so good looking lol"
 - **The takeaway:** he can direct AI, and he spans disciplines ("people always love that"). Above all: "everything is shit at first and with frank and productive critique, you can reach wonderful results through iteration and experimentation."
+
+## 2026-10-30: Neon Oil, touch becomes a camera
+
+- **Scott cut the ripples:** the tap-and-drag ripple touch "isnt doing it for me", and it was expensive. His call: "maybe the touch should be orbit camera only."
+- **Why it was expensive:** each tap or wake dropped a ring into the pool, and every live ring is one more pass of the pool's wave loop at every ray-march step. A drag filled all 24 slots. In the phases where the drips leave the pool calm, that took a frame from about 1.4 ms to about 7 ms (desktop, 2494×1914).
+- **What replaced it:** a drag turns the camera around the mark, all the way round, since the mirrored back reads well. Pitch runs from skimming the oil to 45°. A flick coasts, and after a beat the view drifts slowly home rather than snapping, the same instinct as Maze's exploded view.
+- **Scott's limits, after trying it on his phone:** "30 degrees left and right. never below the waterline down, and over top is fine." Letting go "smoothly blends back to conventional view": no coast. The low stop follows the oil as it drains, so with the mark lifted the camera can drop to the surface and look up at it.
+- **The dunk seam:** Scott saw the sheen come back "in a jumpy way" as the dip began, after the mark had drained clean, and asked to connect the two halves of the loop. The coat had been snapping up to the oil line the moment the dunk started. Now it eases up from the oil over about a second, so the mark goes into the dunk clean and the sheen creeps back on.
