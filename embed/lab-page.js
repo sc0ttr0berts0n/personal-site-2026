@@ -14,6 +14,7 @@
   const PHONE = '(max-width: 899px)';   // lab.css's own breakpoint for the stacked layout
   const EASE = 'cubic-bezier(.22, .8, .24, 1)';
   const FLY_MS = 280;
+  const PIP_MS = 320, PIP_M = 10, PIP_R = 10;   // picture in picture: grow/shrink time, margin, corner radius
 
   const css = document.createElement('style');
   css.textContent = `
@@ -21,7 +22,7 @@
     .lab-page .lab-back { text-decoration: none; }
     .lab-page .lab-back:hover { color: var(--ink); }
     .lab-page .lab-back .arr { color: var(--dim); margin-right: -2px; }
-    .lab-page .lab-peek, .lab-page .lab-holdbar { display: none; }
+    .lab-page .lab-peek, .lab-page .lab-holdbar, .lab-page .lab-pip { display: none; }
     @media ${PHONE} {
       html.lab-page { scroll-snap-type: y proximity; scroll-padding-top: var(--top-h, 41px); }
       .lab-page .lab-top { position: sticky; top: 0; z-index: 3; background: var(--bg);
@@ -78,8 +79,23 @@
       html.lab-page.locked .lab-lock { border-color: var(--ink); background-color: var(--ink); color: var(--bg); }
       html.lab-page.held .lab-panel { opacity: 0; pointer-events: none; }
       html.lab-page.held .lab-top { opacity: .35; }
+
+      /* picture in picture: with the controls up, the toy itself shrinks to its key square in the top right corner,
+         over the controls. It is the real stage, scaled (so it never resizes or restarts), and grows back for tuning. */
+      .lab-page .lab-stage { transform-origin: 0 0; clip-path: inset(0 0 round 0);
+        transition: background-color .4s, transform ${PIP_MS}ms ${EASE}, clip-path ${PIP_MS}ms ${EASE}; }
+      .lab-page .lab-stage > :is(.lab-hud, .lab-hint, .lab-square) { transition: opacity .2s; }
+      html.lab-page.pip .lab-stage { z-index: 3; pointer-events: none;
+        transform: translate(var(--pip-x), var(--pip-y)) scale(var(--pip-s));
+        clip-path: inset(var(--pip-cy) var(--pip-cx) round var(--pip-r)); }
+      html.lab-page.pip .lab-stage > :is(.lab-hud, .lab-hint, .lab-square) { opacity: 0; }
+      .lab-page .lab-pip { display: block; position: fixed; z-index: 3; padding: 0; background: none; cursor: pointer;
+        top: var(--pip-top); right: ${PIP_M}px; width: var(--pip-size); height: var(--pip-size);
+        border: 1px solid var(--line); border-radius: ${PIP_R}px; box-shadow: 0 8px 28px rgb(0 0 0 / .7);
+        opacity: 0; pointer-events: none; transition: opacity .2s; }
+      html.lab-page.pip .lab-pip { opacity: 1; pointer-events: auto; }
     }
-    @media (prefers-reduced-motion: reduce) { .lab-page .lab-panel, .lab-page .lab-panel *, .lab-page .lab-holdbar * { transition: none !important; } }`;
+    @media (prefers-reduced-motion: reduce) { .lab-page .lab-panel, .lab-page .lab-panel *, .lab-page .lab-holdbar *, .lab-page .lab-stage { transition: none !important; } }`;
   document.head.appendChild(css);
 
   const EYE = '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M1 8s2.5-4.5 7-4.5S15 8 15 8s-2.5 4.5-7 4.5S1 8 1 8z" fill="none" stroke="currentColor" stroke-width="1.2"/><circle cx="8" cy="8" r="2" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>';
@@ -161,6 +177,41 @@
       lockBtn.innerHTML = lock(locked);
       holdLbl.textContent = 'Hold to see the toy';
     });
+
+    // ---- picture in picture: the toy in the top right corner while the controls are up ----
+    // It shows whenever the hold bar would, and gives way to the full toy while a slider is scrubbed or the toy is
+    // held. A tap on it puts the controls back down.
+    const stage = document.querySelector('.lab-stage');
+    const pip = document.createElement('button');
+    pip.type = 'button'; pip.className = 'lab-pip';
+    pip.setAttribute('aria-label', 'Put the controls down to see the toy');
+    document.body.append(pip);
+    pip.addEventListener('click', () => scrollTo({ top: 0, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }));
+    // maps the stage's key square onto the corner box: offsetWidth/Height ignore the transform, so this never feeds back
+    const pipFit = () => {
+      if (!stage) return;
+      const W = stage.offsetWidth, H = stage.offsetHeight, S = Math.min(W, H);
+      if (!S) return;
+      const P = Math.round(Math.min(156, root.clientWidth * 0.38)), s = P / S;
+      const x0 = (W - S) / 2, y0 = (H - S) / 2, r = root.style;
+      r.setProperty('--pip-size', P + 'px');
+      r.setProperty('--pip-top', top.offsetHeight + PIP_M + 'px');
+      r.setProperty('--pip-s', s);
+      r.setProperty('--pip-x', (W - PIP_M - P - s * x0) + 'px');
+      r.setProperty('--pip-y', (PIP_M - s * y0) + 'px');
+      r.setProperty('--pip-cx', x0 + 'px'); r.setProperty('--pip-cy', y0 + 'px');
+      r.setProperty('--pip-r', PIP_R / s + 'px');
+    };
+    if (stage) new ResizeObserver(pipFit).observe(stage);
+    addEventListener('resize', pipFit);
+    pipFit();
+    const pipSync = () => {
+      const c = root.classList;
+      c.toggle('pip', phone.matches && c.contains('opened') && !c.contains('tuning') && !c.contains('held'));
+    };
+    new MutationObserver(pipSync).observe(root, { attributeFilter: ['class'] });
+    phone.addEventListener('change', pipSync);
+    pipSync();
 
     // a palette picks as soon as it's pressed, and the toy shows in it until you let go
     panel.querySelector('.palettes')?.addEventListener('pointerdown', e => {
