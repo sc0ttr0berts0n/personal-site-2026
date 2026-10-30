@@ -53,14 +53,19 @@ const lab = createLab({
     swirl:     { type: 'range', label: 'Air currents', min: 0, max: 4, step: 0.05, value: 0.75, unit: '×', when: P => P.dust > 0 },
     twinkle:   { type: 'range', label: 'Glint', min: 0, max: 1, step: 0.01, value: 0.78, when: P => P.dust > 0 },
     bokeh:     { type: 'range', label: 'Near-lens blur (bokeh)', min: 0, max: 1, step: 0.01, value: 0, when: P => P.dust > 0 },
-    hBurst:    { type: 'heading', label: 'Sunlight' },
-    // sunlight replaces the palette's lamp color; picking a palette switches it off (below)
+    hSun:      { type: 'heading', label: 'Sunlight' },
+    // sunlight stands in for the palette's lamp color; the palette still sets the room and the mark
     burst:     { type: 'toggle', label: 'Sunlight with rainbow bursts (off: palette color)', value: true },
     sunK:      { type: 'range', label: 'Sun temperature', min: 4000, max: 7000, step: 50, value: 5700, unit: ' K', when: P => P.burst },
+    hBurst:    { type: 'heading', label: 'Rainbow bursts', when: P => P.burst },
     burstEvery:{ type: 'range', label: 'Burst every (average)', min: 3, max: 30, step: 0.5, value: 4, unit: ' s', when: P => P.burst },
-    burstPower:{ type: 'range', label: 'Burst strength', min: 0, max: 2.5, step: 0.05, value: 2.3, when: P => P.burst },
+    burstPower:{ type: 'range', label: 'Energy (flash brightness)', min: 0, max: 4, step: 0.05, value: 2.3, when: P => P.burst },
+    burstRise: { type: 'range', label: 'Flash rise time', min: 0.04, max: 0.6, step: 0.01, value: 0.22, unit: ' s', when: P => P.burst },
     burstSettle:{ type: 'range', label: 'Return to sunlight', min: 0.5, max: 8, step: 0.1, value: 2, unit: ' s', when: P => P.burst },
-    burstWander:{ type: 'range', label: 'Wander during a burst', min: 1, max: 4, step: 0.1, value: 4, unit: '×', when: P => P.burst }
+    burstShake:{ type: 'range', label: 'Lamp shake', min: 0, max: 1, step: 0.01, value: 0, when: P => P.burst },
+    burstFlicker:{ type: 'range', label: 'Flicker', min: 0, max: 1, step: 0.01, value: 0, when: P => P.burst },
+    burstWander:{ type: 'range', label: 'Wander during a burst', min: 1, max: 4, step: 0.1, value: 4, unit: '×', when: P => P.burst },
+    burstSpin: { type: 'range', label: 'Spectrum spin', min: 0, max: 1, step: 0.01, value: 0.12, unit: ' turns/s', when: P => P.burst }
   },
   actions: [
     { label: 'Center light', primary: true, action: () => { pinned = { x: 0, y: 0 }; } },
@@ -452,8 +457,6 @@ function applyPalette(p) {
 }
 lab.on('palette', applyPalette);
 applyPalette(lab.palette);
-// sunlight mode paints over the palette's lamp, so choosing a palette by hand switches to it
-document.querySelector('.palettes').addEventListener('click', e => { if (e.target.closest('.pal') && lab.params.burst) lab.set('burst', false); });
 
 // ---- pointer: the lamp follows the pointer, a click pins it, leaving the stage returns to the orbit ----
 const toPlane = e => {
@@ -507,10 +510,10 @@ const fromLab = ([L, A, Bb], out) => {
 const mixLab = (a, b, f) => a.map((v, i) => v + (b[i] - v) * f);
 
 // envelope: a fast ease-out attack, a short hold, then a smootherstep release (no kinks, so no visible steps)
-const ATTACK = 0.22, HOLD = 0.15;
-function burstEnv(age, settle) {
-  if (age < ATTACK) { const x = age / ATTACK; return 1 - (1 - x) ** 3; }
-  const x = (age - ATTACK - HOLD) / settle;
+const HOLD = 0.15;
+function burstEnv(age, rise, settle) {
+  if (age < rise) { const x = age / rise; return 1 - (1 - x) ** 3; }
+  const x = (age - rise - HOLD) / settle;
   if (x <= 0) return 1;
   if (x >= 1) return 0;
   return 1 - x * x * x * (x * (x * 6 - 15) + 10);
@@ -524,14 +527,14 @@ function triggerBurst() {
 function stepBursts(dt, P) {
   if (P.burst && !sb.on) sb.next = sb.clock + 2;     // the first one comes soon after switching on
   sb.on = P.burst;
-  if (!lab.calm && !sb.hold) { sb.clock += dt; sb.hue += dt * 0.12; }   // the spectrum slowly turns while it shows
+  if (!lab.calm && !sb.hold) { sb.clock += dt; sb.hue += dt * P.burstSpin; }   // the spectrum turns while it shows
   if (sb.on && !lab.calm && sb.clock >= sb.next) {
     triggerBurst();
-    sb.next = sb.clock + P.burstEvery * (0.67 + 0.66 * Math.random());   // default 9 s: anywhere from 6 to 12
+    sb.next = sb.clock + P.burstEvery * (0.67 + 0.66 * Math.random());   // default 4 s: anywhere from 2.7 to 5.3
   }
   const age = sb.clock - sb.start;
-  const e = lab.calm ? 0 : burstEnv(age, P.burstSettle);
-  sb.env = age < ATTACK ? sb.from + (1 - sb.from) * e : e;
+  const e = lab.calm ? 0 : burstEnv(age, P.burstRise, P.burstSettle);
+  sb.env = age < P.burstRise ? sb.from + (1 - sb.from) * e : e;
   // the sun stands in for the palette while the mode is on; switching it either way crossfades rather than snaps
   B.uSunMix.value += ((P.burst ? 1 : 0) - B.uSunMix.value) * (1 - Math.exp(-dt * 4));
   if (Math.abs(B.uSunMix.value - (P.burst ? 1 : 0)) < 1e-4) B.uSunMix.value = P.burst ? 1 : 0;
@@ -544,9 +547,13 @@ function stepBursts(dt, P) {
   const a = 2 * Math.PI * B.uHue.value;
   lab3 = mixLab(lab3, [0.8, 0.19 * Math.cos(a), 0.19 * Math.sin(a)], B.uBurst.value * 0.6);
   fromLab(lab3, markU.uLightCol.value);
-  // brightness rides the envelope squared, so the flash drops away quicker than the color drains back to sunlight
-  return 1 + P.burstPower * sb.env * sb.env;
+  // brightness rides the envelope squared, so the flash drops away quicker than the color drains back to sunlight;
+  // flicker is a fast stutter on top, scaled by the envelope so it dies with the flash
+  return (1 + P.burstPower * sb.env * sb.env) * (1 + P.burstFlicker * sb.env * 0.7 * jitter(sb.clock * 13, 3.1));
 }
+
+// a cheap smooth noise in -1..1: three sines at unrelated rates, so it never visibly repeats
+const jitter = (t, s) => (Math.sin(t * 1.0 + s) + 0.6 * Math.sin(t * 2.37 + 2 * s) + 0.35 * Math.sin(t * 4.11 + 3 * s)) / 1.95;
 
 let hudTick = 0, lastT = 0;
 function frame(dt, t) {
@@ -562,6 +569,11 @@ function frame(dt, t) {
   const hw = sq.w * k / 2, hh = sq.h * k / 2;
   light.x = Math.max(-hw, Math.min(hw, light.x)); light.y = Math.max(-hh, Math.min(hh, light.y));
   lightW.set(light.x * toLampPlane, light.y * toLampPlane, LZ);
+  // a burst can shake the lamp: a fast tremor riding the envelope, so it settles as the color drains
+  if (P.burst && P.burstShake > 0 && sb.env > 0) {
+    const amp = 0.35 * P.burstShake * sb.env;
+    lightW.x += amp * jitter(sb.clock * 31, 0.7); lightW.y += amp * jitter(sb.clock * 29, 5.3);
+  }
 
   // the mark turns its face toward the pointer, only while the pointer is on the stage
   const a = P.tilt * Math.PI / 180;

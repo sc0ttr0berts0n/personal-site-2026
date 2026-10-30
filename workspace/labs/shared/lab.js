@@ -94,6 +94,7 @@ export function createLab(spec) {
     if (p.type === 'heading') {
       const h = document.createElement('div');
       h.className = 'ctl-head'; h.textContent = p.label;
+      if (p.when) conditional.push([h, p.when]);
       form.appendChild(h);
       continue;
     }
