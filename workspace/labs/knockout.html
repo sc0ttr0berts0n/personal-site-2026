@@ -36,7 +36,7 @@ const lab = createLab({
   params: {
     hWorld:      { type: 'heading', label: 'World' },
     gravity:     { type: 'range', label: 'Gravity', min: 1.6, max: 25, step: 0.01, value: 9.81, unit: ' m/s²' },
-    timeScale:   { type: 'range', label: 'Time scale', min: 0.1, max: 1, step: 0.05, value: 1, unit: '×' },
+    timeScale:   { type: 'range', label: 'Time scale', min: 0.1, max: 2, step: 0.05, value: 1, unit: '×' },
     floor:       { type: 'range', label: 'Plinth height', min: 4, max: 24, step: 1, value: 14, unit: ' cm' },
     // every body shares these: balls, pieces, plinths, floor and walls
     restitution: { type: 'range', label: 'Bounciness (restitution)', min: 0, max: 0.95, step: 0.05, value: 0.3 },
@@ -46,8 +46,9 @@ const lab = createLab({
     ballDensity: { type: 'range', label: 'Ball density', min: 0.1, max: 11.3, step: 0.1, value: 4.9, unit: ' g/cm³' },
     balls:       { type: 'range', label: 'Balls per throw', min: 1, max: 5, step: 1, value: 1 },
     hDemo:       { type: 'heading', label: 'Idle volley' },
-    split:       { type: 'toggle', label: 'Volley balls burst apart (5 → 3 → 3)', value: true },
-    splitForce:  { type: 'range', label: 'Burst force', min: 0.5, max: 8, step: 0.1, value: 5, unit: '×', when: P => P.split },
+    volley:      { type: 'toggle', label: 'Fire a volley when left alone', value: true },
+    split:       { type: 'toggle', label: 'Volley balls burst apart (5 → 3 → 3)', value: true, when: P => P.volley },
+    splitForce:  { type: 'range', label: 'Burst force', min: 0.5, max: 8, step: 0.1, value: 5, unit: '×', when: P => P.volley && P.split },
     autoReset:   { type: 'toggle', label: 'Rebuild the mark when settled', value: true },
     hView:       { type: 'heading', label: 'View' },
     trails:      { type: 'toggle', label: 'Motion trails', value: true }
@@ -375,6 +376,7 @@ function finishTransition() { if (trans) { trans = null; phase = 'rest'; } }
 // ---- params ----
 lab.on('change', key => {
   if (key === 'floor') { reset({ rebuild: true }); return; }
+  if (key === 'volley' && !P.volley) { volley = null; splits = null; }   // the shot already in the air still lands
   if (key === 'gravity') { world.setGravity(Vec2(0, P.gravity * S)); for (const b of dynamic()) if (phase === 'live') b.setAwake(true); }
   if (key === 'friction' || key === 'restitution') {
     for (let b = world.getBodyList(); b; b = b.getNext()) for (let f = b.getFixtureList(); f; f = f.getNext()) { f.setFriction(P.friction); f.setRestitution(P.restitution); }
@@ -494,7 +496,7 @@ function update(dt) {
   // idle demo: after a few quiet seconds, a volley of shots from alternating sides, then settle and reset
   if (!lab.calm && phase === 'rest' && !drag && !trans) {
     idleT += dt;
-    if (!volley && idleT > DEMO_WAIT * (engaged ? 2 : 1)) volley = { left: VOLLEY };
+    if (!volley && P.volley && idleT > DEMO_WAIT * (engaged ? 2 : 1)) volley = { left: VOLLEY };
   }
   if (volley && !demo && !drag) {
     // aim at where a piece is now, so later shots chase the ones already knocked about

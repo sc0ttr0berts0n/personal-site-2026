@@ -24,6 +24,37 @@
     .lab-page .lab-back:hover { color: var(--ink); }
     .lab-page .lab-back .arr { color: var(--dim); margin-right: -2px; }
     .lab-page .lab-peek, .lab-page .lab-holdbar, .lab-page .lab-pip, .lab-page .lab-scrub { display: none; }
+
+    /* the feed's grid button and overview, so one lab can jump straight to another (styles follow site/feed.css) */
+    .lab-page .lab-meta { display: flex; align-items: center; gap: 10px; }
+    .lab-page .lab-gridbtn { display: grid; place-items: center; width: 32px; height: 32px; margin: -9px -8px -9px 0; padding: 0; border: 0; border-radius: 2px;
+      background: none; color: var(--ink); cursor: pointer; -webkit-tap-highlight-color: transparent; }
+    .lab-page .lab-gridbtn:hover { background: rgb(255 255 255 / .08); }
+    .lab-page .lab-ov { position: fixed; inset: 0; width: 100%; height: 100%; max-width: none; max-height: none; margin: 0; padding: 0; border: 0;
+      background: var(--bg); color: var(--ink); overflow: auto; overscroll-behavior: contain; opacity: 0; transition: opacity .2s; }
+    .lab-page .lab-ov.open { opacity: 1; }
+    .lab-page .lab-ov::backdrop { background: var(--bg); }
+    .lab-page .lab-ov .ov-head { position: sticky; top: 0; z-index: 1; display: flex; justify-content: space-between; align-items: center;
+      padding: max(12px, env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) 12px max(16px, env(safe-area-inset-left, 0px));
+      background: var(--bg); border-bottom: 1px solid var(--line); }
+    .lab-page .lab-ov h2 { margin: 0; font: 400 12px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; display: flex; gap: 10px; align-items: baseline; }
+    .lab-page .lab-ov h2 .num { color: var(--dim); }
+    .lab-page .lab-ov .tiles { list-style: none; margin: 0; padding: 12px max(16px, env(safe-area-inset-right, 0px)) 32px max(16px, env(safe-area-inset-left, 0px));
+      display: grid; gap: 6px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    @media (min-width: 720px) { .lab-page .lab-ov .tiles { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; } }
+    @media (min-width: 1100px) { .lab-page .lab-ov .tiles { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
+    .lab-page .lab-ov .tile { position: relative; display: block; width: 100%; aspect-ratio: 4 / 5; border: 1px solid var(--line); border-radius: 2px; overflow: hidden;
+      color: var(--ink); text-decoration: none; background-color: var(--bg); -webkit-tap-highlight-color: transparent;
+      background-image: linear-gradient(to right, var(--grid) 1px, transparent 1px), linear-gradient(to bottom, var(--grid) 1px, transparent 1px);
+      background-size: 8px 8px; background-position: center; }
+    .lab-page .lab-ov .tile:hover, .lab-page .lab-ov .tile[aria-current="page"] { border-color: var(--ink); }
+    .lab-page .lab-ov .tile img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+    .lab-page .lab-ov .tile .mark { position: absolute; inset: 0; display: grid; place-items: center; color: var(--dim); }
+    .lab-page .lab-ov .tile .lbl { position: absolute; left: 0; right: 0; bottom: 0; display: grid; gap: 4px; padding: 24px 8px 8px;
+      background: linear-gradient(to top, rgb(0 0 0 / .85), transparent); font: 400 10px/1 var(--mono); letter-spacing: .12em; color: var(--dim); }
+    .lab-page .lab-ov .tile .lbl b { font: 300 13px/1.15 var(--display); letter-spacing: 0; color: var(--ink); }
+    .lab-page .lab-ov .x { display: grid; place-items: center; width: 32px; height: 32px; margin: -8px -8px -8px 0; padding: 0; border: 0; background: none; color: var(--ink); cursor: pointer; }
+    @media (prefers-reduced-motion: reduce) { .lab-page .lab-ov { transition: none; } }
     @media ${PHONE} {
       html.lab-page { scroll-snap-type: y proximity; scroll-padding-top: var(--top-h, 41px); }
       .lab-page .lab-top { position: sticky; top: 0; z-index: 3; background: var(--bg);
@@ -160,6 +191,61 @@
       a.href = href();
       a.addEventListener('pointerdown', () => { a.href = href(); });
       who.replaceWith(a);
+    }
+
+    // ---- the feed's grid button: every lab as a tile, and picking one opens its page ----
+    const meta = top.lastElementChild;   // "lab 01"
+    if (meta && meta !== top.firstElementChild) {
+      const wrapM = document.createElement('span');
+      wrapM.className = 'lab-meta';
+      meta.replaceWith(wrapM);
+      const gridBtn = document.createElement('button');
+      gridBtn.type = 'button'; gridBtn.className = 'lab-gridbtn';
+      gridBtn.setAttribute('aria-haspopup', 'dialog'); gridBtn.setAttribute('aria-label', 'All labs');
+      gridBtn.innerHTML = '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M1 1h6v6H1zM9 1h6v6H9zM1 9h6v6H1zM9 9h6v6H9z" fill="none" stroke="currentColor"/></svg>';
+      wrapM.append(meta, gridBtn);
+      const mark = top.querySelector('svg')?.outerHTML.replace(/width="\d+"/, 'width="32"').replace(/height="\d+"/, 'height="32"') || '';
+      const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+      let ov = null;
+      const close = () => {
+        if (!ov?.open) return;
+        ov.classList.remove('open');
+        if (matchMedia('(prefers-reduced-motion: reduce)').matches) ov.close(); else setTimeout(() => ov.close(), 200);
+      };
+      const build = async () => {
+        // the feed's own list and order: the manifest npm run sync writes, sorted as site/config.js orders the feed
+        const [{ LABS }, cfg] = await Promise.all([import(new URL('../labs/manifest.js', SCRIPT)), import(new URL('../site/config.js', SCRIPT)).catch(() => ({}))]);
+        const order = cfg.ORDER || [], rank = l => { const i = order.indexOf(l.slug); return i < 0 ? 1000 + +l.number : i; };
+        const labs = [...LABS].sort((a, b) => rank(a) - rank(b));
+        ov = document.createElement('dialog');
+        ov.className = 'lab-ov';
+        ov.setAttribute('aria-labelledby', 'lab-ov-h');
+        ov.innerHTML = `<div class="ov-head"><h2 id="lab-ov-h"><span class="num">experiments</span> <span>${labs.length} labs</span></h2>
+          <button type="button" class="x" aria-label="Close"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="m3 3 10 10M13 3 3 13" stroke="currentColor" stroke-width="1.2"/></svg></button></div>
+          <ul class="tiles">${labs.map(l => `<li><a class="tile" href="${new URL('../labs/' + l.slug + '.html', SCRIPT).href}"${l.slug === slug ? ' aria-current="page"' : ''}>
+            <span class="mark">${mark}</span><img src="${new URL('../posters/' + l.slug + '.jpg', SCRIPT).href}" alt="" loading="lazy" decoding="async">
+            <span class="lbl"><span>${esc(l.number)}</span><b>${esc(l.title)}</b></span></a></li>`).join('')}</ul>`;
+        for (const img of ov.querySelectorAll('img')) img.addEventListener('error', () => img.remove());
+        ov.querySelector('.x').addEventListener('click', close);
+        // this lab's own tile just closes the grid; the rest are plain links to their pages
+        ov.querySelector('[aria-current]')?.addEventListener('click', e => { e.preventDefault(); close(); });
+        ov.addEventListener('cancel', e => { e.preventDefault(); close(); });
+        document.body.append(ov);
+      };
+      // built while the page is idle, so the first tap opens it at once; if the list can't load, the feed's own grid is the way out
+      let building = null;
+      const ready = () => building ||= build();
+      (window.requestIdleCallback || setTimeout)(() => ready().catch(() => {}), { timeout: 3000 });
+      gridBtn.addEventListener('click', async () => {
+        if (!ov) {
+          gridBtn.style.opacity = '.4';
+          try { await ready(); } catch (e) { location.href = new URL('../', SCRIPT).href; return; } finally { gridBtn.style.opacity = ''; }
+        }
+        if (ov.open) return;
+        ov.showModal();
+        ov.querySelector('[aria-current]')?.focus({ preventScroll: false });
+        requestAnimationFrame(() => requestAnimationFrame(() => ov.classList.add('open')));
+      });
     }
 
     // the peek: a handle that pulls the controls up over the toy, or puts them back down

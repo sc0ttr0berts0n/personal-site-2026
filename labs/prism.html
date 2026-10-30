@@ -57,12 +57,14 @@ const lab = createLab({
   params: {
     hLight:     { type: 'heading', label: 'Light' },
     glass:      { type: 'select', label: 'Glass', value: 'diamond', options: Object.entries(GLASSES).map(([k, g]) => [k, g.label]) },
-    dispersion: { type: 'range', label: 'Dispersion', min: 1, max: 12, step: 0.5, value: 12, unit: '×' },
+    dispersion: { type: 'range', label: 'Dispersion', min: 1, max: 24, step: 0.5, value: 12, unit: '×' },
     waves:      { type: 'range', label: 'Wavelengths traced', min: 3, max: 24, step: 1, value: 7 },
     fresnel:    { type: 'toggle', label: 'Fresnel reflections', value: false },
     bounces:    { type: 'range', label: 'Max bounces per ray', min: 4, max: 60, step: 1, value: 4 },
     absorb:     { type: 'range', label: 'Glass absorption (lost per mark width)', min: 0, max: 0.9, step: 0.01, value: 0, format: v => Math.round(v * 100), unit: '%' },
     hBeam:      { type: 'heading', label: 'Beam' },
+    // where the emitter sits on a ring around the mark: 0° is to the right, angles run clockwise; dragging it sets this too
+    emitter:    { type: 'range', label: 'Emitter position (around the mark)', min: -180, max: 180, step: 1, value: 166, unit: '°' },
     beam:       { type: 'range', label: 'Beam brightness', min: 0.2, max: 1.5, step: 0.05, value: 0.85 },
     width:      { type: 'range', label: 'Beam width', min: 0.5, max: 4, step: 0.1, value: 1.9, unit: ' px' },
     bloom:      { type: 'range', label: 'Bloom', min: 0, max: 2, step: 0.05, value: 0.4 },
@@ -493,7 +495,7 @@ let aim = null, source = { x: -4.4, z: 1.1 }, moving = null;
 const onEmitter = (p, e) => Math.hypot(p.x - source.x, p.z - source.z) < Math.max(0.6, (e.pointerType === 'touch' ? 24 : 12) * k / camera.zoom);
 canvas.addEventListener('pointermove', e => {
   const p = toWorld(e);
-  if (moving === e.pointerId) { source = p; return; }
+  if (moving === e.pointerId) { source = p; fromDrag = true; lab.set('emitter', Math.round(Math.atan2(p.z, p.x) * 180 / Math.PI)); fromDrag = false; return; }
   // a mouse reaching for the emitter leaves the aim where it was
   const grab = e.pointerType === 'mouse' && onEmitter(p, e);
   if (!grab) aim = p;
@@ -513,6 +515,13 @@ canvas.addEventListener('pointerdown', e => {
   }
   if (e.pointerType === 'touch') canvas.setPointerCapture(e.pointerId);
   aim = p;
+});
+// the Emitter position slider walks the emitter round the mark at its current distance (a drag sets both)
+let fromDrag = false;
+lab.on('change', (key, v) => {
+  if (key !== 'emitter' || fromDrag) return;
+  const r = Math.hypot(source.x, source.z) || Math.hypot(4.4, 1.1), a = v * Math.PI / 180;
+  source = { x: r * Math.cos(a), z: r * Math.sin(a) };
 });
 const stopMoving = e => { if (moving === e.pointerId) { moving = null; if (e.pointerType === 'mouse') canvas.style.cursor = 'grab'; } };
 canvas.addEventListener('pointerup', stopMoving);

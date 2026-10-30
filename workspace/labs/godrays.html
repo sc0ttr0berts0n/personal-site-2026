@@ -64,7 +64,7 @@ const lab = createLab({
     burstSettle:{ type: 'range', label: 'Return to sunlight', min: 0.5, max: 8, step: 0.1, value: 2, unit: ' s', when: P => P.burst },
     burstShake:{ type: 'range', label: 'Lamp shake', min: 0, max: 1, step: 0.01, value: 0, when: P => P.burst },
     burstFlicker:{ type: 'range', label: 'Flicker', min: 0, max: 1, step: 0.01, value: 0, when: P => P.burst },
-    burstWander:{ type: 'range', label: 'Wander during a burst', min: 1, max: 4, step: 0.1, value: 4, unit: '×', when: P => P.burst },
+    burstWander:{ type: 'range', label: 'Wander during a burst', min: 1, max: 8, step: 0.1, value: 4, unit: '×', when: P => P.burst },
     burstSpin: { type: 'range', label: 'Spectrum spin', min: 0, max: 1, step: 0.01, value: 0.12, unit: ' turns/s', when: P => P.burst }
   },
   actions: [
