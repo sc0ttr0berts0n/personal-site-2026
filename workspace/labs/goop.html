@@ -39,8 +39,8 @@ const lab = createLab({
   title: 'Neon Oil',
   blurb: 'The mark rises out of a pool of black oil. Sheets of it slide off, long ropes stretch back down to the pool and snap, and the clean mark shows through.',
   teaches: 'Beautiful eye candy for its own sake. Raw WebGL2, no library: the logo’s outline is baked into a half-float texture, and one large shader draws the oil, the drips and the reflections. It’s the heaviest shader on the site, so it compiles in the background while the page stays responsive.',
-  hint: 'tap the pool for a ripple · drag through it for a wake<br>tap the mark to pour a drip',
-  feed: { touch: 'drag', hint: 'tap the pool · tap the mark' },
+  hint: 'drag to orbit the camera around the mark',
+  feed: { touch: 'drag', hint: 'drag to orbit' },
   palettes: [OIL, HONEY, SLIME, GRAPE, NEON],
   defaultPalette: 'neon',
   grid: false,
@@ -957,7 +957,7 @@ function render() {
   pack();
   const Q = QUALITY[P.quality] || QUALITY.medium;
   gl.viewport(0, 0, canvas.width, canvas.height);
-  const phi = P.tilt * Math.PI / 180, sn = Math.sin(phi), cs = Math.cos(phi);
+  const phi = P.tilt * Math.PI / 180;
   u3('uView', canvas.width / 2, canvas.height / 2, pxPerUnit);
   {
     // handheld: slow drift in yaw, pitch and roll plus a little sway of the body, from overlapping sines
@@ -966,13 +966,15 @@ function render() {
     const yaw = h * D * (0.45 * Math.sin(t * 0.41 + 1.0) + 0.22 * Math.sin(t * 1.13) + 0.05 * Math.sin(t * 3.7 + 2.0));
     const pit = h * D * (0.38 * Math.sin(t * 0.53) + 0.2 * Math.sin(t * 1.37 + 2.0) + 0.04 * Math.sin(t * 4.1 + 0.7));
     const rol = h * D * (0.3 * Math.sin(t * 0.71 + 0.3) + 0.1 * Math.sin(t * 1.9 + 1.1));
-    const ph = phi + pit, s2 = Math.sin(ph), c2 = Math.cos(ph), sy = Math.sin(yaw), cy = Math.cos(yaw);
+    // the camera sits on a sphere around the mark's center at the orbit's angles; the shake turns it in place
+    const oP = clamp(phi + orb.pitch, PITCH_LO, PITCH_HI), os = Math.sin(oP), oc = Math.cos(oP), oy = Math.sin(orb.yaw), ox = Math.cos(orb.yaw);
+    const ph = oP + pit, s2 = Math.sin(ph), c2 = Math.cos(ph), sy = Math.sin(orb.yaw + yaw), cy = Math.cos(orb.yaw + yaw);
     const fwd = [-c2 * sy, -s2, -c2 * cy], rt = [cy, 0, -sy];
     const up = [rt[1] * fwd[2] - rt[2] * fwd[1], rt[2] * fwd[0] - rt[0] * fwd[2], rt[0] * fwd[1] - rt[1] * fwd[0]];
     const cr = Math.cos(rol), sr = Math.sin(rol);
     const R = rt.map((v, k) => v * cr + up[k] * sr), Up = up.map((v, k) => v * cr - rt[k] * sr);
     const dx = h * 0.05 * Math.sin(t * 0.37 + 0.4), dy = h * 0.035 * Math.sin(t * 0.61 + 2.2);
-    u3('uCam', dx, YC + DIST * sn + dy, DIST * cs); u3('uFwd', ...fwd); u3('uUp', ...Up); u3('uRight', ...R);
+    u3('uCam', DIST * oc * oy + dx * ox, YC + DIST * os + dy, DIST * oc * ox - dx * oy); u3('uFwd', ...fwd); u3('uUp', ...Up); u3('uRight', ...R);
   }
   u1('uDist', DIST); u1('uTime', time);
   {
@@ -1014,51 +1016,64 @@ function hud() {
   lab.hud(s);
 }
 
-// ---- pointer: the pool takes ripples and wakes, the mark takes a glob that pours into a drip ----
+// ---- pointer: a drag orbits the camera around the mark; let go and it coasts, then drifts home ----
+// Only the camera moves, so a drag costs nothing in the shader. (Taps used to drop rings into the pool, and every
+// live ring is another pass of the pool's wave loop at every march step: 24 of them made an open-pool frame up to ~12× dearer.)
 let lastInteract = -1e9;
 const nowS = () => performance.now() / 1000;
 function wake() { lastInteract = nowS(); dirty = true; }
-function pick(e) {
-  const r = canvas.getBoundingClientRect();
-  const sx = (e.clientX - r.left - r.width / 2) / sq.size * SQ, sy = -(e.clientY - r.top - r.height / 2) / sq.size * SQ;
-  const phi = P.tilt * Math.PI / 180, sn = Math.sin(phi), cs = Math.cos(phi);
-  const ro = [0, YC + DIST * sn, DIST * cs];
-  const rd = [sx, -sn * DIST + cs * sy, -cs * DIST - sn * sy];
-  // the mark's front face
-  const zf = HT + 0.05;
-  const tf = (zf - ro[2]) / rd[2];
-  const fx = ro[0] + rd[0] * tf, fy = ro[1] + rd[1] * tf;
-  const u = fx / LW, v = (YC - fy) / LW;
-  if (fy > poolY + 0.05 && sd2(u, v) < 0.012) return { logo: true, u, v };
-  if (rd[1] >= 0) return null;
-  const tp = (poolY - ro[1]) / rd[1];
-  return { logo: false, x: ro[0] + rd[0] * tp, z: ro[2] + rd[2] * tp };
-}
+// Yaw goes all the way round (the back of the mark reads well, mirrored); pitch stays between skimming the pool
+// and the camera-tilt slider's top, past which the pool turns to a black floor.
+const D2R = Math.PI / 180, PITCH_LO = 3 * D2R, PITCH_HI = 45 * D2R;
+const wrap = a => a - 2 * Math.PI * Math.round(a / (2 * Math.PI));
+const orb = { yaw: 0, pitch: 0, vy: 0, vp: 0, free: 0 };   // free: seconds since it was let go
 let drag = null;
-canvas.style.touchAction = 'pan-y';
-canvas.style.cursor = 'pointer';
+canvas.style.touchAction = 'none';
+canvas.style.cursor = 'grab';
 canvas.tabIndex = 0;
-canvas.setAttribute('aria-label', 'A pool of black oil with the mark standing in it. Tap the pool for a ripple, tap the mark to pour a drip. Enter pours on the mark, space drops a stone.');
+canvas.setAttribute('aria-label', 'A pool of black oil with the mark standing in it. Drag to orbit the camera around the mark. Enter pours on the mark, space drops a stone.');
 canvas.addEventListener('pointerdown', e => {
-  const h = pick(e); if (!h) return;
+  if (drag) return;
+  drag = { id: e.pointerId, x: e.clientX, y: e.clientY, t: e.timeStamp };
+  orb.vy = orb.vp = 0;
+  canvas.setPointerCapture(e.pointerId);
+  canvas.style.cursor = 'grabbing';
   wake();
-  if (h.logo) {
-    const sd = sd2(h.u, h.v);
-    if (newBlob(h.u, sd < -0.006 ? h.v : h.v - 0.012, 1.35, 0.3) === null) { const c = columnFrom(h.u, h.v); if (c) newDrip(c, { z: HT * 0.5, fast: true }); }
-    drag = null;
-  } else {
-    addRing(h.x, h.z, 0.13 * P.ripple);
-    drag = { x: h.x, z: h.z, id: e.pointerId };
-  }
 });
 canvas.addEventListener('pointermove', e => {
   if (!drag || drag.id !== e.pointerId) return;
-  const h = pick(e); if (!h || h.logo) return;
-  const d = Math.hypot(h.x - drag.x, h.z - drag.z);
-  if (d > 0.3) { addRing(h.x, h.z, Math.min(0.07, 0.03 + d * 0.02) * P.ripple); drag.x = h.x; drag.z = h.z; wake(); }
+  // a drag across the whole square turns the camera ~200°
+  const k = 3.5 / sq.size, ddx = e.clientX - drag.x, ddy = e.clientY - drag.y, dt = Math.max(e.timeStamp - drag.t, 1) / 1000;
+  const dy = -ddx * k, dp = ddy * k;
+  const yaw = orb.yaw + dy, base = P.tilt * D2R, pitch = clamp(base + orb.pitch + dp, PITCH_LO, PITCH_HI) - base;
+  // velocity for the coast: a smoothed rate, so the last jittery move before letting go doesn't decide it
+  const a = Math.min(1, dt / 0.05);
+  orb.vy = mix(orb.vy, (yaw - orb.yaw) / dt, a); orb.vp = mix(orb.vp, (pitch - orb.pitch) / dt, a);
+  orb.yaw = yaw; orb.pitch = pitch;
+  drag.x = e.clientX; drag.y = e.clientY; drag.t = e.timeStamp;
+  wake();
 });
-const endDrag = () => { drag = null; };
-canvas.addEventListener('pointerup', endDrag); canvas.addEventListener('pointercancel', endDrag); canvas.addEventListener('pointerleave', endDrag);
+const endDrag = e => {
+  if (!drag || drag.id !== e.pointerId) return;
+  if (e.timeStamp - drag.t > 80) orb.vy = orb.vp = 0;   // held still before letting go: no coast
+  drag = null; orb.free = 0;
+  canvas.style.cursor = 'grab';
+  wake();
+};
+canvas.addEventListener('pointerup', endDrag); canvas.addEventListener('pointercancel', endDrag);
+function orbit(dt) {
+  if (drag) return false;
+  if (!orb.yaw && !orb.pitch && !orb.vy && !orb.vp) return false;
+  orb.free += dt;
+  // coast: the flick's speed bleeds off over about a third of a second; pitch stops dead at its limits
+  const f = Math.exp(-dt * 3.2), base = P.tilt * D2R;
+  orb.yaw = wrap(orb.yaw + orb.vy * dt); orb.pitch += orb.vp * dt; orb.vy *= f; orb.vp *= f;
+  if (base + orb.pitch < PITCH_LO || base + orb.pitch > PITCH_HI) { orb.pitch = clamp(base + orb.pitch, PITCH_LO, PITCH_HI) - base; orb.vp = 0; }
+  // home: after a beat, drift back to the front view slowly, so it settles rather than snaps
+  if (orb.free > 1.5) { const g = 1 - Math.exp(-dt * 0.9 * Math.min(1, (orb.free - 1.5) / 1.5)); orb.yaw -= orb.yaw * g; orb.pitch -= orb.pitch * g; }
+  if (Math.abs(orb.yaw) + Math.abs(orb.pitch) < 2e-4 && Math.abs(orb.vy) + Math.abs(orb.vp) < 1e-3) orb.yaw = orb.pitch = orb.vy = orb.vp = 0;
+  return true;
+}
 canvas.addEventListener('keydown', e => {
   if (e.key === 'Enter') { pourAll(); wake(); e.preventDefault(); }
   if (e.key === ' ') { addRing(0.4 - 1.6 * rand(), 2.2 + 1.2 * rand(), 0.16 * P.ripple); wake(); e.preventDefault(); }
@@ -1104,10 +1119,12 @@ window.__lab = {
   step(n = 1, dt = 1 / 60) { return this.frames(n, dt); },
   ripple(x = 0, z = 3, amp = 0.13) { addRing(x, z, amp); render(); },
   pour() { pourAll(); },
+  // Hold the orbit at yaw / pitch offsets (degrees from the front view), then draw.
+  view(yaw = 0, pitch = 0) { orb.yaw = yaw * D2R; orb.pitch = pitch * D2R; orb.vy = orb.vp = 0; render(); },
   drip(u = -0.3, v = 0) { const c = columnFrom(u, v); return c ? !!newDrip(c, { z: HT * 0.5, fast: true }) : false; },
   // GPU time per frame: n synchronous renders, timed between two pixel reads.
   perf(n = 30) { const px = new Uint8Array(4); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); const t0 = performance.now(); for (let i = 0; i < n; i++) { simulate(1 / 60); render(); } gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); return +((performance.now() - t0) / n).toFixed(2); },
-  state: () => ({ time, anchors: ANCHORS.length, drips: drips.map(d => ({ phase: d.phase, x: +d.x.toFixed(2), y: +d.y.toFixed(2), z: +d.z.toFixed(2), yT: +d.yT.toFixed(2), R: +d.R.toFixed(3), L: +d.L.toFixed(2), rn: +d.rn.toFixed(4), toPool: d.toPool, lower: !!d.lower })), lift: +lc.toFixed(3), phase: cyc.phase, poolY: +poolY.toFixed(2), drainY: +drainY.toFixed(2), blobs: blobs.length, merges, rings: rings.length, strands: nS, canvas: [canvas.width, canvas.height] }),
+  state: () => ({ time, anchors: ANCHORS.length, drips: drips.map(d => ({ phase: d.phase, x: +d.x.toFixed(2), y: +d.y.toFixed(2), z: +d.z.toFixed(2), yT: +d.yT.toFixed(2), R: +d.R.toFixed(3), L: +d.L.toFixed(2), rn: +d.rn.toFixed(4), toPool: d.toPool, lower: !!d.lower })), lift: +lc.toFixed(3), phase: cyc.phase, poolY: +poolY.toFixed(2), drainY: +drainY.toFixed(2), blobs: blobs.length, merges, rings: rings.length, strands: nS, canvas: [canvas.width, canvas.height], orbit: [+(orb.yaw / D2R).toFixed(1), +(orb.pitch / D2R).toFixed(1)] }),
   params: P, set: (k, v) => lab.set(k, v)
 };
 
@@ -1115,6 +1132,7 @@ let hudTick = 0;
 lab.loop(dt => {
   if (!gl) return;
   if (warming) { if (!failed && compileReady()) finishWarming(); return; }
+  if (orbit(dt)) wake();
   const active = !lab.calm || nowS() - lastInteract < 10;
   if (active) simulate(dt);
   if (active || dirty) render();

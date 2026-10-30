@@ -25,7 +25,7 @@ export const NO_PRELOAD = [];
 export const TOUCH = {
   prism:    { touch: 'drag', hint: 'drag to aim · drag the emitter to move it' },
   fluid:    { touch: 'drag', hint: 'drag to tilt · flick to slosh' },
-  goop:     { touch: 'drag', hint: 'tap the pool · tap the mark' },
+  goop:     { touch: 'drag', hint: 'drag to orbit' },
   knockout: { touch: 'drag', hint: 'pull back · let go to throw' },
   bigbang:  { touch: 'drag', hint: 'drag to orbit · tap to replay' },
   godrays:  { touch: 'drag', hint: 'drag to steer the light · lift to pin it' },
