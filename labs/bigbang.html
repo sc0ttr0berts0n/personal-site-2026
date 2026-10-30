@@ -69,6 +69,9 @@ const lab = createLab({
     disk:     { type: 'range', label: 'Accretion disk', min: 0, max: 2, step: 0.05, value: 1 },
     diskSpin: { type: 'range', label: 'Disk spin', min: 0, max: 4, step: 0.05, value: 1, unit: '×', when: P => P.disk > 0 },
     lens:     { type: 'range', label: 'Lensing (spacetime warp)', min: 0, max: 2, step: 0.05, value: 1 },
+    hole:     { type: 'range', label: 'Black hole (the mark’s shadow)', min: 0, max: 1, step: 0.05, value: 1 },
+    band:     { type: 'range', label: 'Disk band tilt', min: -45, max: 45, step: 1, value: 10, unit: '°', when: P => P.disk > 0 },
+    embers:   { type: 'range', label: 'Orbiting embers', min: 0, max: 1, step: 0.01, value: 0.35 },
     hReplay:  { type: 'heading', label: 'Replay' },
     loop:     { type: 'toggle', label: 'Auto replay', value: true },
     hold:     { type: 'range', label: 'Hold before replay', min: 2, max: 30, step: 1, value: 8, unit: ' s', when: P => P.loop },
@@ -414,13 +417,13 @@ const nebCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 // (idea after shadertoy.com/view/wfscRX; no code copied).
 const compMat = new THREE.ShaderMaterial({
   uniforms: { ...shared, uNeb: { value: hist[0].texture }, uRs: { value: 0 }, uShock: { value: 0 }, uHalo: { value: 0 },
-    uStars: { value: 0.35 }, uDpr: { value: 1 }, uBg: { value: new THREE.Color() }, uLens: { value: 0 }, uVP: { value: new THREE.Matrix4() } },
+    uStars: { value: 0.35 }, uDpr: { value: 1 }, uBg: { value: new THREE.Color() }, uLens: { value: 0 }, uHole: { value: 0 }, uVP: { value: new THREE.Matrix4() } },
   vertexShader: QUAD_VERT,
   depthTest: false, depthWrite: false,
   fragmentShader: /* glsl */`
 ${GLSL_COMMON}
 uniform sampler2D uNeb;
-uniform float uTime, uRs, uShock, uHalo, uStars, uDpr, uLens;
+uniform float uTime, uRs, uShock, uHalo, uStars, uDpr, uLens, uHole;
 uniform mat4 uVP;
 uniform vec3 uBg;
 float hash13(vec3 p) { p = fract(p * 0.1031); p += dot(p, p.zyx + 31.32); return fract((p.x + p.y) * p.z); }
@@ -472,6 +475,8 @@ void main() {
   c = max(vec3(0.0), mix(vec3(dot(c, vec3(0.2126, 0.7152, 0.0722))), c, 1.3));
   c = min(c, vec3(1.45));   // the curve below peaks at 1.47 and turns negative past 2.2
   c = mix(c, c * c * (2.2 - c) / 1.2, 0.7);
+  // the black hole: a mark-shaped shadow nothing comes back out of, there the whole loop (the mark covers it once condensed)
+  c *= 1.0 - uHole * (1.0 - smoothstep(-0.03, 0.04, sd));
   float re = (sd - uRs) / (0.06 + uRs * 0.045);
   float ring = exp(-re * re) * uShock;
   gl_FragColor = vec4(uBg + c + mix(vec3(1.0), pal(0.2), 0.45) * ring * 1.4, 1.0);
@@ -596,13 +601,64 @@ const streaks = Array.from({ length: STREAKS }, () => {
   };
 });
 const streakGeo = new LineSegmentsGeometry();
-streakGeo.setPositions(new Float32Array(STREAKS * 12));
-streakGeo.setColors(new Float32Array(STREAKS * 12));
+// room for three segments a streak: on replay each throws a spark while its orbiting ember (two) flies off
+streakGeo.setPositions(new Float32Array(STREAKS * 18));
+streakGeo.setColors(new Float32Array(STREAKS * 18));
 const streakPos = streakGeo.attributes.instanceStart.data, streakCol = streakGeo.attributes.instanceColorStart.data;
 const streakMat = lineMat({ vertexColors: true, linewidth: 1.5 });
 const streakLines = new LineSegments2(streakGeo, streakMat);
 streakLines.frustumCulled = false;
 scene.add(streakLines);
+// once the mark has condensed, the embers that fell in stay on as orbits round it, each on its own tilted plane.
+// Their own generator, so the streaks and chevrons above keep the random draws they always had.
+{
+  const orng = mulberry32(77);
+  for (const sp of streaks) {
+    const z = orng() * 2 - 1, ph = orng() * Math.PI * 2, s = Math.sqrt(1 - z * z);
+    const n = new THREE.Vector3(s * Math.cos(ph), s * Math.sin(ph), z);
+    const u = new THREE.Vector3().crossVectors(n, Math.abs(n.x) < 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0)).normalize();
+    const R = 4.2 + orng() ** 1.5 * 6;
+    sp.orb = { u, v: new THREE.Vector3().crossVectors(n, u), R, th: orng() * Math.PI * 2, w: (orng() < 0.5 ? -1 : 1) * 2.4 * (4.2 / R) ** 1.5, fl: orng() * 6.3 };
+  }
+}
+
+// ---- the disk band: Gargantua's look, a thin disk seen almost edge on, crossing the mark a little tilted ----
+// A real ring in the scene, so its near half passes in front of the mark and its far half goes behind it.
+// The lensed far side, wrapped round the outline, is the gas disk the cloud march draws.
+const BAND_IN = 3.9, BAND_OUT = 10.5;
+const bandMat = new THREE.ShaderMaterial({
+  uniforms: { ...shared, uW: { value: 0 }, uT: { value: 0 }, uRot: { value: new THREE.Matrix3() } },
+  transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+  vertexShader: /* glsl */`varying vec2 vUv; varying vec3 vP, vW;
+    void main() { vUv = uv; vP = position; vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }`,
+  fragmentShader: /* glsl */`
+${GLSL_COMMON}
+uniform float uW, uT;
+uniform mat3 uRot;
+varying vec3 vP, vW;
+void main() {
+  float r = length(vP.xy), x = (r - ${BAND_IN.toFixed(2)}) / ${(BAND_OUT - BAND_IN).toFixed(2)};
+  // Kepler again: the inner edge laps the outer, so the noise shears into fine streaks
+  float a = atan(vP.y, vP.x) - uT * 1.5 * pow(${BAND_IN.toFixed(2)} / r, 1.5);
+  vec2 ring = vec2(cos(a), sin(a));
+  float n1 = texture(uNoise, vec3(ring * 0.45, r * 0.16 + 0.31)).r;
+  float n2 = texture(uNoise, vec3(ring * 1.3 + 0.5, r * 0.55 + 0.13)).g;
+  float streak = smoothstep(0.42, 0.82, n1 * 0.7 + n2 * 0.45);
+  float prof = smoothstep(0.0, 0.03, x) * exp(-x * 3.2) * (1.0 - smoothstep(0.7, 1.0, x));
+  // relativistic beaming: the side swinging toward us is brighter
+  vec3 tang = uRot * vec3(-vP.y, vP.x, 0.0) / r;
+  float beam = 1.0 + 0.7 * dot(tang, normalize(uCam - vW));
+  vec3 col = pal(mix(0.0, 0.42, x)) * (1.0 + 2.2 * exp(-x * 14.0));
+  gl_FragColor = vec4(col * uW * prof * (0.12 + 1.4 * streak) * beam, 1.0);
+}`
+});
+const band = new THREE.Mesh(new THREE.RingGeometry(BAND_IN, BAND_OUT, 256, 6), bandMat);
+band.position.set(0, 0, ZC);
+band.frustumCulled = false;
+band.renderOrder = 5;   // after the mark, so the mark's depth hides the far half and the near half crosses in front
+band.visible = false;
+scene.add(band);
+const _qx = new THREE.Quaternion(), _qz = new THREE.Quaternion(), X_AXIS = new THREE.Vector3(1, 0, 0), Z_AXIS = new THREE.Vector3(0, 0, 1);
 
 // ---- flash: a white screen over everything ----
 const flashQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMaterial({
@@ -700,6 +756,7 @@ function seqState(S) {
     halo: smooth(0, 0.6, post) * (0.35 + 0.65 * Math.exp(-post / 2.5)),
     disk: smooth(-0.3, 1.6, tau),                      // what's left over settles into a disk round the mark
     lens: smooth(-0.1, 0.8, tau),
+    emb: smooth(0, 1.2, tau),                         // the embers spring out into orbit at ignition
     b: 0
   };
 }
@@ -724,6 +781,7 @@ function blastState(b) {
     flash: 0.5 * Math.max(F.mesh, 0.3) * smooth(0, 0.04, b) * Math.exp(-b * 9) * (1 - smooth(0.15, 0.45, b)),
     halo: F.halo * Math.exp(-b * 5),
     disk: F.disk * (1 - smooth(0, 0.5 * TB, b)), lens: F.lens * (1 - smooth(0, 0.3 * TB, b)),
+    emb: F.emb * (1 - smooth(0, 0.8 * TB, b)),
     az: F.az * (1 - kc), el: F.el,
     b
   };
@@ -831,7 +889,20 @@ function update(dt) {
   const beat = heartbeat(beatT) * st.halo;
   const cu = compMat.uniforms;
   cu.uStars.value = P.stars;
-  cu.uLens.value = st.lens * P.lens;
+  cu.uLens.value = Math.max(st.lens, P.hole) * P.lens;
+  cu.uHole.value = P.hole;
+  // the disk band, tilted across the mark
+  const bw = st.disk * P.disk;
+  band.visible = bw > 0.002;
+  if (band.visible) {
+    _qz.setFromAxisAngle(Z_AXIS, P.band * Math.PI / 180);
+    _qx.setFromAxisAngle(X_AXIS, -82 * Math.PI / 180);
+    band.quaternion.multiplyQuaternions(_qz, _qx);
+    band.updateMatrixWorld();
+    bandMat.uniforms.uRot.value.setFromMatrix4(band.matrixWorld);
+    bandMat.uniforms.uW.value = bw * 1.4;
+    bandMat.uniforms.uT.value = diskT;
+  }
   cu.uVP.value.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
   cu.uHalo.value = st.halo * 0.6 * (1 + P.pulse * 8 * beat);
   cu.uRs.value = mode === 'blast' ? P.force * 4 * B ** 0.8 : 0;
@@ -893,6 +964,25 @@ function update(dt) {
       const c = lut(sp.hue * 0.5);
       col.set([c.r * fade * 0.3, c.g * fade * 0.3, c.b * fade * 0.3, c.r * fade, c.g * fade, c.b * fade], n * 6);
       n++;
+    }
+  }
+  // orbiting embers: after ignition, on every tilted plane round the mark; the replay blast flings them out
+  if (st.emb > 0.003 && P.embers > 0) {
+    const reach = mode === 'blast' ? 1 + st.b * P.force * 0.9 : 0.3 + 0.7 * smooth(0, 1.5, st.tau);
+    const a = [0, 0, 0], m = [0, 0, 0], h = [0, 0, 0];
+    const at = (o, R, th, out) => {
+      const c = Math.cos(th) * R, s = Math.sin(th) * R;
+      out[0] = o.u.x * c + o.v.x * s; out[1] = o.u.y * c + o.v.y * s; out[2] = ZC + o.u.z * c + o.v.z * s;
+    };
+    for (const sp of streaks) {
+      if (sp.pick > P.embers) continue;
+      const o = sp.orb, R = o.R * reach, th = o.th + o.w * diskT, d = Math.sign(o.w) * 0.12;
+      at(o, R, th - d, a); at(o, R, th - d / 2, m); at(o, R, th, h);
+      const fade = st.emb * (0.6 + 0.4 * Math.sin(diskT * 2.3 + o.fl * 9)), c = lut(0.08 + 0.45 * sp.hue);
+      const f0 = fade * 0.08, f1 = fade * 0.45;
+      pos.set([...a, ...m, ...m, ...h], n * 6);
+      col.set([c.r * f0, c.g * f0, c.b * f0, c.r * f1, c.g * f1, c.b * f1, c.r * f1, c.g * f1, c.b * f1, c.r * fade, c.g * fade, c.b * fade], n * 6);
+      n += 2;
     }
   }
   streakGeo.instanceCount = n;
