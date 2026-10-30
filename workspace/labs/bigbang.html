@@ -244,14 +244,14 @@ vec3 rayDir(vec2 uv) {
   vec4 w = uInvVP * vec4(uv * 2.0 - 1.0, 1.0, 1.0);
   return normalize(w.xyz / w.w - uCam);
 }
-// The accretion disk, one disk for both places it shows: the cloud march draws it round the mark in the screen's
-// plane, the band draws the same thing tipped almost edge on. A thin, hot sheet hugging the mark's outline,
-// orbiting faster the closer in it is (Kepler), so the noise shears into long streaks. xy is in the disk's plane,
-// z off it; spread > 1 blows the whole disk outward on replay. Emission (rgb) and extinction (a) per unit volume;
-// thick is the sheet's half-thickness there, for drawing it as a surface.
-vec4 diskEmit(vec2 xy, float z, float t, float spread, out float thick) {
-  xy /= spread; z /= spread;
-  float de = max(field(xy).r, 0.0);
+// The accretion disk's look, shared by both disks so they read as one system: the cloud march's disk hugging the
+// mark's outline in the screen's plane, and the round band tipped almost edge on. A thin, hot sheet orbiting faster
+// the closer in it is (Kepler), so the noise shears into long streaks. xy is in the disk's plane (already divided
+// by spread), de how far out from the disk's inner edge, z off the plane; spread > 1 blows the disk outward on
+// replay. Emission (rgb) and extinction (a) per unit volume; thick is the sheet's half-thickness there.
+vec4 diskEmit(vec2 xy, float de, float z, float t, float spread, out float thick) {
+  z /= spread;
+  de = max(de, 0.0);
   thick = (0.1 + 0.2 * de) * spread;
   if (de > 2.4) return vec4(0.0);
   float h = z * spread / thick;
@@ -412,7 +412,7 @@ void main() {
       m += vec4(pal(0.42 - 0.4 * uHeat) * a * 1.5, a * 0.25);
     }
     // the accretion disk round the mark, in the screen's plane
-    if (uDisk > 0.001) { float th; m += uDisk * diskEmit(p.xy, zo, uDiskT, uDiskOut, th); }
+    if (uDisk > 0.001) { float th; vec2 dx = p.xy / uDiskOut; m += uDisk * diskEmit(dx, field(dx).r, zo, uDiskT, uDiskOut, th); }
     acc += T * m.rgb * uDensity * uBoost * dt;
     T *= exp(-m.a * uDensity * dt);
     t += dt;
@@ -630,26 +630,35 @@ scene.add(streakLines);
   }
 }
 
-// ---- the disk band: Gargantua's look, the same disk tipped almost edge on, crossing the mark a little tilted ----
-// A sheet in the scene, so its near half passes in front of the mark and its far half goes behind it. It draws
-// diskEmit, the very disk the cloud march draws round the outline, and grades it with the same tone curve, so the
-// two read as one system and blow out together on replay.
+// ---- the disk band: Gargantua's look, a round disk seen almost edge on, crossing the mark a little tilted ----
+// A sheet in the scene, so its near half passes in front of the mark and its far half goes behind it. It shades
+// with diskEmit and the same tone curve as the disk round the outline, so the two read as one system and blow out
+// together on replay. Its dusty gas also absorbs, so where it crosses the ring and the mark behind it, it cuts a
+// dark lane through them: the black hole's look where the two disks meet.
+const BAND_IN = 3.9;
 const bandMat = new THREE.ShaderMaterial({
-  uniforms: { ...shared, uW: { value: 0 }, uT: { value: 0 }, uOut: { value: 1 }, uN: { value: new THREE.Vector3(0, 0, 1) } },
-  transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+  uniforms: { ...shared, uW: { value: 0 }, uA: { value: 0 }, uT: { value: 0 }, uOut: { value: 1 }, uN: { value: new THREE.Vector3(0, 0, 1) } },
+  transparent: true, depthWrite: false, side: THREE.DoubleSide,
+  // premultiplied: what's behind is dimmed by the band's absorption, then its glow is added
+  blending: THREE.CustomBlending, blendEquation: THREE.AddEquation, blendSrc: THREE.OneFactor, blendDst: THREE.OneMinusSrcAlphaFactor,
   vertexShader: /* glsl */`varying vec2 vUv; varying vec3 vP, vW;
     void main() { vUv = uv; vP = position; vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }`,
   fragmentShader: /* glsl */`
 ${GLSL_COMMON}
-uniform float uW, uT, uOut;
+uniform float uW, uT, uOut, uA;
 uniform vec3 uN;
 varying vec3 vP, vW;
 void main() {
   float thick;
-  vec4 d = diskEmit(vP.xy, 0.0, uT, uOut, thick);
+  vec2 xy = vP.xy / uOut;
+  // its gas reaches a little past where it glows, so it darkens a lane either side of its bright core
+  float r = length(xy), de = (r - ${BAND_IN.toFixed(2)}) * 0.38;
+  vec4 d = diskEmit(xy, de, 0.0, uT, uOut, thick);
   // the march integrates the sheet through its thickness, and a sheet seen at a slant is crossed for longer
   float path = thick * 1.77 / max(abs(dot(normalize(uCam - vW), uN)), 0.12);
-  gl_FragColor = vec4(toneGrade(d.rgb * path * uW), 1.0);
+  float dust = smoothstep(-0.1, 0.12, de) * exp(-max(de, 0.0) * 1.2) * (1.0 - smoothstep(1.8, 2.6, de)) / (uOut * uOut);
+  float a = clamp((1.0 - exp(-d.a * path * 6.0)) * 0.9 + dust * 0.65, 0.0, 0.92) * uA;
+  gl_FragColor = vec4(toneGrade(d.rgb * path * uW), a);
 }`
 });
 const band = new THREE.Mesh(new THREE.PlaneGeometry(28, 28), bandMat);
@@ -757,7 +766,7 @@ function seqState(S) {
     halo: smooth(0, 0.6, post) * (0.35 + 0.65 * Math.exp(-post / 2.5)),
     disk: smooth(-0.3, 1.6, tau),                      // what's left over settles into a disk round the mark
     lens: smooth(-0.1, 0.8, tau),
-    emb: smooth(0, 1.2, tau),                         // the embers spring out into orbit at ignition
+    emb: smooth(-0.1, 0.9, tau),                      // embers fall in onto orbits from ignition on
     b: 0
   };
 }
@@ -907,6 +916,7 @@ function update(dt) {
     const bu = bandMat.uniforms;
     bu.uN.value.set(0, 0, 1).applyQuaternion(band.quaternion);
     bu.uW.value = bw * P.density * st.boost;
+    bu.uA.value = Math.min(1, bw);
     bu.uT.value = diskT;
     bu.uOut.value = diskOut;
   }
@@ -975,7 +985,8 @@ function update(dt) {
   }
   // orbiting embers: after ignition, on every tilted plane round the mark; the replay blast flings them out
   if (st.emb > 0.003 && P.embers > 0) {
-    const reach = mode === 'blast' ? diskOut : 0.3 + 0.7 * smooth(0, 1.5, st.tau);
+    // after ignition they fall in from farther out and settle onto their orbits; on replay they blow out
+    const inward = mode === 'blast' ? 0 : 1.6 * Math.exp(-Math.max(0, st.tau) * 1.1);
     const a = [0, 0, 0], m = [0, 0, 0], h = [0, 0, 0];
     const at = (o, R, th, out) => {
       const c = Math.cos(th) * R, s = Math.sin(th) * R;
@@ -984,7 +995,9 @@ function update(dt) {
     };
     for (const sp of streaks) {
       if (sp.pick > P.embers) continue;
-      const o = sp.orb, R = o.R * reach, th = o.th + o.w * diskT, d = 0.12;
+      const th = sp.orb.th + sp.orb.w * diskT, o = sp.orb;
+      const R = o.R * (mode === 'blast' ? diskOut : 1 + inward * (0.6 + 0.4 * Math.sin(o.fl * 3))) * (1 + 0.07 * Math.sin(th * 2 + o.fl));
+      const d = 0.12;
       at(o, R, th - d, a); at(o, R, th - d / 2, m); at(o, R, th, h);
       const fade = st.emb * (0.6 + 0.4 * Math.sin(diskT * 2.3 + o.fl * 9)), c = lut(0.08 + 0.45 * sp.hue);
       const f0 = fade * 0.08, f1 = fade * 0.45;
