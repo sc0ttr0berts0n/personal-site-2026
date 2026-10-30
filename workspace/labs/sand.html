@@ -286,7 +286,7 @@ function wirePress(g, onPress, hold) {
 function ringButton(label, key, cls, onPress, hold = 0) {
   const g = svgEl('g', { role: 'button', tabindex: 0, 'aria-label': hold ? `Hold to ${label.toLowerCase()}` : label, class: cls });
   const seg = svgEl('path', { class: 'seg' }), line = svgEl('path', { id: 'sand-arc-' + cls.split(' ')[0], fill: 'none' });
-  const text = svgEl('text', { 'text-anchor': 'middle', 'dominant-baseline': 'central' }), tp = svgEl('textPath', { startOffset: '50%', href: '#' + line.id });
+  const text = svgEl('text', { 'text-anchor': 'middle' }), tp = svgEl('textPath', { startOffset: '50%', href: '#' + line.id });
   if (cls !== 'erase' && cls !== 'reset') { const sw = svgEl('tspan', { class: 'sw', dx: 0 }); sw.textContent = '■ '; tp.append(sw); }
   tp.append(label);
   if (key) { const k = svgEl('tspan', { class: 'k', dx: 6 }); k.textContent = key; tp.append(k); }
@@ -294,9 +294,11 @@ function ringButton(label, key, cls, onPress, hold = 0) {
   g.chars = label.length + (key ? 2 : 0) + (cls !== 'erase' && cls !== 'reset' ? 2 : 0);
   if (hold) { const prog = svgEl('path', { class: 'prog', pathLength: 1 }); g.append(prog); g.prog = prog; }
   wirePress(g, onPress, hold);
-  const P =(cx, cy, a, r) => (cx + r * Math.cos(a)).toFixed(2) + ' ' + (cy + r * Math.sin(a)).toFixed(2);
-  const label_ = (cx, cy, r, a0, a1, flip) => line.setAttribute('d', flip
-    ? `M${P(cx, cy, a1, r)} A${r} ${r} 0 0 0 ${P(cx, cy, a0, r)}` : `M${P(cx, cy, a0, r)} A${r} ${r} 0 0 1 ${P(cx, cy, a1, r)}`);
+  const P = (cx, cy, a, r) => (cx + r * Math.cos(a)).toFixed(2) + ' ' + (cy + r * Math.sin(a)).toFixed(2);
+  // labels sit on their baseline, moved half a capital out from the centre line so the caps are centred on it
+  // (iOS Safari ignores dominant-baseline on a textPath, which left every label riding high)
+  const label_ = (cx, cy, r, a0, a1, flip) => (r += (flip ? 1 : -1) * CAP_HALF * labelFs, line.setAttribute('d', flip
+    ? `M${P(cx, cy, a1, r)} A${r} ${r} 0 0 0 ${P(cx, cy, a0, r)}` : `M${P(cx, cy, a0, r)} A${r} ${r} 0 0 1 ${P(cx, cy, a1, r)}`));
   // an arc: centre (cx, cy), centre-line radius rc, thickness th, from angle a0 to a1 (clockwise, radians); flip runs
   // the label anticlockwise so it reads upright along the bottom. Between a rounded rect and a stroked arc: an annular
   // sector whose corners round off by about 40% of its thickness.
@@ -353,13 +355,15 @@ pickTool(tool);
 // over the top (more on a small ring if their labels need it); Eraser and Reset fill the two bottom corners as
 // triangles, scaled with the top buttons from the old 24 px arcs. A small ring (phones) drops the keyboard numbers.
 const RING_CELLS = 3, GAP_CELLS = 2, TOP_SPAN = Math.PI / 2;   // buttons sit RING_CELLS sand cells off the ring, GAP_CELLS apart
+const CAP_HALF = 0.365;    // half the height of a JetBrains Mono capital, in ems
+let labelFs = 12.5;
 const CORNER = 1.4;        // the corner triangles, against the top buttons
 function layoutTools() {
   if (!fit) return;
   const cx = fit.cx + ENC.x * fit.scale, cy = fit.cy + ENC.y * fit.scale, R = (ENC.r + P.ringGap * BAR) * fit.scale;
   // a small ring (phones) gets slimmer buttons, so the label fills its block; the corners shrink with them
   const compact = R < 190, th = compact ? 22 : 38, fs = compact ? 11.5 : 14.5, grow = th / (compact ? 20 : 24);
-  toolBox.classList.toggle('compact', compact); toolBox.style.setProperty('--fs', fs + 'px');
+  toolBox.classList.toggle('compact', compact); toolBox.style.setProperty('--fs', fs + 'px'); labelFs = fs;
   lab.stage.dataset.tools = P.tools;
   // strip: two rows of chips, their foot a little above the basin (or pinned to the top of the stage if there's no room)
   strip.classList.toggle('compact', compact || lab.square().w < 520);
