@@ -94,6 +94,7 @@ const T0 = 1.2;                         // seconds of quiet cloud before gravity
 const LMAX = Math.log(40);              // the cloud ends 40× smaller than it starts
 const SETTLE = 3;                       // seconds after ignition before the hold timer counts
 const TB = 2.4;                         // seconds the replay blast takes to scatter back into cloud
+const BAND_IN = 3.9;                    // inner edge of the round disk band
 const LOOP_U = 0.55;                    // the loop starts here in the collapse, just before the mark coalesces
 
 const { canvas } = lab.canvas({ context: 'none' });
@@ -247,11 +248,18 @@ vec3 rayDir(vec2 uv) {
   vec4 w = uInvVP * vec4(uv * 2.0 - 1.0, 1.0, 1.0);
   return normalize(w.xyz / w.w - uCam);
 }
-// The accretion disk's look, shared by both disks so they read as one system: the cloud march's disk hugging the
-// mark's outline in the screen's plane, and the round band tipped almost edge on. A thin, hot sheet orbiting faster
-// the closer in it is (Kepler), so the noise shears into long streaks. xy is in the disk's plane (already divided
-// by spread), de how far out from the disk's inner edge, z off the plane; spread > 1 blows the disk outward on
-// replay. Emission (rgb) and extinction (a) per unit volume; thick is the sheet's half-thickness there.
+// The accretion disk, shared by both disks so they are one system: the disk hugging the mark's outline in the
+// screen's plane, and the round band tipped almost edge on. Both are drawn by the cloud march, so they go through
+// the same resolution, history, sharpening and grade. A thin, hot sheet orbiting faster the closer in it is
+// (Kepler), so the noise shears into long streaks. xy is in the disk's plane (already divided by spread), de how
+// far out from the disk's inner edge, z off the plane; spread > 1 blows the disk outward on replay. Emission (rgb)
+// and extinction (a) per unit volume; thick is the sheet's half-thickness there.
+float diskStreak(float a, float de, float off) {
+  vec2 ring = vec2(cos(a), sin(a));
+  float n1 = texture(uNoise, vec3(ring * 0.45, de * 0.4 + 0.31 + off)).r;
+  float n2 = texture(uNoise, vec3(ring * 1.1 + 0.5 + off, de * 1.2 + 0.13)).g;
+  return smoothstep(0.5, 0.85, n1 * 0.7 + n2 * 0.45);
+}
 vec4 diskEmit(vec2 xy, float de, float z, float t, float spread, out float thick) {
   z /= spread;
   de = max(de, 0.0);
@@ -260,11 +268,13 @@ vec4 diskEmit(vec2 xy, float de, float z, float t, float spread, out float thick
   float h = z * spread / thick;
   float vz = exp(-h * h);
   float prof = smoothstep(0.02, 0.14, de) * exp(-de * 1.9) * (1.0 - smoothstep(1.6, 2.4, de));
-  float a = atan(xy.y, xy.x) - t * 1.4 / pow(0.35 + de, 1.5);
-  vec2 ring = vec2(cos(a), sin(a));
-  float n1 = texture(uNoise, vec3(ring * 0.45, de * 0.4 + 0.31)).r;
-  float n2 = texture(uNoise, vec3(ring * 1.1 + 0.5, de * 1.2 + 0.13)).g;
-  float band = smoothstep(0.5, 0.85, n1 * 0.7 + n2 * 0.45);
+  // Sheared for good, the inner edge would lap the outer more every second and the streaks would wind ever finer
+  // into moiré. Instead two copies are each sheared over a short cycle and cross-faded (a flow map): the gas
+  // still streams faster inside, and the streaks stay as fine as they start.
+  float w = 1.4 / pow(0.35 + de, 1.5), base = atan(xy.y, xy.x) - t * 0.3;
+  float ph = fract(t * 0.5);
+  float band = mix(diskStreak(base - fract(ph + 0.5) * 2.0 * (w - 0.3), de, 0.37),
+                   diskStreak(base - ph * 2.0 * (w - 0.3), de, 0.0), 1.0 - abs(2.0 * ph - 1.0));
   float e = prof * vz * (0.08 + 1.5 * band) / (spread * spread);   // the same gas spread thinner
   vec3 dc = pal(mix(0.02, 0.32, smoothstep(0.0, 1.6, de))) * (1.0 + 2.0 * exp(-de * 5.0));
   return vec4(dc * e * 1.6, e * 0.3);
@@ -324,12 +334,14 @@ accScene.add(accQuad);
 const nebMat = new THREE.ShaderMaterial({
   uniforms: { ...shared, uDensity: { value: 1 }, uWarp: { value: 1 }, uOct: { value: 5 }, uSteps: { value: 40 }, uSeed: { value: 0 }, uBoost: { value: 1 },
     uL: { value: 0 }, uLs: { value: 0 }, uFlat: { value: 1 }, uEat: { value: 0 }, uSwirl: { value: 1 }, uSpin: { value: 0 }, uHeat: { value: 0 }, uHeatK: { value: 1 }, uCloudW: { value: 1 }, uClear: { value: 0 },
-    uAccW: { value: 0 }, uAccWid: { value: 1 }, uClump: { value: 1 }, uDisk: { value: 0 }, uDiskT: { value: 0 }, uDiskOut: { value: 1 }, uBox: { value: new THREE.Vector3(14, 14, 8) } },
+    uAccW: { value: 0 }, uAccWid: { value: 1 }, uClump: { value: 1 }, uDisk: { value: 0 }, uDiskT: { value: 0 }, uDiskOut: { value: 1 }, uBandW: { value: 0 }, uFront: { value: 0 }, uBandRot: { value: new THREE.Matrix3() }, uBox: { value: new THREE.Vector3(14, 14, 8) } },
   vertexShader: QUAD_VERT,
   fragmentShader: /* glsl */`
 ${GLSL_COMMON}
 uniform float uTime, uDensity, uWarp, uBoost, uSeed;
 uniform float uL, uLs, uFlat, uEat, uSwirl, uSpin, uHeat, uHeatK, uCloudW, uClear, uAccW, uAccWid, uClump, uDisk, uDiskT, uDiskOut;
+uniform float uBandW, uFront;
+uniform mat3 uBandRot;
 uniform vec3 uBox;
 uniform int uOct, uSteps;
 const float ZC = ${ZC.toFixed(5)}, HZ = ${HZ.toFixed(5)};
@@ -377,14 +389,15 @@ void main() {
   vec3 t0 = (bc - uBox - ro) * inv, t1 = (bc + uBox - ro) * inv;
   vec3 tn = min(t0, t1), tf = max(t0, t1);
   float ta = max(max(tn.x, tn.y), max(tn.z, 0.0)), tb = min(min(tf.x, tf.y), tf.z);
-  if (tb <= ta) { gl_FragColor = vec4(0.0); return; }
   float jit = fract(sin(dot(gl_FragCoord.xy + uSeed, vec2(12.9898, 78.233))) * 43758.5453);
   float C = exp(uL), K = C - 1.0;
   float dt = (tb - ta) / float(uSteps);
   float t = ta + dt * jit;
   vec3 acc = vec3(0.0); float T = 1.0;
+  // the front pass (below) draws only the band, so it skips the cloud
+  int steps = tb > ta && uFront < 0.5 ? uSteps : 0;
   for (int i = 0; i < 200; i++) {
-    if (i >= uSteps || T < 0.02) break;
+    if (i >= steps || T < 0.02) break;
     vec3 p = ro + rd * t;
     vec4 fs = field(p.xy);
     float zo = p.z - ZC, ez = max(abs(zo) - HZ, 0.0);
@@ -420,7 +433,34 @@ void main() {
     T *= exp(-m.a * uDensity * dt);
     t += dt;
   }
-  gl_FragColor = vec4(acc, 1.0 - T);
+  // The band: the same disk, round and tipped almost edge on, marched through its own slab with the same jitter.
+  // The mark is drawn over this whole pass, so the front pass marches again only the part of the band between the
+  // eye and the mark, where the mark covers the pixel, and that goes over the mark (see frontQuad).
+  vec3 bacc = vec3(0.0); float Tb = 1.0;
+  if (uBandW > 0.001) {
+    vec3 lo = uBandRot * (ro - bc), ld = uBandRot * rd;
+    float zm = 1.9 * uDiskOut, lz = abs(ld.z) < 1e-4 ? 1e-4 : ld.z;
+    float s0 = (-zm - lo.z) / lz, s1 = (zm - lo.z) / lz;
+    float sa = max(min(s0, s1), 0.0), sb = min(max(s0, s1), sa + 30.0);
+    if (uFront > 0.5) {
+      float th0 = -ro.z / rd.z;
+      sb = th0 > 0.0 && sdf(ro.xy + rd.xy * th0) < 0.0 ? min(sb, th0) : -1.0;
+    }
+    if (sb > sa) {
+      float bdt = (sb - sa) / 24.0, bt = sa + bdt * jit;
+      for (int i = 0; i < 24; i++) {
+        vec3 lp = lo + ld * bt;
+        vec2 xy = lp.xy / uDiskOut;
+        float th;
+        vec4 m = uBandW * diskEmit(xy, (length(xy) - ${BAND_IN.toFixed(2)}) * 0.38, lp.z, uDiskT, uDiskOut, th);
+        bacc += Tb * m.rgb * uDensity * uBoost * bdt;
+        Tb *= exp(-m.a * uDensity * bdt);
+        bt += bdt;
+      }
+    }
+  }
+  // the band sits round the mark, in front of most of the cloud: it dims what's behind it, then adds its glow
+  gl_FragColor = uFront > 0.5 ? vec4(bacc, 1.0 - Tb) : vec4(acc * Tb + bacc, 1.0 - T * Tb);
 }`
 });
 const nebScene = new THREE.Scene();
@@ -634,44 +674,39 @@ scene.add(streakLines);
 }
 
 // ---- the disk band: Gargantua's look, a round disk seen almost edge on, crossing the mark a little tilted ----
-// A sheet in the scene, so its near half passes in front of the mark and its far half goes behind it. It shades
-// with diskEmit and the same tone curve as the disk round the outline, so the two read as one system and blow out
-// together on replay. Its dusty gas also absorbs, so where it crosses the ring and the mark behind it, it cuts a
-// dark lane through them: the black hole's look where the two disks meet.
-const BAND_IN = 3.9;
-const bandMat = new THREE.ShaderMaterial({
-  uniforms: { ...shared, uW: { value: 0 }, uA: { value: 0 }, uT: { value: 0 }, uOut: { value: 1 }, uN: { value: new THREE.Vector3(0, 0, 1) } },
-  transparent: true, depthWrite: false, side: THREE.DoubleSide,
-  // premultiplied: what's behind is dimmed by the band's absorption, then its glow is added
+// The cloud march draws it, the same way and with the same diskEmit as the disk round the outline, so the two are
+// one system: same resolution, history, sharpening, grade and bloom, and they blow out together on replay. Where it
+// crosses the outline disk it dims it, and the lensing bends both round the hole. This object only holds its tilt.
+const band = new THREE.Object3D();
+// the part of the band in front of the mark: the march's front pass, through its own history, graded and sharpened
+// like the composite, then laid over the mark
+const frontRT = new THREE.WebGLRenderTarget(4, 4, rtOpts);
+const frontHist = [new THREE.WebGLRenderTarget(4, 4, rtOpts), new THREE.WebGLRenderTarget(4, 4, rtOpts)];
+let frontI = 0, frontW = 0;
+const frontQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMaterial({
+  uniforms: { ...shared, uNeb: { value: frontHist[0].texture }, uW: { value: 0 } },
+  vertexShader: QUAD_VERT,
+  transparent: true, depthTest: false, depthWrite: false,
+  // premultiplied: the band dims the mark behind it by its absorption, then adds its glow
   blending: THREE.CustomBlending, blendEquation: THREE.AddEquation, blendSrc: THREE.OneFactor, blendDst: THREE.OneMinusSrcAlphaFactor,
-  vertexShader: /* glsl */`varying vec2 vUv; varying vec3 vP, vW;
-    void main() { vUv = uv; vP = position; vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }`,
   fragmentShader: /* glsl */`
 ${GLSL_COMMON}
-uniform float uW, uT, uOut, uA;
-uniform vec3 uN;
-varying vec3 vP, vW;
+uniform sampler2D uNeb;
+uniform float uW;
 void main() {
-  float thick;
-  vec2 xy = vP.xy / uOut;
-  // its gas reaches a little past where it glows, so it darkens a lane either side of its bright core
-  float r = length(xy), de = (r - ${BAND_IN.toFixed(2)}) * 0.38;
-  vec4 d = diskEmit(xy, de, 0.0, uT, uOut, thick);
-  // the march integrates the sheet through its thickness, and a sheet seen at a slant is crossed for longer
-  float path = thick * 1.77 / max(abs(dot(normalize(uCam - vW), uN)), 0.12);
-  float dust = smoothstep(-0.1, 0.12, de) * exp(-max(de, 0.0) * 1.2) * (1.0 - smoothstep(1.8, 2.6, de)) / (uOut * uOut);
-  float a = clamp((1.0 - exp(-d.a * path * 6.0)) * 0.9 + dust * 0.65, 0.0, 0.92) * uA;
-  gl_FragColor = vec4(toneGrade(d.rgb * path * uW), a);
+  vec4 neb = texture2D(uNeb, vUv);
+  vec2 tx = 1.0 / vec2(textureSize(uNeb, 0));
+  vec4 blur = 0.25 * (texture2D(uNeb, vUv + vec2(tx.x, 0.0)) + texture2D(uNeb, vUv - vec2(tx.x, 0.0)) + texture2D(uNeb, vUv + vec2(0.0, tx.y)) + texture2D(uNeb, vUv - vec2(0.0, tx.y)));
+  neb = max(vec4(0.0), neb + (neb - blur) * 0.35);
+  gl_FragColor = vec4(toneGrade(neb.rgb) * uW, clamp(neb.a, 0.0, 1.0) * uW);
 }`
-});
-const band = new THREE.Mesh(new THREE.PlaneGeometry(28, 28), bandMat);
-band.position.set(0, 0, ZC);
-band.frustumCulled = false;
-band.renderOrder = 5;   // after the mark, so the mark's depth hides the far half and the near half crosses in front
-band.visible = false;
-scene.add(band);
+}));
+frontQuad.frustumCulled = false;
+frontQuad.renderOrder = 6;   // after the mark
+frontQuad.visible = false;
+scene.add(frontQuad);
 const _qx = new THREE.Quaternion(), _qz = new THREE.Quaternion(), X_AXIS = new THREE.Vector3(1, 0, 0), Z_AXIS = new THREE.Vector3(0, 0, 1);
-const bandU = new THREE.Vector3(1, 0, 0), bandV = new THREE.Vector3(0, 1, 0);
+const bandU = new THREE.Vector3(1, 0, 0), bandV = new THREE.Vector3(0, 1, 0), _m4 = new THREE.Matrix4();
 
 // ---- flash: a white screen over everything ----
 const flashQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMaterial({
@@ -696,6 +731,7 @@ function sizeNebula() {
   const [, scale] = QUALITY[lab.params.quality] || QUALITY.medium;
   const w = Math.max(2, Math.round(sq.w * scale)), h = Math.max(2, Math.round(sq.h * scale));
   nebRT.setSize(w, h); hist.forEach(r => r.setSize(w, h));
+  frontRT.setSize(w, h); frontHist.forEach(r => r.setSize(w, h));
   histReset = true; dirty = 40;
 }
 function resize(s) {
@@ -914,15 +950,12 @@ function update(dt) {
   band.quaternion.multiplyQuaternions(_qz, _qx);
   bandU.set(1, 0, 0).applyQuaternion(band.quaternion);
   bandV.set(0, 1, 0).applyQuaternion(band.quaternion);
-  band.visible = bw > 0.002;
-  if (band.visible) {
-    const bu = bandMat.uniforms;
-    bu.uN.value.set(0, 0, 1).applyQuaternion(band.quaternion);
-    bu.uW.value = bw * P.density * st.boost;
-    bu.uA.value = Math.min(1, bw);
-    bu.uT.value = diskT;
-    bu.uOut.value = diskOut;
-  }
+  nu.uBandW.value = bw;
+  nu.uBandRot.value.setFromMatrix4(_m4.makeRotationFromQuaternion(band.quaternion)).transpose();
+  // over the mark only while the mark is there to cover it
+  frontW = mode === 'seq' && bw > 0.002 ? st.mesh : 0;
+  frontQuad.visible = frontW > 0.002;
+  frontQuad.material.uniforms.uW.value = frontW;
   cu.uVP.value.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
   cu.uHalo.value = st.halo * 0.6 * (1 + P.pulse * 8 * beat);
   cu.uRs.value = mode === 'blast' ? P.force * 4 * B ** 0.8 : 0;
@@ -1024,12 +1057,26 @@ function render() {
   histReset = false;
   au.uInvVP.value.copy(shared.uInvVP.value); au.uCam.value.copy(camera.position); au.uTarget.value.copy(orbitTarget);
   au.uPrevVP.value.copy(prevVP);
-  prevVP.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
-  accMat.uniforms.uPrev.value = hist[histI ^ 1].texture;
+  au.uCur.value = nebRT.texture;
+  au.uPrev.value = hist[histI ^ 1].texture;
   renderer.setRenderTarget(hist[histI]);
   renderer.render(accScene, nebCam);
   compMat.uniforms.uNeb.value = hist[histI].texture;
   histI ^= 1;
+  // the band in front of the mark: the same march, history and grade, laid over the mark
+  if (frontW > 0.002) {
+    nebMat.uniforms.uFront.value = 1;
+    renderer.setRenderTarget(frontRT);
+    renderer.render(nebScene, nebCam);
+    nebMat.uniforms.uFront.value = 0;
+    au.uCur.value = frontRT.texture;
+    au.uPrev.value = frontHist[frontI ^ 1].texture;
+    renderer.setRenderTarget(frontHist[frontI]);
+    renderer.render(accScene, nebCam);
+    frontQuad.material.uniforms.uNeb.value = frontHist[frontI].texture;
+    frontI ^= 1;
+  }
+  prevVP.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
   renderer.setRenderTarget(null);
   composer.render();
 }
