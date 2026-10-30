@@ -172,9 +172,11 @@ function stepLift(dt) {
   poolY = poolAt(lc);
   // The coat drains on its own clock, from the top down, whatever the lift does: the line it has drained
   // to creeps down at a viscous pace. While the oil is coming up (a dunk) or the mark sits under it, the
-  // coat is pinned to the surface: everything that has been under is fully wet again.
+  // coat catches up with the surface: everything that has been under is fully wet again. It eases up rather than
+  // jumping there, so at the start of a dunk the sheen creeps back up from the oil over about a second instead of
+  // popping onto a mark that has drained clean.
   const pinned = poolY > prev + 1e-7 || (P.loop && (cyc.phase === 'under' || cyc.phase === 'sink'));
-  if (pinned && poolY > drainY) drainY = poolY;
+  if (pinned && poolY > drainY) drainY += (poolY - drainY) * (1 - Math.exp(-dt * 1.2));
   else drainY = Math.max(POOL_LO - 8, drainY - drainV() * dt);
 }
 
