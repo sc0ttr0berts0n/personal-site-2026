@@ -243,6 +243,36 @@ vec3 pal(float f) {
 vec3 rayDir(vec2 uv) {
   vec4 w = uInvVP * vec4(uv * 2.0 - 1.0, 1.0, 1.0);
   return normalize(w.xyz / w.w - uCam);
+}
+// The accretion disk, one disk for both places it shows: the cloud march draws it round the mark in the screen's
+// plane, the band draws the same thing tipped almost edge on. A thin, hot sheet hugging the mark's outline,
+// orbiting faster the closer in it is (Kepler), so the noise shears into long streaks. xy is in the disk's plane,
+// z off it; spread > 1 blows the whole disk outward on replay. Emission (rgb) and extinction (a) per unit volume;
+// thick is the sheet's half-thickness there, for drawing it as a surface.
+vec4 diskEmit(vec2 xy, float z, float t, float spread, out float thick) {
+  xy /= spread; z /= spread;
+  float de = max(field(xy).r, 0.0);
+  thick = (0.1 + 0.2 * de) * spread;
+  if (de > 2.4) return vec4(0.0);
+  float h = z * spread / thick;
+  float vz = exp(-h * h);
+  float prof = smoothstep(0.02, 0.14, de) * exp(-de * 1.9) * (1.0 - smoothstep(1.6, 2.4, de));
+  float a = atan(xy.y, xy.x) - t * 1.4 / pow(0.35 + de, 1.5);
+  vec2 ring = vec2(cos(a), sin(a));
+  float n1 = texture(uNoise, vec3(ring * 0.45, de * 0.4 + 0.31)).r;
+  float n2 = texture(uNoise, vec3(ring * 1.1 + 0.5, de * 1.2 + 0.13)).g;
+  float band = smoothstep(0.5, 0.85, n1 * 0.7 + n2 * 0.45);
+  float e = prof * vz * (0.08 + 1.5 * band) / (spread * spread);   // the same gas spread thinner
+  vec3 dc = pal(mix(0.02, 0.32, smoothstep(0.0, 1.6, de))) * (1.0 + 2.0 * exp(-de * 5.0));
+  return vec4(dc * e * 1.6, e * 0.3);
+}
+// the final tone curve, shared so the band grades exactly like the cloud it belongs to
+vec3 toneGrade(vec3 c) {
+  c = c * (1.0 + c / 4.0) / (1.0 + c);
+  // grade: deeper blacks, more saturation, like an OLED demo reel
+  c = max(vec3(0.0), mix(vec3(dot(c, vec3(0.2126, 0.7152, 0.0722))), c, 1.3));
+  c = min(c, vec3(1.45));   // the curve below peaks at 1.47 and turns negative past 2.2
+  return mix(c, c * c * (2.2 - c) / 1.2, 0.7);
 }`;
 const QUAD_VERT = /* glsl */`varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`;
 
@@ -291,12 +321,12 @@ accScene.add(accQuad);
 const nebMat = new THREE.ShaderMaterial({
   uniforms: { ...shared, uDensity: { value: 1 }, uWarp: { value: 1 }, uOct: { value: 5 }, uSteps: { value: 40 }, uSeed: { value: 0 }, uBoost: { value: 1 },
     uL: { value: 0 }, uLs: { value: 0 }, uFlat: { value: 1 }, uEat: { value: 0 }, uSwirl: { value: 1 }, uSpin: { value: 0 }, uHeat: { value: 0 }, uHeatK: { value: 1 }, uCloudW: { value: 1 }, uClear: { value: 0 },
-    uAccW: { value: 0 }, uAccWid: { value: 1 }, uClump: { value: 1 }, uDisk: { value: 0 }, uDiskT: { value: 0 }, uBox: { value: new THREE.Vector3(14, 14, 8) } },
+    uAccW: { value: 0 }, uAccWid: { value: 1 }, uClump: { value: 1 }, uDisk: { value: 0 }, uDiskT: { value: 0 }, uDiskOut: { value: 1 }, uBox: { value: new THREE.Vector3(14, 14, 8) } },
   vertexShader: QUAD_VERT,
   fragmentShader: /* glsl */`
 ${GLSL_COMMON}
 uniform float uTime, uDensity, uWarp, uBoost, uSeed;
-uniform float uL, uLs, uFlat, uEat, uSwirl, uSpin, uHeat, uHeatK, uCloudW, uClear, uAccW, uAccWid, uClump, uDisk, uDiskT;
+uniform float uL, uLs, uFlat, uEat, uSwirl, uSpin, uHeat, uHeatK, uCloudW, uClear, uAccW, uAccWid, uClump, uDisk, uDiskT, uDiskOut;
 uniform vec3 uBox;
 uniform int uOct, uSteps;
 const float ZC = ${ZC.toFixed(5)}, HZ = ${HZ.toFixed(5)};
@@ -381,21 +411,8 @@ void main() {
       a *= max(0.0, mix(1.0, clamp(1.0 + cn * 3.5, 0.15, 2.2), uClump));   // past 1 the clumps exaggerate; never below empty
       m += vec4(pal(0.42 - 0.4 * uHeat) * a * 1.5, a * 0.25);
     }
-    // the accretion disk: after ignition the leftover gas settles into a thin, hot band hugging the mark's
-    // outline, orbiting faster the closer in it is (Kepler), so the noise shears into long streaks
-    if (uDisk > 0.001 && de < 2.4) {
-      float thick = 0.1 + 0.2 * de;
-      float vz = exp(-zo * zo / (thick * thick));
-      float prof = smoothstep(0.02, 0.14, de) * exp(-de * 1.9) * (1.0 - smoothstep(1.6, 2.4, de));
-      float a = atan(p.y, p.x) - uDiskT * 1.4 / pow(0.35 + de, 1.5);
-      vec2 ring = vec2(cos(a), sin(a));
-      float n1 = texture(uNoise, vec3(ring * 0.45, de * 0.4 + 0.31)).r;
-      float n2 = texture(uNoise, vec3(ring * 1.1 + 0.5, de * 1.2 + 0.13)).g;
-      float band = smoothstep(0.5, 0.85, n1 * 0.7 + n2 * 0.45);
-      float e = uDisk * prof * vz * (0.08 + 1.5 * band);
-      vec3 dc = pal(mix(0.02, 0.32, smoothstep(0.0, 1.6, de))) * (1.0 + 2.0 * exp(-de * 5.0));
-      m += vec4(dc * e * 1.6, e * 0.3);
-    }
+    // the accretion disk round the mark, in the screen's plane
+    if (uDisk > 0.001) { float th; m += uDisk * diskEmit(p.xy, zo, uDiskT, uDiskOut, th); }
     acc += T * m.rgb * uDensity * uBoost * dt;
     T *= exp(-m.a * uDensity * dt);
     t += dt;
@@ -467,11 +484,7 @@ void main() {
   float hd = max(sd, 0.0);
   vec3 halo = pal(0.2) * uHalo * (0.05 / (0.05 + hd)) * exp(-hd * 0.9);
   vec3 c = stars(srd) * (1.0 - neb.a * 0.92) + neb.rgb + halo;
-  c = c * (1.0 + c / 4.0) / (1.0 + c);
-  // grade: deeper blacks, more saturation, like an OLED demo reel
-  c = max(vec3(0.0), mix(vec3(dot(c, vec3(0.2126, 0.7152, 0.0722))), c, 1.3));
-  c = min(c, vec3(1.45));   // the curve below peaks at 1.47 and turns negative past 2.2
-  c = mix(c, c * c * (2.2 - c) / 1.2, 0.7);
+  c = toneGrade(c);
   // the black hole: a mark-shaped shadow nothing comes back out of, there the whole loop (the mark covers it once condensed)
   c *= 1.0 - uHole * (1.0 - smoothstep(-0.03, 0.04, sd));
   float re = (sd - uRs) / (0.06 + uRs * 0.045);
@@ -606,56 +619,47 @@ const streakMat = lineMat({ vertexColors: true, linewidth: 1.5 });
 const streakLines = new LineSegments2(streakGeo, streakMat);
 streakLines.frustumCulled = false;
 scene.add(streakLines);
-// once the mark has condensed, the embers that fell in stay on as orbits round it, each on its own tilted plane.
-// Their own generator, so the streaks and chevrons above keep the random draws they always had.
+// once the mark has condensed, the embers that fell in stay on as orbits round it: some in the screen's plane with
+// the disk round the outline, the rest in the band's plane. Their own generator, so the streaks and chevrons above
+// keep the random draws they always had.
 {
   const orng = mulberry32(77);
   for (const sp of streaks) {
-    const z = orng() * 2 - 1, ph = orng() * Math.PI * 2, s = Math.sqrt(1 - z * z);
-    const n = new THREE.Vector3(s * Math.cos(ph), s * Math.sin(ph), z);
-    const u = new THREE.Vector3().crossVectors(n, Math.abs(n.x) < 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0)).normalize();
     const R = 4.2 + orng() ** 1.5 * 6;
-    sp.orb = { u, v: new THREE.Vector3().crossVectors(n, u), R, th: orng() * Math.PI * 2, w: (orng() < 0.5 ? -1 : 1) * 2.4 * (4.2 / R) ** 1.5, fl: orng() * 6.3 };
+    sp.orb = { band: orng() < 0.5, R, th: orng() * Math.PI * 2, w: 2.4 * (4.2 / R) ** 1.5, fl: orng() * 6.3 };
   }
 }
 
-// ---- the disk band: Gargantua's look, a thin disk seen almost edge on, crossing the mark a little tilted ----
-// A real ring in the scene, so its near half passes in front of the mark and its far half goes behind it.
-// The lensed far side, wrapped round the outline, is the gas disk the cloud march draws.
-const BAND_IN = 3.9, BAND_OUT = 10.5;
+// ---- the disk band: Gargantua's look, the same disk tipped almost edge on, crossing the mark a little tilted ----
+// A sheet in the scene, so its near half passes in front of the mark and its far half goes behind it. It draws
+// diskEmit, the very disk the cloud march draws round the outline, and grades it with the same tone curve, so the
+// two read as one system and blow out together on replay.
 const bandMat = new THREE.ShaderMaterial({
-  uniforms: { ...shared, uW: { value: 0 }, uT: { value: 0 }, uRot: { value: new THREE.Matrix3() } },
+  uniforms: { ...shared, uW: { value: 0 }, uT: { value: 0 }, uOut: { value: 1 }, uN: { value: new THREE.Vector3(0, 0, 1) } },
   transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
   vertexShader: /* glsl */`varying vec2 vUv; varying vec3 vP, vW;
     void main() { vUv = uv; vP = position; vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }`,
   fragmentShader: /* glsl */`
 ${GLSL_COMMON}
-uniform float uW, uT;
-uniform mat3 uRot;
+uniform float uW, uT, uOut;
+uniform vec3 uN;
 varying vec3 vP, vW;
 void main() {
-  float r = length(vP.xy), x = (r - ${BAND_IN.toFixed(2)}) / ${(BAND_OUT - BAND_IN).toFixed(2)};
-  // Kepler again: the inner edge laps the outer, so the noise shears into fine streaks
-  float a = atan(vP.y, vP.x) - uT * 1.5 * pow(${BAND_IN.toFixed(2)} / r, 1.5);
-  vec2 ring = vec2(cos(a), sin(a));
-  float n1 = texture(uNoise, vec3(ring * 0.45, r * 0.16 + 0.31)).r;
-  float n2 = texture(uNoise, vec3(ring * 1.3 + 0.5, r * 0.55 + 0.13)).g;
-  float streak = smoothstep(0.42, 0.82, n1 * 0.7 + n2 * 0.45);
-  float prof = smoothstep(0.0, 0.03, x) * exp(-x * 3.2) * (1.0 - smoothstep(0.7, 1.0, x));
-  // relativistic beaming: the side swinging toward us is brighter
-  vec3 tang = uRot * vec3(-vP.y, vP.x, 0.0) / r;
-  float beam = 1.0 + 0.7 * dot(tang, normalize(uCam - vW));
-  vec3 col = pal(mix(0.0, 0.42, x)) * (1.0 + 2.2 * exp(-x * 14.0));
-  gl_FragColor = vec4(col * uW * prof * (0.12 + 1.4 * streak) * beam, 1.0);
+  float thick;
+  vec4 d = diskEmit(vP.xy, 0.0, uT, uOut, thick);
+  // the march integrates the sheet through its thickness, and a sheet seen at a slant is crossed for longer
+  float path = thick * 1.77 / max(abs(dot(normalize(uCam - vW), uN)), 0.12);
+  gl_FragColor = vec4(toneGrade(d.rgb * path * uW), 1.0);
 }`
 });
-const band = new THREE.Mesh(new THREE.RingGeometry(BAND_IN, BAND_OUT, 256, 6), bandMat);
+const band = new THREE.Mesh(new THREE.PlaneGeometry(28, 28), bandMat);
 band.position.set(0, 0, ZC);
 band.frustumCulled = false;
 band.renderOrder = 5;   // after the mark, so the mark's depth hides the far half and the near half crosses in front
 band.visible = false;
 scene.add(band);
 const _qx = new THREE.Quaternion(), _qz = new THREE.Quaternion(), X_AXIS = new THREE.Vector3(1, 0, 0), Z_AXIS = new THREE.Vector3(0, 0, 1);
+const bandU = new THREE.Vector3(1, 0, 0), bandV = new THREE.Vector3(0, 1, 0);
 
 // ---- flash: a white screen over everything ----
 const flashQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMaterial({
@@ -718,7 +722,7 @@ lab.on('change', key => { if (key === 'quality') sizeNebula(); dirty = 40; });
 // snapshot of wherever the sequence was back to the cloud as it is at loopS(), just before the mark coalesces,
 // then hands over to 'seq' there. The lab opens at loopS() too, so it loops collapse, hold, blast.
 // Everything is a pure function of S (or B and the snapshot), so seeking and replaying never pop.
-let mode = 'seq', S = 0, B = 0, enterS = -1, churn = 0, beatT = 0, diskT = 0, yaw = 0, from = null;
+let mode = 'seq', S = 0, B = 0, enterS = -1, churn = 0, beatT = 0, diskT = 0, diskOut = 1, yaw = 0, from = null;
 const clamp01 = x => Math.max(0, Math.min(1, x));
 function smooth(e0, e1, x) { const t = clamp01((x - e0) / (e1 - e0)); return t * t * (3 - 2 * t); }
 const mix = (a, b, f) => a + (b - a) * f;
@@ -839,6 +843,8 @@ function update(dt) {
     }
   }
   st = mode === 'blast' ? blastState(B) : seqState(S);
+  // on replay the disk, the band and the embers all blow outward at the same rate
+  diskOut = mode === 'blast' ? 1 + st.b * P.force * 0.9 : 1;
 
   // camera: a slow tilted orbit around the cloud that unwinds to face-on as the mark condenses
   const front = st.front;
@@ -879,6 +885,7 @@ function update(dt) {
   nu.uBoost.value = st.boost;
   nu.uDisk.value = st.disk * P.disk;
   nu.uDiskT.value = diskT;
+  nu.uDiskOut.value = diskOut;
   // the gas can only be within (start radius / contraction) of the mark
   const C = Math.exp(st.L);
   nu.uBox.value.set(3.2 + 13 / C, 3.2 + 13 / C, HZ + 8 / C / st.flat + 0.3);
@@ -890,15 +897,18 @@ function update(dt) {
   cu.uHole.value = P.hole;
   // the disk band, tilted across the mark
   const bw = st.disk * P.disk;
+  _qz.setFromAxisAngle(Z_AXIS, P.band * Math.PI / 180);
+  _qx.setFromAxisAngle(X_AXIS, -82 * Math.PI / 180);
+  band.quaternion.multiplyQuaternions(_qz, _qx);
+  bandU.set(1, 0, 0).applyQuaternion(band.quaternion);
+  bandV.set(0, 1, 0).applyQuaternion(band.quaternion);
   band.visible = bw > 0.002;
   if (band.visible) {
-    _qz.setFromAxisAngle(Z_AXIS, P.band * Math.PI / 180);
-    _qx.setFromAxisAngle(X_AXIS, -82 * Math.PI / 180);
-    band.quaternion.multiplyQuaternions(_qz, _qx);
-    band.updateMatrixWorld();
-    bandMat.uniforms.uRot.value.setFromMatrix4(band.matrixWorld);
-    bandMat.uniforms.uW.value = bw * 1.4;
-    bandMat.uniforms.uT.value = diskT;
+    const bu = bandMat.uniforms;
+    bu.uN.value.set(0, 0, 1).applyQuaternion(band.quaternion);
+    bu.uW.value = bw * P.density * st.boost;
+    bu.uT.value = diskT;
+    bu.uOut.value = diskOut;
   }
   cu.uVP.value.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
   cu.uHalo.value = st.halo * 0.6 * (1 + P.pulse * 8 * beat);
@@ -965,15 +975,16 @@ function update(dt) {
   }
   // orbiting embers: after ignition, on every tilted plane round the mark; the replay blast flings them out
   if (st.emb > 0.003 && P.embers > 0) {
-    const reach = mode === 'blast' ? 1 + st.b * P.force * 0.9 : 0.3 + 0.7 * smooth(0, 1.5, st.tau);
+    const reach = mode === 'blast' ? diskOut : 0.3 + 0.7 * smooth(0, 1.5, st.tau);
     const a = [0, 0, 0], m = [0, 0, 0], h = [0, 0, 0];
     const at = (o, R, th, out) => {
       const c = Math.cos(th) * R, s = Math.sin(th) * R;
-      out[0] = o.u.x * c + o.v.x * s; out[1] = o.u.y * c + o.v.y * s; out[2] = ZC + o.u.z * c + o.v.z * s;
+      if (!o.band) { out[0] = c; out[1] = s; out[2] = ZC; return; }
+      out[0] = bandU.x * c + bandV.x * s; out[1] = bandU.y * c + bandV.y * s; out[2] = ZC + bandU.z * c + bandV.z * s;
     };
     for (const sp of streaks) {
       if (sp.pick > P.embers) continue;
-      const o = sp.orb, R = o.R * reach, th = o.th + o.w * diskT, d = Math.sign(o.w) * 0.12;
+      const o = sp.orb, R = o.R * reach, th = o.th + o.w * diskT, d = 0.12;
       at(o, R, th - d, a); at(o, R, th - d / 2, m); at(o, R, th, h);
       const fade = st.emb * (0.6 + 0.4 * Math.sin(diskT * 2.3 + o.fl * 9)), c = lut(0.08 + 0.45 * sp.hue);
       const f0 = fade * 0.08, f1 = fade * 0.45;
