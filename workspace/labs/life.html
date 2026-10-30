@@ -101,7 +101,7 @@ const lab = createLab({
     hLook:    { type: 'heading', label: 'Look' },
     ageColor: { type: 'toggle', label: 'Color new cells by age', value: true },
     trails:   { type: 'toggle', label: 'Ghost trails', value: true },
-    glow:     { type: 'toggle', label: 'Glow (color palettes only)', value: true }
+    glow:     { type: 'toggle', label: 'Glow', value: true }
   },
   actions: [
     { label: 'Fire glider', primary: true, action: () => fire() },
@@ -593,7 +593,7 @@ function render(dt = 1 / 60) {
   ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(upCv, 0, 0);
   ctx.restore();
-  if (P.glow && vivid()) {
+  if (P.glow) {
     ctx.save();
     ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = 0.5;
     ctx.imageSmoothingEnabled = true; ctx.filter = `blur(${Math.round(cellPx * 1.6)}px)`;
