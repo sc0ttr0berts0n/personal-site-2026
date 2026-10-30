@@ -66,6 +66,9 @@ const lab = createLab({
     flash:    { type: 'range', label: 'Flash intensity', min: 0, max: 2, step: 0.05, value: 0.45 },
     pulse:    { type: 'range', label: 'Afterglow pulse', min: 0, max: 0.2, step: 0.005, value: 0.04 },
     pulseRate:{ type: 'range', label: 'Pulse rate', min: 0.2, max: 2, step: 0.05, value: 0.2, unit: '/s', when: P => P.pulse > 0 },
+    disk:     { type: 'range', label: 'Accretion disk', min: 0, max: 2, step: 0.05, value: 1 },
+    diskSpin: { type: 'range', label: 'Disk spin', min: 0, max: 4, step: 0.05, value: 1, unit: '×', when: P => P.disk > 0 },
+    lens:     { type: 'range', label: 'Lensing (spacetime warp)', min: 0, max: 2, step: 0.05, value: 1 },
     hReplay:  { type: 'heading', label: 'Replay' },
     loop:     { type: 'toggle', label: 'Auto replay', value: true },
     hold:     { type: 'range', label: 'Hold before replay', min: 2, max: 30, step: 1, value: 8, unit: ' s', when: P => P.loop },
@@ -88,7 +91,7 @@ const T0 = 1.2;                         // seconds of quiet cloud before gravity
 const LMAX = Math.log(40);              // the cloud ends 40× smaller than it starts
 const SETTLE = 3;                       // seconds after ignition before the hold timer counts
 const TB = 2.4;                         // seconds the replay blast takes to scatter back into cloud
-const LOOP_U = 0.45;                    // the loop starts here in the collapse, just before the mark coalesces
+const LOOP_U = 0.55;                    // the loop starts here in the collapse, just before the mark coalesces
 
 const { canvas } = lab.canvas({ context: 'none' });
 let renderer;
@@ -288,12 +291,12 @@ accScene.add(accQuad);
 const nebMat = new THREE.ShaderMaterial({
   uniforms: { ...shared, uDensity: { value: 1 }, uWarp: { value: 1 }, uOct: { value: 5 }, uSteps: { value: 40 }, uSeed: { value: 0 }, uBoost: { value: 1 },
     uL: { value: 0 }, uLs: { value: 0 }, uFlat: { value: 1 }, uEat: { value: 0 }, uSwirl: { value: 1 }, uSpin: { value: 0 }, uHeat: { value: 0 }, uHeatK: { value: 1 }, uCloudW: { value: 1 }, uClear: { value: 0 },
-    uAccW: { value: 0 }, uAccWid: { value: 1 }, uClump: { value: 1 }, uBox: { value: new THREE.Vector3(14, 14, 8) } },
+    uAccW: { value: 0 }, uAccWid: { value: 1 }, uClump: { value: 1 }, uDisk: { value: 0 }, uDiskT: { value: 0 }, uBox: { value: new THREE.Vector3(14, 14, 8) } },
   vertexShader: QUAD_VERT,
   fragmentShader: /* glsl */`
 ${GLSL_COMMON}
 uniform float uTime, uDensity, uWarp, uBoost, uSeed;
-uniform float uL, uLs, uFlat, uEat, uSwirl, uSpin, uHeat, uHeatK, uCloudW, uClear, uAccW, uAccWid, uClump;
+uniform float uL, uLs, uFlat, uEat, uSwirl, uSpin, uHeat, uHeatK, uCloudW, uClear, uAccW, uAccWid, uClump, uDisk, uDiskT;
 uniform vec3 uBox;
 uniform int uOct, uSteps;
 const float ZC = ${ZC.toFixed(5)}, HZ = ${HZ.toFixed(5)};
@@ -378,6 +381,21 @@ void main() {
       a *= max(0.0, mix(1.0, clamp(1.0 + cn * 3.5, 0.15, 2.2), uClump));   // past 1 the clumps exaggerate; never below empty
       m += vec4(pal(0.42 - 0.4 * uHeat) * a * 1.5, a * 0.25);
     }
+    // the accretion disk: after ignition the leftover gas settles into a thin, hot band hugging the mark's
+    // outline, orbiting faster the closer in it is (Kepler), so the noise shears into long streaks
+    if (uDisk > 0.001 && de < 2.4) {
+      float thick = 0.1 + 0.2 * de;
+      float vz = exp(-zo * zo / (thick * thick));
+      float prof = smoothstep(0.02, 0.14, de) * exp(-de * 1.9) * (1.0 - smoothstep(1.6, 2.4, de));
+      float a = atan(p.y, p.x) - uDiskT * 1.4 / pow(0.35 + de, 1.5);
+      vec2 ring = vec2(cos(a), sin(a));
+      float n1 = texture(uNoise, vec3(ring * 0.45, de * 0.4 + 0.31)).r;
+      float n2 = texture(uNoise, vec3(ring * 1.1 + 0.5, de * 1.2 + 0.13)).g;
+      float band = smoothstep(0.5, 0.85, n1 * 0.7 + n2 * 0.45);
+      float e = uDisk * prof * vz * (0.08 + 1.5 * band);
+      vec3 dc = pal(mix(0.02, 0.32, smoothstep(0.0, 1.6, de))) * (1.0 + 2.0 * exp(-de * 5.0));
+      m += vec4(dc * e * 1.6, e * 0.3);
+    }
     acc += T * m.rgb * uDensity * uBoost * dt;
     T *= exp(-m.a * uDensity * dt);
     t += dt;
@@ -396,13 +414,14 @@ const nebCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 // (idea after shadertoy.com/view/wfscRX; no code copied).
 const compMat = new THREE.ShaderMaterial({
   uniforms: { ...shared, uNeb: { value: hist[0].texture }, uRs: { value: 0 }, uShock: { value: 0 }, uHalo: { value: 0 },
-    uStars: { value: 0.35 }, uDpr: { value: 1 }, uBg: { value: new THREE.Color() } },
+    uStars: { value: 0.35 }, uDpr: { value: 1 }, uBg: { value: new THREE.Color() }, uLens: { value: 0 }, uVP: { value: new THREE.Matrix4() } },
   vertexShader: QUAD_VERT,
   depthTest: false, depthWrite: false,
   fragmentShader: /* glsl */`
 ${GLSL_COMMON}
 uniform sampler2D uNeb;
-uniform float uTime, uRs, uShock, uHalo, uStars, uDpr;
+uniform float uTime, uRs, uShock, uHalo, uStars, uDpr, uLens;
+uniform mat4 uVP;
 uniform vec3 uBg;
 float hash13(vec3 p) { p = fract(p * 0.1031); p += dot(p, p.zyx + 31.32); return fract((p.x + p.y) * p.z); }
 // stars live on the sky (by direction) so they work from every orbit angle
@@ -429,14 +448,25 @@ void main() {
   float th = -ro.z / rd.z;
   vec2 h = ro.xy + rd.xy * max(th, 0.0);
   float sd = th > 0.0 ? sdf(h) : 1e4;
-  vec4 neb = texture2D(uNeb, vUv);
+  // gravitational lensing: light passing the mark bends toward it, so each pixel shows what lies a little
+  // closer in, by more the nearer it passes. Stars and the disk smear into arcs around the outline.
+  vec2 uv = vUv; vec3 srd = rd;
+  if (uLens > 0.001 && th > 0.0) {
+    vec4 f = field(h);
+    float b = max(f.g, 0.0);
+    vec2 src = h - normalize(f.ba + 1e-5) * uLens * 0.32 / (0.3 + b) * smoothstep(0.0, 0.08, b);
+    vec4 cp = uVP * vec4(src, 0.0, 1.0);
+    uv = cp.xy / cp.w * 0.5 + 0.5;
+    srd = normalize(vec3(src, 0.0) - ro);
+  }
+  vec4 neb = texture2D(uNeb, uv);
   // light unsharp mask on the upscaled cloud target
   vec2 tx = 1.0 / vec2(textureSize(uNeb, 0));
-  vec4 blur = 0.25 * (texture2D(uNeb, vUv + vec2(tx.x, 0.0)) + texture2D(uNeb, vUv - vec2(tx.x, 0.0)) + texture2D(uNeb, vUv + vec2(0.0, tx.y)) + texture2D(uNeb, vUv - vec2(0.0, tx.y)));
+  vec4 blur = 0.25 * (texture2D(uNeb, uv + vec2(tx.x, 0.0)) + texture2D(uNeb, uv - vec2(tx.x, 0.0)) + texture2D(uNeb, uv + vec2(0.0, tx.y)) + texture2D(uNeb, uv - vec2(0.0, tx.y)));
   neb = max(vec4(0.0), neb + (neb - blur) * 0.35);
   float hd = max(sd, 0.0);
   vec3 halo = pal(0.2) * uHalo * (0.05 / (0.05 + hd)) * exp(-hd * 0.9);
-  vec3 c = stars(rd) * (1.0 - neb.a * 0.92) + neb.rgb + halo;
+  vec3 c = stars(srd) * (1.0 - neb.a * 0.92) + neb.rgb + halo;
   c = c * (1.0 + c / 4.0) / (1.0 + c);
   // grade: deeper blacks, more saturation, like an OLED demo reel
   c = max(vec3(0.0), mix(vec3(dot(c, vec3(0.2126, 0.7152, 0.0722))), c, 1.3));
@@ -635,7 +665,7 @@ lab.on('change', key => { if (key === 'quality') sizeNebula(); dirty = 40; });
 // snapshot of wherever the sequence was back to the cloud as it is at loopS(), just before the mark coalesces,
 // then hands over to 'seq' there. The lab opens at loopS() too, so it loops collapse, hold, blast.
 // Everything is a pure function of S (or B and the snapshot), so seeking and replaying never pop.
-let mode = 'seq', S = 0, B = 0, enterS = -1, churn = 0, beatT = 0, yaw = 0, from = null;
+let mode = 'seq', S = 0, B = 0, enterS = -1, churn = 0, beatT = 0, diskT = 0, yaw = 0, from = null;
 const clamp01 = x => Math.max(0, Math.min(1, x));
 function smooth(e0, e1, x) { const t = clamp01((x - e0) / (e1 - e0)); return t * t * (3 - 2 * t); }
 const mix = (a, b, f) => a + (b - a) * f;
@@ -668,6 +698,8 @@ function seqState(S) {
     boost: 1 + 1.4 * smooth(0.75, 1, u) * (tau > 0 ? Math.exp(-post * 5) : 1),
     flash: tau > -0.12 ? (tau < 0 ? smooth(-0.12, 0, tau) : Math.exp(-tau * 7) * (1 - smooth(0.15, 0.5, tau))) : 0,
     halo: smooth(0, 0.6, post) * (0.35 + 0.65 * Math.exp(-post / 2.5)),
+    disk: smooth(-0.3, 1.6, tau),                      // what's left over settles into a disk round the mark
+    lens: smooth(-0.1, 0.8, tau),
     b: 0
   };
 }
@@ -691,6 +723,7 @@ function blastState(b) {
     front: mix(F.front, Z.front, kc), boost: mix(F.boost, Z.boost, k) + 1.2 * Math.exp(-b * 4) * smooth(0, 0.04, b),
     flash: 0.5 * Math.max(F.mesh, 0.3) * smooth(0, 0.04, b) * Math.exp(-b * 9) * (1 - smooth(0.15, 0.45, b)),
     halo: F.halo * Math.exp(-b * 5),
+    disk: F.disk * (1 - smooth(0, 0.5 * TB, b)), lens: F.lens * (1 - smooth(0, 0.3 * TB, b)),
     az: F.az * (1 - kc), el: F.el,
     b
   };
@@ -739,6 +772,7 @@ function update(dt) {
   if (!calm) {
     churn += dt * P.time * P.flow / 3;
     beatT += dt * P.time * P.pulseRate;
+    diskT += dt * P.time * P.diskSpin;
     if (!press) { const r = Math.exp(-dt * 1.6); dragYaw *= r; dragPitch *= r; }
     if (mode === 'seq') {
       S += dt * P.time;
@@ -788,6 +822,8 @@ function update(dt) {
   nu.uAccWid.value = st.wid;
   nu.uClump.value = P.wobble;
   nu.uBoost.value = st.boost;
+  nu.uDisk.value = st.disk * P.disk;
+  nu.uDiskT.value = diskT;
   // the gas can only be within (start radius / contraction) of the mark
   const C = Math.exp(st.L);
   nu.uBox.value.set(3.2 + 13 / C, 3.2 + 13 / C, HZ + 8 / C / st.flat + 0.3);
@@ -795,6 +831,8 @@ function update(dt) {
   const beat = heartbeat(beatT) * st.halo;
   const cu = compMat.uniforms;
   cu.uStars.value = P.stars;
+  cu.uLens.value = st.lens * P.lens;
+  cu.uVP.value.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
   cu.uHalo.value = st.halo * 0.6 * (1 + P.pulse * 8 * beat);
   cu.uRs.value = mode === 'blast' ? P.force * 4 * B ** 0.8 : 0;
   cu.uShock.value = mode === 'blast' ? smooth(0, 0.06, B) * Math.exp(-B * 1.1) * from.mesh : 0;
