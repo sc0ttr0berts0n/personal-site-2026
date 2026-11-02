@@ -12,7 +12,9 @@ The first lab, and the one that set the look for all of them. I wanted my logo s
 
 It already looked like glass, which can be quite optically clear when it needs to be. What I was after was the feel of glass. I pulled inspiration from the Stranger Things title sequence and wanted it to feel a bit analog and vintage. This is tightly simulated optical stuff, so I loved the idea of some parts being imprecise. The drawn edges stair-stepped at the logo's near-45° angles and the grid behind the glass sat perfectly flat, so both went, and one shader does it all now: smooth edges at any angle, the grid bending through the rim and through hammered-glass ripples, and color fringing where each channel refracts on its own. Black glass edges came from memory: I'd seen thick glass go black at the rim and wanted that.
 
-*Versions: none saved. The bench look started here.*
+This one goes way back. It was the preview I made before I'd even committed to the site, and the record keeping only started here, so there are no old versions to show.
+
+*Versions: none saved.*
 
 ## Vessel
 
