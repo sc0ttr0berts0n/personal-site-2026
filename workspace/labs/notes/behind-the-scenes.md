@@ -337,3 +337,4 @@ Scott walked the saved versions in `notes/versions/goop/`.
 - **Phone: slimmer, not re-centred.** On his phone the labels sat high in their blocks, and Eraser and Reset were a touch too big. Rather than centring the text, Scott chose smaller buttons: the phone ring went from 28 to 22 px thick, and the corner blocks shrink with it (about a fifth smaller).
 - **Ring it is.** Of the two layouts, ring round the basin or flat strip above it, Scott kept the ring: "all ring." The strip and the temporary switch are gone.
 - **Desktop matches the phone.** Scott liked the phone's chunky blocks, so on desktop the buttons are drawn at two sand cells per pixel. The phone stays at one.
+- **Not chunky after all.** Two cells per pixel on desktop looked awful to Scott ("the buttons look awful"). He asked for finer: one world pixel or half of one. Desktop went to half a sand cell per pixel, about the same 2 CSS px as the phone's whole cell.
