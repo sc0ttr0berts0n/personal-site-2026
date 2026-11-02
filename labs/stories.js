@@ -78,7 +78,7 @@ export const STORIES = {
     "paras": [
       "As an astrophotographer, I was curious how realistically I could render a nebula. Eventually I decided that wasn't a fair ask. So I sent it off in a few directions, fed it Shadertoy pieces I liked (the blob from one, without its dithering; a breathing ring from another; plus metaballs), and what came back wasn't exactly under my direction. It became more about the coalescence and the explosions than riding entirely on the nebula's authenticity. By going abstract, I wasn't bound to the integrity of the effect.",
       "The trouble was the bang. It was built exactly to my brief, and it was \"finnne\". It was the only lab that didn't keep the logo on screen. I asked Claude what to do about that, and it suggested running the story backwards: a cold cloud that collapses under gravity and ignites as the logo. I loved it. Now it tells the same story as Neural and Goop: out of chaos, the logo.",
-      "Honestly, I'm a little bored with it. The ending reads like a black hole, and I might go louder with it, get weird, and have something accrete into the logo."
+      "Honestly, I got a little bored with it. The ending read like a black hole, so I went louder and leaned in. Now the logo is a black hole for the whole loop: gas and stars bend around its shadow, an accretion disk hugs its outline, a thin band tilted 10° crosses it, and embers orbit it. It also opens just before the logo coalesces and loops from there, so you skip the wait."
     ],
     "versions": [
       {
