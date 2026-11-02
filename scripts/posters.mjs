@@ -37,6 +37,8 @@ await sleep(400);
 const browser = await puppeteer.launch({ executablePath, headless: true, args: ['--enable-gpu', '--ignore-gpu-blocklist'] });
 await mkdir(FIRST, { recursive: true });
 
+// ms to let a toy run before its grid poster; Big Bang would land on its ignition flash at 2.5 s, so it is caught mid-infall
+const GRID_AT = { bigbang: 1200 };
 const HIDE = '.topbar, .caption, .nav, .loader, .poster, .stats, .edge, .toyhint { display: none !important; }';
 // a first frame is of the toy's frame, which runs past the screen (feed.css --toy-top / --toy-cut): the page is
 // opened at the frame's size with the frame filling it, so the toy lays itself out exactly as it will in the feed
@@ -66,7 +68,7 @@ try {
     let jpg = '';
     if (!firstOnly) {
       const page = await open(l, { width: 400, height: 500, deviceScaleFactor: 1 });
-      await sleep(2500);
+      await sleep(GRID_AT[l.slug] ?? 2500);
       jpg = await page.screenshot({ type: 'jpeg', quality: 80 });
       await writeFile(join(OUT, `${l.slug}.jpg`), jpg);
       await page.close();
