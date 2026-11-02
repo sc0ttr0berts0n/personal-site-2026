@@ -382,3 +382,4 @@ The sliders sat in one column ahead of the story, so reading how a lab was made 
 - **Words:** the feed's "more" becomes "How it got here". "Change This" stays.
 - **The technical paragraph** moves to the end of the story, for the engineers reading.
 - **What follows from it:** the feed's caption sheet is gone. Its old-version links were duplicates of the story's tiles, and its motion toggle moves to the caption.
+- **Round 2:** "when the mobile page scrolls over the simulation, can we pause it and employ a blur black transparent background." The story now pauses the toy once it scrolls over it, and the panel is black, see-through and blurred, so the frozen toy shows through. On the big screen: "clicking a preview can pop open over the main one," not a full-screen takeover. An old version now opens over the toy, in its place, and the toy pauses underneath.

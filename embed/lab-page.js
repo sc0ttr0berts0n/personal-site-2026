@@ -11,6 +11,8 @@
 // The panel has two tabs for its two concerns: Change This (palette, sliders, settings) and How it got here (the
 // process story). ?story in the URL opens the second; the #part is already the settings code. There the panel rises
 // to just under the toy, which shrinks to its key square above it (the real stage, scaled, as for picture in picture).
+// The toy pauses once the story has scrolled over it, or while an old version plays; on a wide screen an old version
+// opens over the toy, in its place.
 (() => {
   if (new URLSearchParams(location.search).has('embed')) return;
   const SCRIPT = document.currentScript?.src || location.href;   // for the generated stories next to the labs
@@ -21,6 +23,28 @@
   const FLY_MS = 280;
   const PIP_MS = 320, PIP_M = 10, PIP_R = 10;   // picture in picture: grow/shrink time, margin, corner radius
   const READ_AT = .46;   // reading on a phone: how far down the screen the panel first rises to
+
+  // ---- pausing the toy: frames are parked and document.hidden reads true, as in the feed (lab-embed.js) ----
+  // This script runs before the lab's modules, so every frame the lab asks for comes through here.
+  let frozen = false, versionOn = false;
+  const rawRAF = requestAnimationFrame.bind(window), rawCancel = cancelAnimationFrame.bind(window);
+  const parked = new Map();
+  let parkId = 0;
+  window.requestAnimationFrame = cb => {
+    if (frozen) { parked.set(--parkId, cb); return parkId; }
+    return rawRAF(ts => { if (frozen) parked.set(--parkId, cb); else cb(ts); });
+  };
+  window.cancelAnimationFrame = id => { if (!parked.delete(id)) rawCancel(id); };
+  const realHidden = Object.getOwnPropertyDescriptor(Document.prototype, 'hidden').get;
+  const realState = Object.getOwnPropertyDescriptor(Document.prototype, 'visibilityState').get;
+  Object.defineProperty(document, 'hidden', { configurable: true, get() { return realHidden.call(this) || frozen; } });
+  Object.defineProperty(document, 'visibilityState', { configurable: true, get() { return frozen ? 'hidden' : realState.call(this); } });
+  const setFrozen = v => {
+    if (v === frozen) return;
+    frozen = v;
+    if (!v) { const cbs = [...parked.values()]; parked.clear(); cbs.forEach(cb => requestAnimationFrame(cb)); }
+    document.dispatchEvent(new Event('visibilitychange'));
+  };
 
   const css = document.createElement('style');
   css.textContent = `
@@ -81,15 +105,15 @@
       .lab-page .lab-panel { position: relative; z-index: 2; scroll-snap-align: start; overflow: visible;
         margin: calc(100svh - var(--top-h, 41px) - var(--peek, 120px)) calc(-1 * max(16px, env(safe-area-inset-left, 0px))) 0;
         padding: 0 max(16px, env(safe-area-inset-left, 0px)) calc(96px + env(safe-area-inset-bottom, 0px)); gap: 20px;
-        background: color-mix(in srgb, var(--panel) 90%, transparent); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+        background: rgb(0 0 0 / .7); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
         border-top: 1px solid var(--line); border-radius: 10px 10px 0 0; transition: background-color .25s, border-color .25s, opacity .2s; }
       .lab-page .lab-peek { display: grid; place-items: center; height: 30px; margin-bottom: -14px; padding: 0; border: 0; background: none; cursor: pointer; }
       .lab-page .lab-peek::before { content: ""; width: 40px; height: 4px; border-radius: 2px; background: var(--line); }
-      .lab-page .lab-tabs { top: var(--top-h, 41px); margin: 0 calc(-1 * max(16px, env(safe-area-inset-left, 0px))); padding: 0 max(16px, env(safe-area-inset-left, 0px)); }
+      .lab-page .lab-tabs { top: var(--top-h, 41px); margin: 0 calc(-1 * max(16px, env(safe-area-inset-left, 0px))); padding: 0 max(16px, env(safe-area-inset-left, 0px));
+        background: rgb(0 0 0 / .6); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
 
-      /* reading: a plain panel with no blur over the toy, which sits above it as its key square, not to be touched */
+      /* reading: the toy sits above the panel as its key square, not to be touched */
       html.lab-page.story { scroll-snap-type: none; }
-      html.lab-page.story .lab-panel { background: var(--panel); -webkit-backdrop-filter: none; backdrop-filter: none; }
       html.lab-page.story .lab-holdbar { display: none; }
       .lab-page .lab-pane-story { min-height: 100svh; }
 
@@ -192,17 +216,20 @@
     .lab-page .ver-play.ready iframe { opacity: 1; }
     .lab-page .ver-play.ready :is(.ver-thumb, .ver-spin) { opacity: 0; }
     .lab-page .ver-wait { display: none; }
-    .lab-page .ver-play.slow:not(.ready):popover-open .ver-wait { display: block; position: absolute; z-index: 1; top: calc(50% + 28px); left: 0; right: 0; text-align: center;
+    .lab-page .ver-play.slow:not(.ready):is(:popover-open, .over) .ver-wait { display: block; position: absolute; z-index: 1; top: calc(50% + 28px); left: 0; right: 0; text-align: center;
       font: 400 12px/1.2 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--ink); }
-    .lab-page .ver-play:popover-open .ver-thumb { filter: blur(24px) brightness(.42); }
+    .lab-page .ver-play:is(:popover-open, .over) .ver-thumb { filter: blur(24px) brightness(.42); }
     .lab-page .ver-bar { display: none; }
     .lab-page li.playing .ver-tile { background: linear-gradient(transparent 55%, rgb(0 0 0 / .75)); border-color: transparent; justify-content: flex-end; }
     .lab-page li.playing .ver-tile > .ver-thumb { display: none; }
     .lab-page li.playing .ver-tile .ver-n { display: none; }
     /* broken out: the same frame, over everything (the popover's top layer), and playable */
     .lab-page .ver-play:popover-open { position: fixed; inset: 0; width: 100%; height: 100%; max-width: none; max-height: none; border: 0; border-radius: 0; }
-    .lab-page .ver-play:popover-open iframe { pointer-events: auto; }
-    .lab-page .ver-play:popover-open .ver-bar { display: flex; position: absolute; z-index: 1; align-items: center; justify-content: space-between; gap: 12px;
+    .lab-page .ver-play:is(:popover-open, .over) iframe { pointer-events: auto; }
+    /* on a wide screen: over the toy, in its place */
+    .lab-page .ver-play.over { z-index: 5; border: 0; border-radius: 0; }
+    .lab-page li.over-on .ver-tile { border-color: var(--ink); }
+    .lab-page .ver-play:is(:popover-open, .over) .ver-bar { display: flex; position: absolute; z-index: 1; align-items: center; justify-content: space-between; gap: 12px;
       top: env(safe-area-inset-top, 0px); left: 0; right: 0; padding: 10px max(16px, env(safe-area-inset-left, 0px));
       font: 400 12px/1.2 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--dim); pointer-events: none; }
     .lab-page .ver-bar button { pointer-events: auto; padding: 9px 12px; border: 1px solid var(--line); border-radius: 2px; background: rgb(0 0 0 / .6);
@@ -339,7 +366,14 @@
     document.body.append(bar);
     const holdBtn = bar.querySelector('.lab-hold'), holdLbl = holdBtn.querySelector('span'), lockBtn = bar.querySelector('.lab-lock');
     // the bar shows once the controls are pulled up far enough to cover the toy
-    const onScroll = () => root.classList.toggle('opened', panel.getBoundingClientRect().top < innerHeight / 2);
+    const onScroll = () => {
+      const y = panel.getBoundingClientRect().top;
+      root.classList.toggle('opened', y < innerHeight / 2);
+      // reading: paused once the panel is a third of the way up the toy above it. Controls keep it running, in the corner.
+      const reading = root.classList.contains('story');
+      const covered = phone.matches && y < innerHeight * READ_AT - (innerHeight * READ_AT - top.offsetHeight) / 3;
+      setFrozen(reading && (covered || versionOn));
+    };
     addEventListener('scroll', onScroll, { passive: true });
     addEventListener('resize', onScroll);
     onScroll();
@@ -575,11 +609,17 @@
         clearTimeout(slowT);
         if (cur.play.matches?.(':popover-open')) cur.play.hidePopover();
         cur.play.remove();
-        cur.li.classList.remove('playing');
+        cur.li.classList.remove('playing', 'over-on');
         cur.li.querySelector('.ver-go').textContent = 'Play ▸';
         cur = null;
+        versionOn = false;
+        setNow();
+        onScroll();
       };
       stopVersion = stop;
+      phone.addEventListener('change', stop);
+      const nowGo = sec.querySelector('.ver-now .ver-go');
+      const setNow = () => { if (nowGo && !phone.matches) nowGo.textContent = versionOn ? 'Back to it ▸' : 'Playing ▸'; };
       const breakOut = () => {
         if (!cur.play.showPopover) { open(cur.frame.src.replace(/\?.*$/, ''), '_blank', 'noopener'); return; }
         cur.play.showPopover();
@@ -592,11 +632,19 @@
         p.setAttribute('popover', 'manual');
         p.innerHTML = `${verThumb(v)}<span class="ver-spin" aria-hidden="true"></span><span class="ver-wait">Still loading…</span><iframe title="${title} version ${v.name}" src="../${v.href}?embed=1" tabindex="-1"></iframe>
           <div class="ver-bar"><span>${title} · ${v.name.match(/^\d+[a-z]?/)?.[0] || ''} · ${label(v)}</span><button type="button">Close</button></div>`;
-        p.querySelector('button').addEventListener('click', () => { p.hidePopover(); li.querySelector('.ver-tile').focus(); });
-        li.prepend(p);
-        li.classList.add('playing');
+        const over = !phone.matches;
+        p.querySelector('button').addEventListener('click', () => {
+          if (over) stop(); else p.hidePopover();
+          li.querySelector('.ver-tile').focus();
+        });
+        p.querySelector('.ver-bar').addEventListener('pointerdown', e => e.stopPropagation());   // not the toy's
+        if (over) { p.classList.add('over'); p.removeAttribute('popover'); stage.append(p); li.classList.add('over-on'); }
+        else { li.prepend(p); li.classList.add('playing'); }
         li.querySelector('.ver-go').textContent = 'Loading…';
-        cur = { li, play: p, frame: p.querySelector('iframe') };
+        cur = { li, play: p, frame: p.querySelector('iframe'), over };
+        versionOn = true;
+        setNow();
+        onScroll();
         // a heavy old version can take a while to compile: say so rather than just spin
         slowT = setTimeout(() => { p.classList.add('slow'); li.querySelector('.ver-go').textContent = 'Still loading…'; }, 12000);
       };
@@ -609,16 +657,22 @@
         const tile = e.target.closest('.ver-tile');
         if (!tile) return;
         const li = tile.parentElement;
-        if (cur?.li === li) breakOut(); else play(li, story.versions[+tile.dataset.i]);
+        if (cur?.li !== li) play(li, story.versions[+tile.dataset.i]);
+        else if (cur.over) stop();
+        else breakOut();
       });
       // the embed hooks say when the version has drawn its first frame
       addEventListener('message', e => {
         if (e.data?.feed !== 'ready' || !cur || e.source !== cur.frame.contentWindow) return;
         clearTimeout(slowT);
         cur.play.classList.add('ready');
-        cur.li.querySelector('.ver-go').textContent = 'Full screen ⤢';
+        cur.li.querySelector('.ver-go').textContent = cur.over ? 'Close ×' : 'Full screen ⤢';
       });
-      addEventListener('keydown', e => { if (e.key === 'Escape' && cur?.play.matches?.(':popover-open')) cur.play.hidePopover(); });
+      addEventListener('keydown', e => {
+        if (e.key !== 'Escape' || !cur) return;
+        if (cur.over) stop();
+        else if (cur.play.matches?.(':popover-open')) cur.play.hidePopover();
+      });
     };
     // loaded while the page is idle, so the tab opens at once; a slow or failed load says so
     let storyLoad = null;
@@ -645,6 +699,7 @@
         t.btn.tabIndex = k === key ? 0 : -1;
       }
       if (key === 'story') loadStory();
+      onScroll();
     };
     const setTab = key => {
       if (key === tab) return;
@@ -658,6 +713,7 @@
       history.replaceState(history.state, '', location.pathname + search + location.hash);
       if (!phone.matches) { panel.scrollTop = tabY[key]; return; }
       scrollTo({ top: tabY[key] > 8 ? tabY[key] : tabHome(key), behavior: fromToy && !matchMedia('(prefers-reduced-motion: reduce)').matches ? 'smooth' : 'auto' });
+      onScroll();
     };
     tabList.addEventListener('click', e => {
       const b = e.target.closest('.lab-tab');
