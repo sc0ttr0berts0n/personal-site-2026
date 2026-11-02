@@ -50,7 +50,7 @@ export const ARTIST = {
   avatar: null,                      // e.g. 'site/img/scott.jpg'; null shows the mark
   line: 'Creative Developer',
   links: [
-    { label: 'Email', href: 'mailto:you@example.com', text: 'you@example.com' },
+    { label: 'Email', href: 'mailto:scott@scottrobertson.dev', text: 'scott@scottrobertson.dev' },
     { label: 'GitHub', href: 'https://github.com/sc0ttr0berts0n', text: 'sc0ttr0berts0n' },
     { label: 'LinkedIn', href: 'https://www.linkedin.com/in/scott-robertson-dev', text: 'scott-robertson-dev' }
   ]
