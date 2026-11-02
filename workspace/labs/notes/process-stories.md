@@ -22,7 +22,7 @@ Each chevron is a sealed glass vessel of liquid. The first versions were a good 
 
 The turn was the color. The liquid sat in an ombre, and for some reason that fired off a memory of iodine clock reactions: clear to black, all at once. Now fronts nucleate under the surface and sweep the vessel, stepping the color along the palette, with a thin rainbow sheen riding each front. Then I tied it to the smacks: each hit starts a front where it lands. Two separate rhythms were too busy, and one nudge can reasonably cause both.
 
-It's the call I'm proudest of. I wish it were something more clever, but it's just so good-looking, and it's often people's favorite. Later came the flip: an anticipation tilt, a 180, a little overshoot and settle, with the liquid lagging behind the glass. Most recently, a press starts a reaction right where you touch, so you can set off the chemistry yourself.
+It's the call I'm proudest of. I wish it were something more clever, but it's just so good-looking, and it's often people's favorite. Later came the flip: an anticipation tilt, a 180, a little overshoot and settle, with sympathetic motion in the liquid as it lags behind the glass. Most recently, a press starts a reaction right where you touch, so you can set off the chemistry yourself.
 
 *Versions: `vessel/09` (before the reaction) → `vessel/13-pre-gravity-flip` (reaction, no flip) → live.*
 
