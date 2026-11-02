@@ -48,9 +48,9 @@ Much later, I decided it needed a surprise. At the end of the volley, every ball
 
 ## Big Bang
 
-As an astrophotographer, I was curious how realistically I could render a nebula. Eventually I decided that wasn't a fair ask. So I sent the AI off in a few directions and fed it pieces I liked from Shadertoy, a site where people share graphics programs: a blob from one, a breathing ring from another, and the soft, merging shapes known as metaballs. What came back wasn't exactly under my direction. It became more about coalescence and explosions than about an authentic nebula, and by going abstract, I wasn't bound to the integrity of the effect.
+As an astrophotographer, I was curious how realistically I could render a nebula. Eventually I decided that wasn't a fair ask. So I sent the agent off in a few directions and fed it pieces I liked from Shadertoy, a site where people share graphics programs: a blob from one, a breathing ring from another, and the soft, merging shapes known as metaballs. What came back wasn't exactly under my direction. It became more about coalescence and explosions than about an authentic nebula, and by going abstract, I wasn't bound to the integrity of the effect.
 
-The trouble was the bang. It was built exactly to my brief, and it was "finnne." It was also the only lab that didn't keep the logo on screen. I asked Claude what to do about that, and it suggested running the story backward, with a cold cloud that collapses under gravity and ignites as the logo. I loved it. Now it tells the same story as Neural Mark and Neon Oil, in which the logo emerges from chaos.
+The trouble was the bang. It was built exactly to my brief, and it was "finnne." It was also the only lab that didn't keep the logo on screen. I asked the agent what to do about that, and it suggested running the story backward, with a cold cloud that collapses under gravity and ignites as the logo. I loved it. Now it tells the same story as Neural Mark and Neon Oil, in which the logo emerges from chaos.
 
 Then I got a little bored with it. The ending read like a black hole, so I went louder and leaned in. Now the logo is a black hole for the whole loop. Gas and stars bend around its shadow, a disk of glowing matter hugs its outline, a thin band tilted 10 degrees crosses it, and embers orbit it. It also opens just before the logo coalesces and loops from there, so you skip the wait.
 
@@ -66,7 +66,7 @@ I'd rank it in the bottom middle of the set, since people have seen this effect 
 
 ## Maze
 
-This one took the most rounds. Claude's first version filled the search with a rainbow. I hadn't asked for that, and I liked it at first, but I slowly noticed that it wasn't communicating anything. It was eye candy. So I asked what the fill was for, and cut it back a little at a time until it showed only the dead ends. Color got one more chance, to show how far each path had reached, and when that wasn't clear enough, it went to plain gray.
+This one took the most rounds. The agent's first version filled the search with a rainbow. I hadn't asked for that, and I liked it at first, but I slowly noticed that it wasn't communicating anything. It was eye candy. So I asked what the fill was for, and cut it back a little at a time until it showed only the dead ends. Color got one more chance, to show how far each path had reached, and when that wasn't clear enough, it went to plain gray.
 
 The maze is cut along the logo's own grain. The arms meet at 85.6 degrees rather than 90, so every straight edge of the logo is a cell wall, and each chevron holds its own maze. Before a search starts, a dot and a flag drop on and the dot glides to the flag, so you know what it's looking for.
 
