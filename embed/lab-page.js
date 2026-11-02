@@ -144,22 +144,33 @@
     .lab-page .lab-versions li { position: relative; aspect-ratio: 1; }
     .lab-page .ver-tile, .lab-page .ver-now { position: absolute; inset: 0; z-index: 1; display: flex; flex-direction: column; justify-content: space-between; align-items: flex-start;
       padding: 8px; border: 1px solid var(--line); border-radius: 2px; text-align: left; cursor: pointer; -webkit-tap-highlight-color: transparent;
-      background: var(--bg) linear-gradient(var(--grid) 1px, transparent 1px) 0 0 / 12px 12px, linear-gradient(90deg, var(--grid) 1px, transparent 1px) 0 0 / 12px 12px;
-      transition: border-color .2s, background-color .2s; }
+      overflow: hidden; isolation: isolate; background: var(--bg); color: var(--ink); transition: border-color .2s, background-color .2s; }
+    /* a still of the version, blurred and darkened: a hint of what's in there, with the words legible over it */
+    .lab-page .ver-thumb { position: absolute; z-index: -1; inset: -10%; width: 120%; height: 120%; max-width: none; object-fit: cover; filter: blur(5px) brightness(.42); transition: opacity .25s; }
     .lab-page .ver-tile:hover, .lab-page .ver-now:hover { border-color: var(--dim); }
     .lab-page .ver-n { font: 200 22px/1 var(--display); }
-    .lab-page .ver-cap { font: 400 11px/1.3 var(--mono); color: var(--dim); text-wrap: balance; }
-    .lab-page .ver-go { font: 400 10px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--dim); }
-    .lab-page .ver-now { border-color: var(--dim); background: var(--ink); color: var(--bg); }
-    .lab-page .ver-now .ver-cap, .lab-page .ver-now .ver-go { color: var(--bg); opacity: .7; }
+    .lab-page .ver-cap { font: 400 11px/1.3 var(--mono); color: var(--ink); text-wrap: balance; }
+    .lab-page .ver-go { font: 400 10px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--ink); opacity: .75; }
+    .lab-page .ver-now { border-color: var(--dim); }
     /* playing: the frame fills the square, under the tile, which turns clear and offers to break out */
     .lab-page .ver-play { position: absolute; inset: 0; display: block; margin: 0; padding: 0; width: auto; height: auto; overflow: hidden;
       border: 1px solid var(--ink); border-radius: 2px; background: var(--bg); color: var(--ink); }
-    .lab-page .ver-play iframe { display: block; width: 100%; height: 100%; border: 0; pointer-events: none; }
+    .lab-page .ver-play { isolation: isolate; }
+    .lab-page .ver-play iframe { position: relative; display: block; width: 100%; height: 100%; border: 0; pointer-events: none; opacity: 0; transition: opacity .25s; }
+    /* until its first frame: the still and a spinner, which turns on the compositor, so it keeps going while the version compiles */
+    .lab-page .ver-spin { position: absolute; z-index: 1; top: 50%; left: 50%; width: 24px; height: 24px; margin: -12px; border: 2px solid rgb(255 255 255 / .25); border-top-color: var(--ink); border-radius: 50%;
+      animation: ver-spin .8s linear infinite; transition: opacity .2s; pointer-events: none; }
+    @keyframes ver-spin { to { transform: rotate(360deg); } }
+    .lab-page .ver-play.ready iframe { opacity: 1; }
+    .lab-page .ver-play.ready :is(.ver-thumb, .ver-spin) { opacity: 0; }
+    .lab-page .ver-wait { display: none; }
+    .lab-page .ver-play.slow:not(.ready):popover-open .ver-wait { display: block; position: absolute; z-index: 1; top: calc(50% + 28px); left: 0; right: 0; text-align: center;
+      font: 400 12px/1.2 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--ink); }
+    .lab-page .ver-play:popover-open .ver-thumb { filter: blur(24px) brightness(.42); }
     .lab-page .ver-bar { display: none; }
     .lab-page li.playing .ver-tile { background: linear-gradient(transparent 55%, rgb(0 0 0 / .75)); border-color: transparent; justify-content: flex-end; }
+    .lab-page li.playing .ver-tile > .ver-thumb { display: none; }
     .lab-page li.playing .ver-tile .ver-n { display: none; }
-    .lab-page li.playing :is(.ver-go, .ver-cap) { color: var(--ink); }
     /* broken out: the same frame, over everything (the popover's top layer), and playable */
     .lab-page .ver-play:popover-open { position: fixed; inset: 0; width: 100%; height: 100%; max-width: none; max-height: none; border: 0; border-radius: 0; }
     .lab-page .ver-play:popover-open iframe { pointer-events: auto; }
@@ -473,23 +484,26 @@
       const sec = document.createElement('section');
       sec.className = 'lab-story';
       sec.setAttribute('aria-labelledby', 'lab-story-h');
+      const thumb = src => `<img class="ver-thumb" src="${new URL(src, SCRIPT).href}" alt="" loading="lazy" decoding="async">`;
+      const verThumb = v => thumb('../posters/' + v.href.replace('labs/notes/', '').replace(/\.html$/, '.jpg'));
       const label = v => v.note || v.name.replace(/^\d+[a-z]?-?/, '').replace(/-/g, ' ');
       sec.innerHTML = `<span class="ctl-head" id="lab-story-h">How it got here</span>
         ${story.paras.map(p => `<p>${p}</p>`).join('')}
         ${story.open ? `<p class="open"><b>Still open</b>${story.open}</p>` : ''}
         ${story.versions.length ? `<ol class="lab-versions" aria-label="Saved versions, oldest first">
-          ${story.versions.map((v, i) => `<li><button type="button" class="ver-tile" data-i="${i}">
+          ${story.versions.map((v, i) => `<li><button type="button" class="ver-tile" data-i="${i}">${verThumb(v)}
             <span class="ver-n">${v.name.match(/^\d+[a-z]?/)?.[0] || i + 1}</span>
             <span><span class="ver-cap">${label(v)}</span><br><span class="ver-go">Play ▸</span></span></button></li>`).join('')}
-          <li><button type="button" class="ver-now"><span class="ver-n">Now</span>
+          <li><button type="button" class="ver-now">${thumb('../posters/' + slug + '.jpg')}<span class="ver-n">Now</span>
             <span><span class="ver-cap">this lab, as it is today</span><br><span class="ver-go">${phone.matches ? 'See it ▴' : 'Playing ▸'}</span></span></button></li>
         </ol>` : ''}`;
       panel.append(sec);
       if (!story.versions.length) return;
 
-      let cur = null;   // { li, play, frame }
+      let cur = null, slowT = 0;   // cur: { li, play, frame }
       const stop = () => {
         if (!cur) return;
+        clearTimeout(slowT);
         if (cur.play.matches?.(':popover-open')) cur.play.hidePopover();
         cur.play.remove();
         cur.li.classList.remove('playing');
@@ -506,13 +520,15 @@
         const p = document.createElement('div');
         p.className = 'ver-play';
         p.setAttribute('popover', 'manual');
-        p.innerHTML = `<iframe title="${title} version ${v.name}" src="../${v.href}?embed=1" tabindex="-1"></iframe>
+        p.innerHTML = `${verThumb(v)}<span class="ver-spin" aria-hidden="true"></span><span class="ver-wait">Still loading…</span><iframe title="${title} version ${v.name}" src="../${v.href}?embed=1" tabindex="-1"></iframe>
           <div class="ver-bar"><span>${title} · ${v.name.match(/^\d+[a-z]?/)?.[0] || ''} · ${label(v)}</span><button type="button">Close</button></div>`;
         p.querySelector('button').addEventListener('click', () => { p.hidePopover(); li.querySelector('.ver-tile').focus(); });
         li.prepend(p);
         li.classList.add('playing');
-        li.querySelector('.ver-go').textContent = 'Full screen ⤢';
+        li.querySelector('.ver-go').textContent = 'Loading…';
         cur = { li, play: p, frame: p.querySelector('iframe') };
+        // a heavy old version can take a while to compile: say so rather than just spin
+        slowT = setTimeout(() => { p.classList.add('slow'); li.querySelector('.ver-go').textContent = 'Still loading…'; }, 12000);
       };
       sec.querySelector('.lab-versions').addEventListener('click', e => {
         if (e.target.closest('.ver-now')) {
@@ -524,6 +540,13 @@
         if (!tile) return;
         const li = tile.parentElement;
         if (cur?.li === li) breakOut(); else play(li, story.versions[+tile.dataset.i]);
+      });
+      // the embed hooks say when the version has drawn its first frame
+      addEventListener('message', e => {
+        if (e.data?.feed !== 'ready' || !cur || e.source !== cur.frame.contentWindow) return;
+        clearTimeout(slowT);
+        cur.play.classList.add('ready');
+        cur.li.querySelector('.ver-go').textContent = 'Full screen ⤢';
       });
       addEventListener('keydown', e => { if (e.key === 'Escape' && cur?.play.matches?.(':popover-open')) cur.play.hidePopover(); });
     }, () => {});

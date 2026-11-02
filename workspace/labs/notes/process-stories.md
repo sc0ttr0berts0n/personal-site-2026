@@ -20,10 +20,9 @@ Each chevron is a sealed glass vessel of liquid. The first versions were a good 
 
 The turn was the color. The liquid sat in an ombre, and for some reason that fired off a memory of iodine clock reactions: clear to black, all at once. Now fronts nucleate under the surface and sweep the vessel, stepping the color along the palette, with a thin rainbow sheen riding each front. Then I tied it to the smacks: each hit starts a front where it lands. Two separate rhythms were too busy, and one nudge can reasonably cause both.
 
-It's the call I'm proudest of. I wish it were something more clever, but it's just so good-looking, and it's often people's favorite. Later came the flip: an anticipation tilt, a 180, a little overshoot and settle, with the liquid lagging behind the glass.
+It's the call I'm proudest of. I wish it were something more clever, but it's just so good-looking, and it's often people's favorite. Later came the flip: an anticipation tilt, a 180, a little overshoot and settle, with the liquid lagging behind the glass. Most recently, a press starts a reaction right where you touch, so you can set off the chemistry yourself.
 
 *Versions: `vessel/09` (before the reaction) → `vessel/13-pre-gravity-flip` (reaction, no flip) → live.*
-*Still open: a tap should drop in a reagent and start a front where you touch.*
 
 ## Neon Oil
 
@@ -111,8 +110,10 @@ You see a fine grid, slowly zooming. It turns out the camera is locked to the ma
 
 Every revision was about the loop. If a lab goes on a journey, it's more fun if it loops, and novel loop seams are something I'm always chasing. First, the splat tore open to reveal the next drop. Nice, but it was an effect. Then the next drop fell through the splat. Now the next mark pops up out of the splat on impact, the floor opens in the splat's own shape, and down they both go.
 
-Along the way: lose the sharp corners and go pure goop, true free fall from rest, and it tilts toward your finger and flutters like a parachute as it speeds up.
+Along the way: lose the sharp corners and go pure goop, true free fall from rest, and it flutters like a parachute as it speeds up.
 
-I'm not married to all of it. I'd still like a putty or clay feel, but right now it's too 2D. It might be more fun if it tumbled and could land in any orientation.
+Then I let it tumble. It used to lean toward your finger and level out just before impact, so it always met the floor flat and square. Now a tap or a flick sends it spinning, it never rights itself, and it splats however it lands, with the puddle, fingers, spray and hole all following how it came down. Turned edge-on, the flat sheet vanished, so I asked for thickness. Now it has a gooey rim that catches the light as it rolls.
+
+I'm not married to all of it. I'd still like a putty or clay feel.
 
 *Versions: none saved.*
