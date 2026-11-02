@@ -184,7 +184,7 @@ export const STORIES = {
   },
   "neural": {
     "paras": [
-      "A small network learns the logo live. For dramatic effect, I fed color noise into the network as a starting point and let it find its way to the logo's sharp, high-contrast black and white. So the color became the error. Vivid noise at the start is how wrong the network still is, and it fades to pure black and white as it learns. You watch it get it right without a chart. Scribble on it and it forgets, then heals, and if nobody scribbles, it scribbles on itself."
+      "A small network learns the logo live. For dramatic effect, I fed color noise into the network as a starting point and let it find its way to the logo's sharp, high-contrast black and white. So the color became the error. Vivid noise at the start is how wrong the network still is, and it fades to pure black and white as it learns. You can watch it get it right in the picture alone, but the data viz is part of the show too: a diagram of the network with its neurons lighting up, an error curve, and a filmstrip of past generations. They sit in the empty space around the logo and fade out before they reach it. Scribble on it and it forgets, then heals, and if nobody scribbles, it scribbles on itself."
     ],
     "versions": [
       {
