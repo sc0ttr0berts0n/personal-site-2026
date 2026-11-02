@@ -51,7 +51,6 @@ export const ARTIST = {
   line: 'Creative Developer',
   links: [
     { label: 'Email', href: 'mailto:you@example.com', text: 'you@example.com' },
-    { label: 'Instagram', href: '#', text: '@placeholder' },
     { label: 'GitHub', href: 'https://github.com/sc0ttr0berts0n', text: 'sc0ttr0berts0n' },
     { label: 'LinkedIn', href: '#', text: 'placeholder' }
   ]
