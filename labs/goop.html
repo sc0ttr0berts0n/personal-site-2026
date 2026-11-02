@@ -40,9 +40,9 @@ const muOf = v => 50 * Math.pow(2, 5 * v);
 const lab = createLab({
   number: '03',
   title: 'Neon Oil',
-  blurb: 'The mark rises out of a pool of black oil. Sheets of it slide off, long ropes stretch back down to the pool and snap, and the clean mark shows through.',
+  blurb: 'The logo rises out of a pool of black oil. Sheets of it slide off, long ropes stretch back down to the pool and snap, and the clean logo shows through.',
   teaches: 'Beautiful eye candy for its own sake. Raw WebGL2, no library: the logo’s outline is baked into a half-float texture, and one large shader draws the oil, the drips and the reflections. It’s the heaviest shader on the site, so it compiles in the background while the page stays responsive.',
-  hint: 'drag to turn the camera around the mark',
+  hint: 'drag to turn the camera around the logo',
   feed: { touch: 'drag', hint: 'drag to orbit' },
   palettes: [OIL, HONEY, SLIME, GRAPE, NEON],
   defaultPalette: 'neon',
@@ -55,10 +55,10 @@ const lab = createLab({
     drips:     { type: 'range', label: 'Drip rate', min: 0, max: 2, step: 0.05, value: 0.2, unit: '×' },
     wobble:    { type: 'range', label: 'Hanging wobble', min: 0, max: 1, step: 0.01, value: 0.4 },
     hPool:     { type: 'heading', label: 'Pool' },
-    meniscus:  { type: 'range', label: 'Meniscus (pool climbs the mark)', min: 0, max: 2, step: 0.01, value: 1 },
+    meniscus:  { type: 'range', label: 'Meniscus (pool climbs the logo)', min: 0, max: 2, step: 0.01, value: 1 },
     ripple:    { type: 'range', label: 'Surface ripple', min: 0, max: 4, step: 0.05, value: 2, unit: '×' },
     gloss:     { type: 'range', label: 'Gloss', min: 0, max: 1, step: 0.01, value: 0.86 },
-    under:     { type: 'select', label: 'Mark underneath', value: 'neon', options: [['neon', 'Neon glow'], ['lacquer', 'Lacquer'], ['oil', 'Black (oil all the way)']] },
+    under:     { type: 'select', label: 'Logo underneath', value: 'neon', options: [['neon', 'Neon glow'], ['lacquer', 'Lacquer'], ['oil', 'Black (oil all the way)']] },
     liftHead:  { type: 'heading', label: 'Lift' },
     loop:      { type: 'toggle', label: 'Lift, drain, dunk on a loop', value: true },
     rise:      { type: 'range', label: 'Lift duration', min: 2, max: 15, step: 0.5, value: 4, unit: ' s', when: P => P.loop },
@@ -69,7 +69,7 @@ const lab = createLab({
     quality:   { type: 'select', label: 'Quality', value: 'high', options: [['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['ultra', 'Ultra (4× cost)']] }
   },
   actions: [
-    { label: 'Pour on the mark', primary: true, action: () => { pourAll(); wake(); } },
+    { label: 'Pour on the logo', primary: true, action: () => { pourAll(); wake(); } },
     { label: 'Dunk it', action: () => { if (!P.loop) lab.set('loop', true); cyc.phase = 'sink'; cyc.u = 1 - lc; cyc.t = 0; wake(); } },
     { label: 'Drop a stone', action: () => { addRing(0.4 - 1.6 * rand(), 2.2 + 1.2 * rand(), 0.16 * lab.params.ripple); wake(); } }
   ]
@@ -1044,7 +1044,7 @@ let drag = null;
 canvas.style.touchAction = 'none';
 canvas.style.cursor = 'grab';
 canvas.tabIndex = 0;
-canvas.setAttribute('aria-label', 'A pool of black oil with the mark standing in it. Drag to turn the camera around the mark. Enter pours on the mark, space drops a stone.');
+canvas.setAttribute('aria-label', 'A pool of black oil with the logo standing in it. Drag to turn the camera around the logo. Enter pours on the logo, space drops a stone.');
 canvas.addEventListener('pointerdown', e => {
   if (drag) return;
   // the hand's own angles, unbanded, picked up from wherever the view is now (maybe mid-stretch) so nothing jumps

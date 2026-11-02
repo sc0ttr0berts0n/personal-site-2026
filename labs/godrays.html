@@ -29,7 +29,7 @@ const MOTES = 9000;
 const lab = createLab({
   number: '06',
   title: 'Radiant',
-  blurb: 'A lamp glows behind the mark in a hazy room and carves out light shafts as the light shines through.',
+  blurb: 'A lamp glows behind the logo in a hazy room and carves out light shafts as the light shines through.',
   teaches: 'Two-pass god rays in three.js: render the lamp and a black silhouette of the logo off screen, then blur it outward from the light. Colors are mixed in OKLab, so gradients pass through clean hues instead of muddy gray.',
   hint: 'move to steer the light · click to pin it<br>on touch: drag to steer · lift to pin',
   feed: { touch: 'drag', hint: 'drag to steer the light · lift to pin it' },
@@ -40,7 +40,7 @@ const lab = createLab({
     hLamp:     { type: 'heading', label: 'Lamp' },
     intensity: { type: 'range', label: 'Light intensity', min: 0, max: 4, step: 0.05, value: 1.6 },
     size:      { type: 'range', label: 'Light size', min: 0.2, max: 2.5, step: 0.05, value: 0.7 },
-    tilt:      { type: 'range', label: 'Mark tilts toward the pointer', min: 0, max: 35, step: 1, value: 12, unit: '°' },
+    tilt:      { type: 'range', label: 'Logo tilts toward the pointer', min: 0, max: 35, step: 1, value: 12, unit: '°' },
     hShafts:   { type: 'heading', label: 'Shafts' },
     exposure:  { type: 'range', label: 'Scattering', min: 0, max: 4, step: 0.05, value: 1.6 },
     density:   { type: 'range', label: 'Shaft length', min: 0.1, max: 1, step: 0.01, value: 0.9, format: v => Math.round(v * 100), unit: '%' },
