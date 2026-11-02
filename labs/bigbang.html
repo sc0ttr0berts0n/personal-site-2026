@@ -71,7 +71,17 @@ const lab = createLab({
     lens:     { type: 'range', label: 'Lensing (spacetime warp)', min: 0, max: 2, step: 0.05, value: 1 },
     hole:     { type: 'range', label: 'Black hole (the mark’s shadow)', min: 0, max: 1, step: 0.05, value: 1 },
     band:     { type: 'range', label: 'Disk band tilt', min: -45, max: 45, step: 1, value: 10, unit: '°', when: P => P.disk > 0 },
-    embers:   { type: 'range', label: 'Orbiting embers', min: 0, max: 1, step: 0.01, value: 0.35 },
+    hEmbers:  { type: 'heading', label: 'Orbiting embers' },
+    embers:   { type: 'range', label: 'Amount', min: 0, max: 1, step: 0.01, value: 0.35 },
+    emberBand:{ type: 'range', label: 'Share on the band’s plane', min: 0, max: 1, step: 0.01, value: 0.5, when: P => P.embers > 0 },
+    emberSpeed:{ type: 'range', label: 'Speed', min: 0, max: 4, step: 0.05, value: 1, unit: '×', when: P => P.embers > 0 },
+    emberR:   { type: 'range', label: 'Innermost radius', min: 1, max: 12, step: 0.1, value: 4.2, when: P => P.embers > 0 },
+    emberSpread:{ type: 'range', label: 'Radius spread', min: 0, max: 16, step: 0.1, value: 6, when: P => P.embers > 0 },
+    emberWobble:{ type: 'range', label: 'Wobble', min: 0, max: 0.4, step: 0.01, value: 0.07, when: P => P.embers > 0 },
+    emberFall:{ type: 'range', label: 'Fall-in at ignition', min: 0, max: 5, step: 0.05, value: 1.6, when: P => P.embers > 0 },
+    emberTrail:{ type: 'range', label: 'Trail length', min: 0.1, max: 8, step: 0.05, value: 1, unit: '×', when: P => P.embers > 0 },
+    emberGlow:{ type: 'range', label: 'Brightness', min: 0, max: 4, step: 0.05, value: 1, unit: '×', when: P => P.embers > 0 },
+    emberTwinkle:{ type: 'range', label: 'Twinkle', min: 0, max: 1, step: 0.01, value: 0.4, when: P => P.embers > 0 },
     hReplay:  { type: 'heading', label: 'Replay' },
     loop:     { type: 'toggle', label: 'Auto replay', value: true },
     hold:     { type: 'range', label: 'Hold before replay', min: 2, max: 30, step: 1, value: 8, unit: ' s', when: P => P.loop },
@@ -658,8 +668,8 @@ const streaks = Array.from({ length: STREAKS }, () => {
 });
 const streakGeo = new LineSegmentsGeometry();
 // room for three segments a streak: on replay each throws a spark while its orbiting ember (two) flies off
-streakGeo.setPositions(new Float32Array(STREAKS * 18));
-streakGeo.setColors(new Float32Array(STREAKS * 18));
+streakGeo.setPositions(new Float32Array(STREAKS * 24));
+streakGeo.setColors(new Float32Array(STREAKS * 24));
 const streakPos = streakGeo.attributes.instanceStart.data, streakCol = streakGeo.attributes.instanceColorStart.data;
 const streakMat = lineMat({ vertexColors: true, linewidth: 1.5 });
 const streakLines = new LineSegments2(streakGeo, streakMat);
@@ -671,8 +681,7 @@ scene.add(streakLines);
 {
   const orng = mulberry32(77);
   for (const sp of streaks) {
-    const R = 4.2 + orng() ** 1.5 * 6;
-    sp.orb = { band: orng() < 0.5, R, th: orng() * Math.PI * 2, w: 2.4 * (4.2 / R) ** 1.5, fl: orng() * 6.3 };
+    sp.orb = { u: orng() ** 1.5, pick: orng(), th: orng() * Math.PI * 2, fl: orng() * 6.3 };
   }
 }
 
@@ -773,7 +782,7 @@ lab.on('change', key => { if (key === 'quality') sizeNebula(); dirty = 40; });
 // snapshot of wherever the sequence was back to the cloud as it is at loopS(), just before the mark coalesces,
 // then hands over to 'seq' there. The lab opens at loopS() too, so it loops collapse, hold, blast.
 // Everything is a pure function of S (or B and the snapshot), so seeking and replaying never pop.
-let mode = 'seq', S = 0, B = 0, enterS = -1, churn = 0, beatT = 0, diskT = 0, diskOut = 1, yaw = 0, from = null;
+let mode = 'seq', S = 0, B = 0, enterS = -1, churn = 0, beatT = 0, diskT = 0, emberT = 0, diskOut = 1, yaw = 0, from = null;
 const clamp01 = x => Math.max(0, Math.min(1, x));
 function smooth(e0, e1, x) { const t = clamp01((x - e0) / (e1 - e0)); return t * t * (3 - 2 * t); }
 const mix = (a, b, f) => a + (b - a) * f;
@@ -883,6 +892,7 @@ function update(dt) {
     churn += dt * P.time * P.flow / 3;
     beatT += dt * P.time * P.pulseRate;
     diskT += dt * P.time * P.diskSpin;
+    emberT += dt * P.time * P.diskSpin * P.emberSpeed;   // its own clock, so the speed slider doesn't jump them round
     if (!press) { const r = Math.exp(-dt * 1.6); dragYaw *= r; dragPitch *= r; }
     if (mode === 'seq') {
       S += dt * P.time;
@@ -1025,20 +1035,20 @@ function update(dt) {
   // orbiting embers: after ignition, on every tilted plane round the mark; the replay blast flings them out
   if (st.emb > 0.003 && P.embers > 0) {
     // after ignition they fall in from farther out and settle onto their orbits; on replay they blow out
-    const inward = mode === 'blast' ? 0 : 1.6 * Math.exp(-Math.max(0, st.tau) * 1.1);
+    const inward = mode === 'blast' ? 0 : P.emberFall * Math.exp(-Math.max(0, st.tau) * 1.1);
     const a = [0, 0, 0], m = [0, 0, 0], h = [0, 0, 0];
     const at = (o, R, th, out) => {
       const c = Math.cos(th) * R, s = Math.sin(th) * R;
-      if (!o.band) { out[0] = c; out[1] = s; out[2] = ZC; return; }
+      if (o.pick >= P.emberBand) { out[0] = c; out[1] = s; out[2] = ZC; return; }
       out[0] = bandU.x * c + bandV.x * s; out[1] = bandU.y * c + bandV.y * s; out[2] = ZC + bandU.z * c + bandV.z * s;
     };
     for (const sp of streaks) {
       if (sp.pick > P.embers) continue;
-      const th = sp.orb.th + sp.orb.w * diskT, o = sp.orb;
-      const R = o.R * (mode === 'blast' ? diskOut : 1 + inward * (0.6 + 0.4 * Math.sin(o.fl * 3))) * (1 + 0.07 * Math.sin(th * 2 + o.fl));
-      const d = 0.12;
+      const o = sp.orb, R0 = P.emberR + o.u * P.emberSpread, th = o.th + 2.4 * (4.2 / R0) ** 1.5 * emberT;
+      const R = R0 * (mode === 'blast' ? diskOut : 1 + inward * (0.6 + 0.4 * Math.sin(o.fl * 3))) * (1 + P.emberWobble * Math.sin(th * 2 + o.fl));
+      const d = 0.12 * P.emberTrail;
       at(o, R, th - d, a); at(o, R, th - d / 2, m); at(o, R, th, h);
-      const fade = st.emb * (0.6 + 0.4 * Math.sin(diskT * 2.3 + o.fl * 9)), c = lut(0.08 + 0.45 * sp.hue);
+      const fade = st.emb * P.emberGlow * (1 - P.emberTwinkle + P.emberTwinkle * Math.sin(diskT * 2.3 + o.fl * 9)), c = lut(0.08 + 0.45 * sp.hue);
       const f0 = fade * 0.08, f1 = fade * 0.45;
       pos.set([...a, ...m, ...m, ...h], n * 6);
       col.set([c.r * f0, c.g * f0, c.b * f0, c.r * f1, c.g * f1, c.b * f1, c.r * f1, c.g * f1, c.b * f1, c.r * fade, c.g * fade, c.b * fade], n * 6);
