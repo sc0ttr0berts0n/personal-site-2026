@@ -39,7 +39,7 @@ const GLASSES = {
 const lab = createLab({
   number: '02',
   title: 'Prism',
-  blurb: 'A laser crosses the mark from above. Each color bends at its own angle, and steep rays get trapped, bouncing around inside the glass.',
+  blurb: 'A laser crosses the logo from above. Each color bends at its own angle, and steep rays get trapped, bouncing around inside the glass.',
   teaches: 'three.js loaded straight from a CDN through an import map, with no build step. A custom GLSL shader bends the background grid through the glass once per color channel, which is where the rainbow fringes come from, and the beams are pixel-exact screen-space lines with bloom on top. The beams follow Snell’s law at seven wavelengths; the grid fakes it with three, one per color channel.',
   hint: 'move to aim · drag the emitter to move it<br>on touch: drag to aim',
   feed: { touch: 'drag', hint: 'drag to aim · drag the emitter to move it' },
@@ -61,10 +61,10 @@ const lab = createLab({
     waves:      { type: 'range', label: 'Wavelengths traced', min: 3, max: 24, step: 1, value: 7 },
     fresnel:    { type: 'toggle', label: 'Fresnel reflections', value: false },
     bounces:    { type: 'range', label: 'Max bounces per ray', min: 4, max: 60, step: 1, value: 4 },
-    absorb:     { type: 'range', label: 'Glass absorption (lost per mark width)', min: 0, max: 0.9, step: 0.01, value: 0, format: v => Math.round(v * 100), unit: '%' },
+    absorb:     { type: 'range', label: 'Glass absorption (lost per logo width)', min: 0, max: 0.9, step: 0.01, value: 0, format: v => Math.round(v * 100), unit: '%' },
     hBeam:      { type: 'heading', label: 'Beam' },
     // where the emitter sits on a ring around the mark: 0° is to the right, angles run clockwise; dragging it sets this too
-    emitter:    { type: 'range', label: 'Emitter position (around the mark)', min: -180, max: 180, step: 1, value: 166, unit: '°' },
+    emitter:    { type: 'range', label: 'Emitter position (around the logo)', min: -180, max: 180, step: 1, value: 166, unit: '°' },
     beam:       { type: 'range', label: 'Beam brightness', min: 0.2, max: 1.5, step: 0.05, value: 0.85 },
     width:      { type: 'range', label: 'Beam width', min: 0.5, max: 4, step: 0.1, value: 1.9, unit: ' px' },
     bloom:      { type: 'range', label: 'Bloom', min: 0, max: 2, step: 0.05, value: 0.4 },
@@ -86,14 +86,14 @@ const lab = createLab({
     rippleScale:{ type: 'range', label: 'Ripple scale', min: 0.3, max: 4, step: 0.05, value: 1.15, unit: '×', when: P => P.ripple > 0 },
     hBack:      { type: 'heading', label: 'Backlight' },
     backlight:  { type: 'range', label: 'Backlight', min: 0, max: 2.5, step: 0.05, value: 0.1 },
-    backShape:  { type: 'select', label: 'Backlight shape', value: 'pool', options: [['mark', 'Mark-shaped glow'], ['pool', 'Round pool']], when: P => P.backlight > 0 },
+    backShape:  { type: 'select', label: 'Backlight shape', value: 'pool', options: [['mark', 'Logo-shaped glow'], ['pool', 'Round pool']], when: P => P.backlight > 0 },
     backSize:   { type: 'range', label: 'Backlight size', min: 0.8, max: 2.4, step: 0.05, value: 0.9, unit: '×', when: P => P.backlight > 0 },
     flicker:    { type: 'range', label: 'Neon flicker (edges and backlight)', min: 0, max: 1, step: 0.05, value: 0 },
     hFilm:      { type: 'heading', label: 'Film' },
     grain:      { type: 'range', label: 'Film grain', min: 0, max: 0.2, step: 0.01, value: 0.06 },
     vignette:   { type: 'range', label: 'Vignette', min: 0, max: 1.6, step: 0.05, value: 1.15 },
     hView:      { type: 'heading', label: 'View' },
-    rotation:   { type: 'range', label: 'Mark rotation', min: -180, max: 180, step: 1, value: 0, unit: '°' },
+    rotation:   { type: 'range', label: 'Logo rotation', min: -180, max: 180, step: 1, value: 0, unit: '°' },
     sweep:      { type: 'toggle', label: 'Auto sweep the beam when idle', value: true },
     msaa:       { type: 'toggle', label: 'Antialiasing (4× MSAA)', value: true }
   }
@@ -667,7 +667,7 @@ function frame(dt, t) {
     const hi = G.n + G.spread * P.dispersion;
     lab.hud(h0
       ? `θᵢ <b>${theta.toFixed(1)}°</b> · n <b>${G.n.toFixed(3)}–${hi.toFixed(3)}</b> · θc <b>${(Math.asin(1 / G.n) * 180 / Math.PI).toFixed(1)}°</b> · internal reflections <b>${stats.tir}</b> · rays <b>${stats.rays}</b>`
-      : `beam misses the mark · move the pointer onto the chevrons`);
+      : `beam misses the logo · move the pointer onto the chevrons`);
   }
   composer.render();
 }
