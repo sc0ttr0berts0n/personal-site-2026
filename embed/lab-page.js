@@ -140,7 +140,7 @@
     .lab-page .lab-story p { margin: 0; font-size: 14px; line-height: 1.6; text-wrap: pretty; }
     .lab-page .lab-story .open { color: var(--dim); font-size: 13px; }
     .lab-page .lab-story .open b { font: 500 10px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--ink); margin-right: 6px; }
-    .lab-page .lab-versions { list-style: none; margin: 4px 0 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
+    .lab-page .lab-versions { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
     .lab-page .lab-versions li { position: relative; aspect-ratio: 1; }
     .lab-page .ver-tile, .lab-page .ver-now { position: absolute; inset: 0; z-index: 1; display: flex; flex-direction: column; justify-content: space-between; align-items: flex-start;
       padding: 8px; border: 1px solid var(--line); border-radius: 2px; text-align: left; cursor: pointer; -webkit-tap-highlight-color: transparent;
@@ -474,7 +474,7 @@
     addEventListener('pointerup', end);
     addEventListener('pointercancel', end);
 
-    // ---- how it got here: the lab's process story, and its saved versions as squares ----
+    // ---- how it got here: the lab's process story, with its saved versions as squares where it talks about them ----
     // A tap plays a version in its square (stage only, through the feed's embed hooks); a second tap breaks it out
     // full screen, where it can be played with. One plays at a time, so a phone isn't running a stack of old labs.
     import(new URL('../labs/stories.js', SCRIPT)).then(({ STORIES }) => {
@@ -488,12 +488,13 @@
       const verThumb = v => thumb('../posters/' + v.href.replace('labs/notes/', '').replace(/\.html$/, '.jpg'));
       const label = v => v.note || v.name.replace(/^\d+[a-z]?-?/, '').replace(/-/g, ' ');
       sec.innerHTML = `<span class="ctl-head" id="lab-story-h">How it got here</span>
-        ${story.paras.map(p => `<p>${p}</p>`).join('')}
-        ${story.open ? `<p class="open"><b>Still open</b>${story.open}</p>` : ''}
-        ${story.versions.length ? `<ol class="lab-versions" aria-label="Saved versions, oldest first">
-          ${story.versions.map((v, i) => `<li><button type="button" class="ver-tile" data-i="${i}">${verThumb(v)}
+        ${story.blocks.map(b => b.p ? `<p>${b.p}</p>` : `<ol class="lab-versions" aria-label="Saved versions">
+          ${b.versions.map(i => { const v = story.versions[i]; return `<li><button type="button" class="ver-tile" data-i="${i}">${verThumb(v)}
             <span class="ver-n">${v.name.match(/^\d+[a-z]?/)?.[0] || i + 1}</span>
-            <span><span class="ver-cap">${label(v)}</span><br><span class="ver-go">Play ▸</span></span></button></li>`).join('')}
+            <span><span class="ver-cap">${label(v)}</span><br><span class="ver-go">Play ▸</span></span></button></li>`; }).join('')}
+        </ol>`).join('')}
+        ${story.open ? `<p class="open"><b>Still open</b>${story.open}</p>` : ''}
+        ${story.versions.length ? `<ol class="lab-versions" aria-label="The lab today">
           <li><button type="button" class="ver-now">${thumb('../posters/' + slug + '.jpg')}<span class="ver-n">Now</span>
             <span><span class="ver-cap">this lab, as it is today</span><br><span class="ver-go">${phone.matches ? 'See it ▴' : 'Playing ▸'}</span></span></button></li>
         </ol>` : ''}`;
@@ -530,7 +531,7 @@
         // a heavy old version can take a while to compile: say so rather than just spin
         slowT = setTimeout(() => { p.classList.add('slow'); li.querySelector('.ver-go').textContent = 'Still loading…'; }, 12000);
       };
-      sec.querySelector('.lab-versions').addEventListener('click', e => {
+      sec.addEventListener('click', e => {
         if (e.target.closest('.ver-now')) {
           stop();
           if (phone.matches) scrollTo({ top: 0, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
