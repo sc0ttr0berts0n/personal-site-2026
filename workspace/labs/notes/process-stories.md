@@ -84,7 +84,7 @@ The one real note: solve the pegs from the logo outward instead of dropping the 
 
 ## Neural Mark
 
-A small network learns the logo live. It was color from day one: I picked a starting point as far from the end result as possible, so the journey would look dramatic. But my logo is black and white, and I designed it that way. So the color became the error. Vivid noise at the start is how wrong the network still is, and it fades to pure black and white as it learns. You watch it get it right without a chart. Scribble on it and it forgets, then heals, and if nobody scribbles, it scribbles on itself.
+A small network learns the logo live. For dramatic effect, I fed color noise into the network as a starting point and let it find its way to the logo's sharp, high-contrast black and white. So the color became the error. Vivid noise at the start is how wrong the network still is, and it fades to pure black and white as it learns. You watch it get it right without a chart. Scribble on it and it forgets, then heals, and if nobody scribbles, it scribbles on itself.
 
 *Versions: `neural/01-round1` → live.*
 
