@@ -136,7 +136,7 @@ export const STORIES = {
   "maze": {
     "paras": [
       "This one took the most rounds. The first version filled the search with a rainbow. I hadn't asked for that, and I liked it at first, but slowly I noticed it wasn't communicating anything. It was just eye candy. So I asked what the fill was <em>for</em>, and cut it back, a little at a time, until it showed only the dead ends. Color got one more chance, to show how far each path had reached, and when that wasn't clear enough it went to plain gray.",
-      "The maze is cut along the logo's own grain. The arms meet at 85.6°, not 90°, so every straight edge of the logo is a cell wall, and each chevron holds its own maze. Before a search starts, a dot and a flag drop on and the dot glides to the flag, so the goal is shown, not printed.",
+      "The maze is cut along the logo's own grain. The arms meet at 85.6°, not 90°, so every straight edge of the logo is a cell wall, and each chevron holds its own maze. Before a search starts, a dot and a flag drop on and the dot glides to the flag, so you know what it's looking for.",
       "The big idea came from staring at the zoom-in loop: why can't the tiny logo in the middle literally be the next maze? Now it is. It hides as ordinary dead-end corridors until the solve lights it up, and the dive into it is seamless. I had a color-inversion burst for the finale and cut it, because it was too much noise. The point is a maze within a maze, hidden in plain sight, and I spent a lot of time removing anything flashy that distracted from that."
     ],
     "versions": [
