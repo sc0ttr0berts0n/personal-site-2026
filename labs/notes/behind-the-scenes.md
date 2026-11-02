@@ -352,3 +352,7 @@ Scott walked the saved versions in `notes/versions/goop/`.
 - **Ring it is.** Of the two layouts, ring round the basin or flat strip above it, Scott kept the ring: "all ring." The strip and the temporary switch are gone.
 - **Desktop matches the phone.** Scott liked the phone's chunky blocks, so on desktop the buttons are drawn at two sand cells per pixel. The phone stays at one.
 - **Not chunky after all.** Two cells per pixel on desktop looked awful to Scott ("the buttons look awful"). He asked for finer: one world pixel or half of one. Desktop went to half a sand cell per pixel, about the same 2 CSS px as the phone's whole cell.
+
+## 2026-11-02 — Vessel: the reaction starts under your finger
+
+- **The call:** Scott: a "reaction" (iodine) should start where you press. Until now the color fronts only came from the idle smacks, at points the lab picked, so you could tilt the vessels but never set off the chemistry yourself. Now every press seeds a front at that exact spot in the vessel's own coordinates, so it stays put as the mark tilts.

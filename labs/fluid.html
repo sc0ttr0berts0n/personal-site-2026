@@ -755,6 +755,9 @@ canvas.addEventListener('pointerdown', e => {
   dragging = true; prevAng = Math.atan2(p.y, p.x); thDrag = sim.th; grab = { x: p.x - sim.x, y: p.y - sim.y };
   if (flip) { sim.base = Math.round(sim.th / Math.PI) * Math.PI; flip = null; flipT = lab.params.flipEvery; }   // grabbed mid-flip: keep the nearer side
   sim.rockFade = 0;
+  // a reaction starts under the finger (world to vessel coords, the shader's rotI)
+  const c = Math.cos(sim.th), sn = Math.sin(sim.th), wx = p.x - sim.x, wy = p.y - sim.y;
+  pulse(c * wx + sn * wy, c * wy - sn * wx, 1);
 });
 canvas.addEventListener('pointermove', e => {
   const p = toWorld(e);
@@ -950,8 +953,11 @@ function wetPoint(side) {
 // Nucleate a front at (x, y) in vessel coords. A harder hit flips further.
 function pulse(x, y, k) {
   if (!lab.params.chroma) return;
-  // every hit gets its front: when all six slots are busy the oldest (nearly done sweeping) folds into the base
-  if (chem.fronts.length >= 6) chem.base = (chem.base + chem.fronts.shift().step) % 2;
+  // when all six slots are busy the oldest folds into the base, once it has swept enough not to pop; mashing skips a few
+  if (chem.fronts.length >= 6) {
+    if ((chem.clk - chem.fronts[0].t0) * lab.params.waveSpeed < MAX_R * 0.6) return;
+    chem.base = (chem.base + chem.fronts.shift().step) % 2;
+  }
   chem.fronts.push({ x, y, t0: chem.clk, step: 0.2 + 0.4 * k * (0.7 + 0.6 * Math.random()) });
 }
 function stepClock(dt) {
