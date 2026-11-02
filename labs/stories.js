@@ -76,7 +76,7 @@ export const STORIES = {
   },
   "bigbang": {
     "paras": [
-      "As an astrophotographer, I was curious how realistically I could render a nebula. Eventually I decided that wasn't a fair ask. So I sent it off in a few directions, fed it Shadertoy pieces I liked (the blob from one, without its dithering; a breathing ring from another; plus metaballs), and the nebula it has now showed up out of the blue while I was focused on other labs. I tuned it until I liked it.",
+      "As an astrophotographer, I was curious how realistically I could render a nebula. Eventually I decided that wasn't a fair ask. So I sent it off in a few directions, fed it Shadertoy pieces I liked (the blob from one, without its dithering; a breathing ring from another; plus metaballs), and what came back wasn't exactly under my direction. It became more about the coalescence and the explosions than riding entirely on the nebula's authenticity. By going abstract, I wasn't bound to the integrity of the effect.",
       "The trouble was the bang. It was built exactly to my brief, and it was \"finnne\". It was the only lab that didn't keep the logo on screen. I asked Claude what to do about that, and it suggested running the story backwards: a cold cloud that collapses under gravity and ignites as the logo. I loved it. Now it tells the same story as Neural and Goop: out of chaos, the logo.",
       "Honestly, I'm a little bored with it. The ending reads like a black hole, and I might go louder with it, get weird, and have something accrete into the logo."
     ],
