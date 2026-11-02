@@ -273,6 +273,7 @@ vec4 diskEmit(vec2 xy, float de, float z, float t, float spread, out float thick
   thick = (0.1 + 0.2 * de) * spread;
   if (de > 2.4) return vec4(0.0);
   float h = z * spread / thick;
+  if (abs(h) > 2.5) return vec4(0.0);
   float vz = exp(-h * h);
   float prof = smoothstep(0.02, 0.14, de) * exp(-de * 1.9) * (1.0 - smoothstep(1.6, 2.4, de));
   // Sheared for good, the inner edge would lap the outer more every second and the streaks would wind ever finer
@@ -285,6 +286,13 @@ vec4 diskEmit(vec2 xy, float de, float z, float t, float spread, out float thick
   float e = prof * vz * (0.08 + 1.5 * band) / (spread * spread);   // the same gas spread thinner
   vec3 dc = pal(mix(0.02, 0.32, smoothstep(0.0, 1.6, de))) * (1.0 + 2.0 * exp(-de * 5.0));
   return vec4(dc * e * 1.6, e * 0.3);
+}
+// light unsharp mask on an upscaled cloud target, shared by the composite and the band's front layer
+vec4 unsharp(sampler2D t, vec2 uv) {
+  vec2 tx = 1.0 / vec2(textureSize(t, 0));
+  vec4 c = texture2D(t, uv);
+  vec4 blur = 0.25 * (texture2D(t, uv + vec2(tx.x, 0.0)) + texture2D(t, uv - vec2(tx.x, 0.0)) + texture2D(t, uv + vec2(0.0, tx.y)) + texture2D(t, uv - vec2(0.0, tx.y)));
+  return max(vec4(0.0), c + (c - blur) * 0.35);
 }
 // the final tone curve, shared so the band grades exactly like the cloud it belongs to
 vec3 toneGrade(vec3 c) {
@@ -448,7 +456,7 @@ void main() {
     vec3 lo = uBandRot * (ro - bc), ld = uBandRot * rd;
     float zm = 1.9 * uDiskOut, lz = abs(ld.z) < 1e-4 ? 1e-4 : ld.z;
     float s0 = (-zm - lo.z) / lz, s1 = (zm - lo.z) / lz;
-    float sa = max(min(s0, s1), 0.0), sb = min(max(s0, s1), sa + 30.0);
+    float sa = max(min(s0, s1), 0.0), sb = min(max(s0, s1), sa + 30.0 * uDiskOut);
     if (uFront > 0.5) {
       float th0 = -ro.z / rd.z;
       sb = th0 > 0.0 && sdf(ro.xy + rd.xy * th0) < 0.0 ? min(sb, th0) : -1.0;
@@ -529,11 +537,7 @@ void main() {
     uv = cp.xy / cp.w * 0.5 + 0.5;
     srd = normalize(vec3(src, 0.0) - ro);
   }
-  vec4 neb = texture2D(uNeb, uv);
-  // light unsharp mask on the upscaled cloud target
-  vec2 tx = 1.0 / vec2(textureSize(uNeb, 0));
-  vec4 blur = 0.25 * (texture2D(uNeb, uv + vec2(tx.x, 0.0)) + texture2D(uNeb, uv - vec2(tx.x, 0.0)) + texture2D(uNeb, uv + vec2(0.0, tx.y)) + texture2D(uNeb, uv - vec2(0.0, tx.y)));
-  neb = max(vec4(0.0), neb + (neb - blur) * 0.35);
+  vec4 neb = unsharp(uNeb, uv);
   float hd = max(sd, 0.0);
   vec3 halo = pal(0.2) * uHalo * (0.05 / (0.05 + hd)) * exp(-hd * 0.9);
   vec3 c = stars(srd) * (1.0 - neb.a * 0.92) + neb.rgb + halo;
@@ -664,7 +668,7 @@ const streaks = Array.from({ length: STREAKS }, () => {
   };
 });
 const streakGeo = new LineSegmentsGeometry();
-// room for three segments a streak: on replay each throws a spark while its orbiting ember (two) flies off
+// room for four segments a streak: as the mark coalesces, its infall streak (two) and its orbiting ember (two) overlap
 streakGeo.setPositions(new Float32Array(STREAKS * 24));
 streakGeo.setColors(new Float32Array(STREAKS * 24));
 const streakPos = streakGeo.attributes.instanceStart.data, streakCol = streakGeo.attributes.instanceColorStart.data;
@@ -685,8 +689,8 @@ scene.add(streakLines);
 // ---- the disk band: Gargantua's look, a round disk seen almost edge on, crossing the mark a little tilted ----
 // The cloud march draws it, the same way and with the same diskEmit as the disk round the outline, so the two are
 // one system: same resolution, history, sharpening, grade and bloom, and they blow out together on replay. Where it
-// crosses the outline disk it dims it, and the lensing bends both round the hole. This object only holds its tilt.
-const band = new THREE.Object3D();
+// crosses the outline disk it dims it, and the lensing bends both round the hole. This only holds its tilt.
+const bandQ = new THREE.Quaternion();
 // the part of the band in front of the mark: the march's front pass, through its own history, graded and sharpened
 // like the composite, then laid over the mark
 const frontRT = new THREE.WebGLRenderTarget(4, 4, rtOpts);
@@ -703,10 +707,7 @@ ${GLSL_COMMON}
 uniform sampler2D uNeb;
 uniform float uW;
 void main() {
-  vec4 neb = texture2D(uNeb, vUv);
-  vec2 tx = 1.0 / vec2(textureSize(uNeb, 0));
-  vec4 blur = 0.25 * (texture2D(uNeb, vUv + vec2(tx.x, 0.0)) + texture2D(uNeb, vUv - vec2(tx.x, 0.0)) + texture2D(uNeb, vUv + vec2(0.0, tx.y)) + texture2D(uNeb, vUv - vec2(0.0, tx.y)));
-  neb = max(vec4(0.0), neb + (neb - blur) * 0.35);
+  vec4 neb = unsharp(uNeb, vUv);
   gl_FragColor = vec4(toneGrade(neb.rgb) * uW, clamp(neb.a, 0.0, 1.0) * uW);
 }`
 }));
@@ -815,6 +816,7 @@ function seqState(S) {
     disk: smooth(-0.3, 1.6, tau),                      // what's left over settles into a disk round the mark
     lens: smooth(-0.1, 0.8, tau),
     emb: smooth(-0.1, 0.9, tau),                      // embers fall in onto orbits from ignition on
+    fall: lab.params.emberFall * Math.exp(-Math.max(0, tau) * 1.1), out: 1,
     b: 0
   };
 }
@@ -840,6 +842,7 @@ function blastState(b) {
     halo: F.halo * Math.exp(-b * 5),
     disk: F.disk * (1 - smooth(0, 0.5 * TB, b)), lens: F.lens * (1 - smooth(0, 0.3 * TB, b)),
     emb: F.emb * (1 - smooth(0, 0.8 * TB, b)),
+    fall: F.fall * (1 - smooth(0, 0.5 * TB, b)), out: F.out + b * lab.params.force * 0.9,
     az: F.az * (1 - kc), el: F.el,
     b
   };
@@ -902,7 +905,7 @@ function update(dt) {
   }
   st = mode === 'blast' ? blastState(B) : seqState(S);
   // on replay the disk, the band and the embers all blow outward at the same rate
-  diskOut = mode === 'blast' ? 1 + st.b * P.force * 0.9 : 1;
+  diskOut = st.out;
 
   // camera: a slow tilted orbit around the cloud that unwinds to face-on as the mark condenses
   const front = st.front;
@@ -946,7 +949,9 @@ function update(dt) {
   nu.uDiskOut.value = diskOut;
   // the gas can only be within (start radius / contraction) of the mark
   const C = Math.exp(st.L);
-  nu.uBox.value.set(3.2 + 13 / C, 3.2 + 13 / C, HZ + 8 / C / st.flat + 0.3);
+  // and the disk round the outline can blow out past that, for as long as it's there to see
+  const boxOut = 1 + (diskOut - 1) * Math.min(1, st.disk * P.disk);
+  nu.uBox.value.set((3.2 + 13 / C) * boxOut, (3.2 + 13 / C) * boxOut, (HZ + 8 / C / st.flat + 0.3) * boxOut);
 
   const beat = heartbeat(beatT) * st.halo;
   const cu = compMat.uniforms;
@@ -957,13 +962,13 @@ function update(dt) {
   const bw = st.disk * P.disk;
   _qz.setFromAxisAngle(Z_AXIS, P.band * Math.PI / 180);
   _qx.setFromAxisAngle(X_AXIS, -82 * Math.PI / 180);
-  band.quaternion.multiplyQuaternions(_qz, _qx);
-  bandU.set(1, 0, 0).applyQuaternion(band.quaternion);
-  bandV.set(0, 1, 0).applyQuaternion(band.quaternion);
+  bandQ.multiplyQuaternions(_qz, _qx);
+  bandU.set(1, 0, 0).applyQuaternion(bandQ);
+  bandV.set(0, 1, 0).applyQuaternion(bandQ);
   nu.uBandW.value = bw;
-  nu.uBandRot.value.setFromMatrix4(_m4.makeRotationFromQuaternion(band.quaternion)).transpose();
+  nu.uBandRot.value.setFromMatrix4(_m4.makeRotationFromQuaternion(bandQ)).transpose();
   // over the mark only while the mark is there to cover it
-  frontW = mode === 'seq' && bw > 0.002 ? st.mesh : 0;
+  frontW = bw > 0.002 ? st.mesh : 0;
   frontQuad.visible = frontW > 0.002;
   frontQuad.material.uniforms.uW.value = frontW;
   cu.uVP.value.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
@@ -1029,11 +1034,11 @@ function update(dt) {
       n++;
     }
   }
-  // orbiting embers: after ignition, on every tilted plane round the mark; the replay blast flings them out
+  // orbiting embers: after ignition, on the screen's plane or the band's; the replay blast flings them out
   if (st.emb > 0.003 && P.embers > 0) {
     // after ignition they fall in from farther out and settle onto their orbits; on replay they blow out
-    const inward = mode === 'blast' ? 0 : P.emberFall * Math.exp(-Math.max(0, st.tau) * 1.1);
     const a = [0, 0, 0], m = [0, 0, 0], h = [0, 0, 0];
+    const put = (i, p, c, f) => { pos[i] = p[0]; pos[i + 1] = p[1]; pos[i + 2] = p[2]; col[i] = c.r * f; col[i + 1] = c.g * f; col[i + 2] = c.b * f; };
     const at = (o, R, th, out) => {
       const c = Math.cos(th) * R, s = Math.sin(th) * R;
       if (o.pick >= P.emberBand) { out[0] = c; out[1] = s; out[2] = ZC; return; }
@@ -1042,13 +1047,13 @@ function update(dt) {
     for (const sp of streaks) {
       if (sp.pick > P.embers) continue;
       const o = sp.orb, R0 = P.emberR + o.u * P.emberSpread, th = o.th + 2.4 * (4.2 / R0) ** 1.5 * emberT;
-      const R = R0 * (mode === 'blast' ? diskOut : 1 + inward * (0.6 + 0.4 * Math.sin(o.fl * 3))) * (1 + P.emberWobble * Math.sin(th * 2 + o.fl));
+      const R = R0 * diskOut * (1 + st.fall * (0.6 + 0.4 * Math.sin(o.fl * 3))) * (1 + P.emberWobble * Math.sin(th * 2 + o.fl));
       const d = 0.12 * P.emberTrail;
       at(o, R, th - d, a); at(o, R, th - d / 2, m); at(o, R, th, h);
       const fade = st.emb * P.emberGlow * (1 - P.emberTwinkle + P.emberTwinkle * Math.sin(diskT * 2.3 + o.fl * 9)), c = lut(0.08 + 0.45 * sp.hue);
       const f0 = fade * 0.08, f1 = fade * 0.45;
-      pos.set([...a, ...m, ...m, ...h], n * 6);
-      col.set([c.r * f0, c.g * f0, c.b * f0, c.r * f1, c.g * f1, c.b * f1, c.r * f1, c.g * f1, c.b * f1, c.r * fade, c.g * fade, c.b * fade], n * 6);
+      const i = n * 6;
+      put(i, a, c, f0); put(i + 3, m, c, f1); put(i + 6, m, c, f1); put(i + 9, h, c, fade);
       n += 2;
     }
   }
