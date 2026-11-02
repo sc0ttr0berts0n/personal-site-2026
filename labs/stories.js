@@ -81,7 +81,10 @@ export const STORIES = {
         ]
       },
       {
-        "p": "Last, I took it off the tripod, with a handheld camera and a hanging wobble. Locked off, it looked like a computer rendering. The movement is also sleight of hand, because when the frame is moving, you don't dwell on the jagged edges."
+        "p": "Then I took it off the tripod, with a handheld camera and a hanging wobble. Locked off, it looked like a computer rendering. The movement is also sleight of hand, because when the frame is moving, you don't dwell on the jagged edges."
+      },
+      {
+        "p": "The touch changed last. Tapping and dragging made ripples in the pool, but they weren't doing it for me, and they were expensive to draw. So I cut them, and now a drag orbits the camera, 30 degrees left and right, over the top if you like, and never below the waterline. Let go, and it blends smoothly back to the usual view. The lowest point follows the oil as it drains, so with the logo lifted, you can drop to the surface and look up at it."
       }
     ],
     "versions": [
@@ -119,7 +122,7 @@ export const STORIES = {
         "p": "The logo stands on three plinths, and you throw heavy balls at it. At first it did something only when you threw, which made it dull to watch. I made it fire on its own, then alternate left and right, and tuned it for rhythm rather than physics: five shots, three-quarters of a second apart, then a rewind-like reset."
       },
       {
-        "p": "The rule across every lab is that my logo stays on screen, and Knockout literally knocks it off. So it leaves a dashed crime-scene outline where it stood, and you can always see what was there. The pieces gliding home read as the logo restoring itself rather than as a reset. I discovered that trick here, and I've gone on to use it elsewhere."
+        "p": "The rule across every lab is that my logo stays on screen, and Knockout literally knocks it off. So it leaves a dashed crime-scene outline where it stood, and you can always see what was there. The pieces gliding home read as the logo restoring itself rather than as a reset. I discovered that trick here, and I used it again in Life."
       },
       {
         "p": "Much later, I decided it needed a surprise. At the end of the volley, every ball bursts into three, and each of those into three more, turning a few heavy hits into a hailstorm of glass beads to end each cycle. It started as five and five, and came down to three and three for performance, with a similar feel."
@@ -368,6 +371,9 @@ export const STORIES = {
       },
       {
         "p": "The reset came from a friend, who suggested a drain. I laughed. Cool, but silly. I kept thinking about it. It works because everything keeps its own look, from the lava's glow to the wood's grain, while suddenly behaving like water. It's a visual surprise, and it drains fast enough not to get old from loop to loop."
+      },
+      {
+        "p": "The buttons took several tries. They began as arcs in the style of an Apple Watch ring, hugging the basin, each colored like its material. I didn't like the texture, so they moved to the site's plain button style. Then I asked for something more a part of the pixel world. Now each one is drawn on the sand's own grid, with a grainy face, a lit top edge and a dark side, so it reads as a block sitting in the rock. I tried them chunkier on desktop, and they looked awful, so they went finer. They appear in the feed now too."
       }
     ],
     "versions": [
