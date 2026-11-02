@@ -170,7 +170,7 @@ export const STORIES = {
   },
   "pachinko": {
     "paras": [
-      "A pegboard everywhere the logo isn't. It was mostly right from the start. The work was reflowing the pixel pitch, finding the right tuning knobs, and a fair bit of refactoring.",
+      "A simulated pegboard with the logo in the middle and balls running through the grooves. It was mostly right from the start. The work was reflowing the pixel pitch, finding the right tuning knobs, and a fair bit of refactoring.",
       "The one real note: solve the pegs from the logo outward instead of dropping the logo onto an existing grid. That way the pegs line up with the thing that matters visually, the logo, rather than the walls. Now it composes."
     ],
     "versions": [
