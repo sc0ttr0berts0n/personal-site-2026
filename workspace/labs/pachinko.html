@@ -803,7 +803,7 @@ function render() {
 let hudTick = 0;
 function hud() {
   lab.hud(
-    `${ballR() < P.ballRadius / MM - 1e-9 ? `ball ⌀ <b>${(2 * ballR() * MM).toFixed(1)} mm</b> (pitch-limited) · ` : ''}balls <b>${balls.length}</b> · binned <b>${binned}</b> · caught <b>${caught}</b>` +
+    `${ballR() < (P.ballRadius - 0.1) / MM ? `ball ⌀ <b>${(2 * ballR() * MM).toFixed(1)} mm</b> (pitch-limited) · ` : ''}balls <b>${balls.length}</b> · binned <b>${binned}</b> · caught <b>${caught}</b>` +
     ` · lattice <b>±${MARK.slopeDeg.toFixed(1)}°</b> · g·sin θ <b>${(9.81 * Math.sin(P.incline * Math.PI / 180)).toFixed(2)} m/s²</b>`);
 }
 
