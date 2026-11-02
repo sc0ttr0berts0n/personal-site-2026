@@ -24,6 +24,39 @@
   const PIP_MS = 320, PIP_M = 10, PIP_R = 10;   // picture in picture: grow/shrink time, margin, corner radius
   const READ_AT = .46;   // reading on a phone: how far down the screen the panel first rises to
 
+  // ---- the first shell (npm run sync adds it, see scripts/sync-labs.mjs) gives way to the real page ----
+  // The still moves into the real stage and stays over the toy until the toy has drawn.
+  if (new URLSearchParams(location.search).has('story')) root.classList.add('story');
+  let poster = null;
+  const bootSwap = new MutationObserver(() => {
+    const boot = document.querySelector('.lab-boot'), real = document.querySelector('.lab-panel');
+    if (!boot || !real || real.closest('.lab-boot')) return;
+    bootSwap.disconnect();
+    poster = boot.querySelector('.lab-poster');
+    if (poster) document.querySelector('.lab-stage').append(poster);
+    boot.remove();
+    buildPage();
+  });
+  bootSwap.observe(root, { childList: true, subtree: true });
+  // the lab's code failing before it built its page: say so, rather than spin for ever
+  const bootFailed = e => {
+    if (e.type === 'error' && e.target !== window && e.target?.tagName !== 'SCRIPT') return;   // not a stray image
+    const boot = document.querySelector('.lab-boot');
+    if (!boot) return;
+    bootSwap.disconnect();
+    boot.querySelector('.lab-spin')?.remove();
+    boot.querySelector('.lab-stage').insertAdjacentHTML('beforeend', '<p class="lab-fail">This lab didn’t load. <a href="">Try again</a></p>');
+  };
+  addEventListener('error', bootFailed, true);
+  addEventListener('unhandledrejection', bootFailed);
+  const posterGone = () => {
+    if (!poster) return;
+    const p = poster;
+    poster = null;
+    p.classList.add('gone');
+    setTimeout(() => p.remove(), 300);
+  };
+
   // ---- pausing the toy: frames are parked and document.hidden reads true, as in the feed (lab-embed.js) ----
   // This script runs before the lab's modules, so every frame the lab asks for comes through here.
   let frozen = false, versionOn = false;
@@ -32,7 +65,11 @@
   let parkId = 0;
   window.requestAnimationFrame = cb => {
     if (frozen) { parked.set(--parkId, cb); return parkId; }
-    return rawRAF(ts => { if (frozen) parked.set(--parkId, cb); else cb(ts); });
+    return rawRAF(ts => {
+      if (frozen) { parked.set(--parkId, cb); return; }
+      cb(ts);
+      if (poster && !window.labWarming) posterGone();   // a lab compiling in the background sets labWarming until it can draw
+    });
   };
   window.cancelAnimationFrame = id => { if (!parked.delete(id)) rawCancel(id); };
   const realHidden = Object.getOwnPropertyDescriptor(Document.prototype, 'hidden').get;
@@ -48,7 +85,23 @@
 
   const css = document.createElement('style');
   css.textContent = `
-    html.lab-page { --line: #5c5c66; }   /* 3:1 on black, the minimum for borders (the feed uses the same) */
+    html.lab-page { --line: #5c5c66; --top-h: 43px; --peek: 168px; }   /* 3:1 on black, the minimum for borders (the feed uses the same); the sizes are the usual ones, until measured */
+
+    /* before the lab's code arrives: the shell's own page, its toy still a still, its controls not yet there */
+    .lab-page .lab-boot { display: contents; }
+    .lab-page .lab-boot * { pointer-events: none; scroll-snap-align: none !important; }   /* too short to snap: it would pull the panel up */
+    .lab-page .lab-boot .blurb { margin: 0; color: var(--dim); }
+    .lab-page .lab-boot .boot-change { color: var(--ink); border-bottom-color: var(--ink); }
+    .lab-page.story .lab-boot .boot-change { color: var(--dim); border-bottom-color: transparent; }
+    .lab-page.story .lab-boot .boot-story { color: var(--ink); border-bottom-color: var(--ink); }
+    .lab-page .lab-tab { display: inline-flex; align-items: center; }
+    .lab-page .lab-poster { position: absolute; inset: 0; z-index: 1; pointer-events: none; transition: opacity .25s; }
+    .lab-page .lab-poster.gone { opacity: 0; }
+    .lab-page .lab-poster img { display: block; width: 100%; height: 100%; object-fit: cover; }
+    .lab-page .lab-spin { position: absolute; right: 12px; bottom: 12px; width: 16px; height: 16px; border: 2px solid rgb(255 255 255 / .25); border-top-color: var(--ink); border-radius: 50%;
+      animation: ver-spin .8s linear infinite; }   /* turns on the compositor, so it keeps going while the toy starts up */
+    .lab-page .lab-fail { position: absolute; left: 12px; right: 44px; bottom: 10px; margin: 0; z-index: 2; pointer-events: auto; font: 400 12px/1.4 var(--mono); }
+    .lab-page .lab-fail a { pointer-events: auto; }
     .lab-page .lab-back { text-decoration: none; }
     .lab-page .lab-back:hover { color: var(--ink); }
     .lab-page .lab-back .arr { color: var(--dim); margin-right: -2px; }
@@ -114,6 +167,9 @@
 
       /* reading: the toy sits above the panel as its key square, not to be touched */
       html.lab-page.story { scroll-snap-type: none; }
+      html.lab-page.story .lab-boot .lab-stage { height: calc(${READ_AT * 100}svh - var(--top-h)); }
+      html.lab-page.story .lab-boot .lab-panel { margin-top: calc(${READ_AT * 100}svh - var(--top-h)); }
+      html.lab-page.story .lab-boot .lab-poster img { object-fit: contain; }
       html.lab-page.story .lab-holdbar { display: none; }
       .lab-page .lab-pane-story { min-height: 100svh; }
 
@@ -240,10 +296,12 @@
   const EYE = '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M1 8s2.5-4.5 7-4.5S15 8 15 8s-2.5 4.5-7 4.5S1 8 1 8z" fill="none" stroke="currentColor" stroke-width="1.2"/><circle cx="8" cy="8" r="2" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>';
   const lock = shut => `<svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true"><rect x="3" y="7" width="10" height="7" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="${shut ? 'M5 7V5a3 3 0 0 1 6 0v2' : 'M5 7V5a3 3 0 0 1 5.8-1'}" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>`;
 
-  // the lab's module has built the shell by now (module scripts run before DOMContentLoaded)
-  addEventListener('DOMContentLoaded', () => {
+  // runs as soon as the lab's module has built its shell. Not on DOMContentLoaded: the module waits for the first
+  // paint (lab-first-paint.js), and a module that waits doesn't hold that event back.
+  function buildPage() {
     const top = document.querySelector('.lab-top'), panel = document.querySelector('.lab-panel');
     if (!top || !panel) return;
+    setTimeout(() => { if (!window.labWarming) posterGone(); }, 3000);   // a lab that only draws on input never runs a frame
 
     // back to the feed, landing on this toy (and its settings code, if the link carried one)
     const slug = location.pathname.split('/').pop().replace(/\.html$/, '');
@@ -735,5 +793,5 @@
       showTab('change');
       (window.requestIdleCallback || setTimeout)(loadStory, { timeout: 3000 });
     }
-  });
+  }
 })();

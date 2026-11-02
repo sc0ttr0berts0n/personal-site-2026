@@ -10,13 +10,27 @@
 // standalone, without ?embed in its URL, that script does nothing.
 import { readdir, readFile, writeFile, mkdir, rm, cp, stat } from 'node:fs/promises';
 import { join, resolve, dirname, basename, relative } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const SRC = resolve(process.argv[2] || process.env.LABS_SRC || join(ROOT, 'workspace', 'labs'));
 const OUT = join(ROOT, 'labs');
 // Feed embed hooks, plus the layout of a lab's own page on the site (embed/lab-page.js).
 const EMBED_TAG = '<script src="../embed/lab-embed.js"></script>\n<script src="../embed/lab-page.js"></script>';
+
+// What a lab's own page shows before its code has loaded: the header, the panel's name and tabs, and the toy's first
+// frame (the feed's still). It goes in before the lab's module, which only builds the real page once all its imports
+// have arrived; embed/lab-page.js swaps this out then. The feed's frames hide it (embed/lab-embed.js).
+const bootShell = ({ slug, number, title, blurb }) => `<body>
+<div class="lab-boot" aria-hidden="true">
+<header class="lab-top"><span class="who">${logoSVG({ size: 18 })} scott robertson</span><span>lab ${number}</span></header>
+<div class="lab">
+<div class="lab-stage"><div class="lab-poster"><picture><source media="(orientation: landscape)" srcset="../posters/first/${slug}-wide.jpg"><img src="../posters/first/${slug}-tall.jpg" alt="" fetchpriority="high"></picture><i class="lab-spin"></i></div></div>
+<div class="lab-panel"><div class="lab-peek"></div><div class="lab-tabs"><span class="lab-tab boot-change">Change This</span><span class="lab-tab boot-story">How it got here</span></div>
+<div class="lab-group"><span class="num">Lab ${number}</span><h1>${title}</h1></div><p class="blurb">${blurb}</p></div>
+</div>
+</div>
+`;
 // The labs are written for the artifact viewer, which supplies its own viewport. Served directly, a phone would
 // lay them out at desktop width unless the page says otherwise.
 const VIEWPORT_TAG = '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">';
@@ -29,6 +43,7 @@ if (!(await exists(join(SRC, 'shared', 'lab.js')))) {
   console.error(`No labs found at ${SRC} (expected shared/lab.js). Pass the labs folder as an argument.`);
   process.exit(1);
 }
+const { logoSVG } = await import(pathToFileURL(join(SRC, 'shared', 'logo.js')).href);
 
 await rm(OUT, { recursive: true, force: true });
 await mkdir(OUT, { recursive: true });
@@ -79,9 +94,7 @@ for (const file of (await readdir(SRC)).filter(f => f.endsWith('.html')).sort())
       html = html.slice(0, end) + viewport + '\n' + EMBED_TAG + html.slice(end);
     }
   }
-  await writeFile(join(OUT, file), html);
-
-  const vdir = VERSION_DIRS[slug] || slug;
+    const vdir = VERSION_DIRS[slug] || slug;
   const vpath = join(SRC, 'notes', 'versions', vdir);
   const versions = (await exists(vpath))
     ? (await readdir(vpath)).filter(f => f.endsWith('.html')).sort().map(f => ({ name: basename(f, '.html'), href: `labs/notes/versions/${vdir}/${f}` }))
@@ -92,6 +105,12 @@ for (const file of (await readdir(SRC)).filter(f => f.endsWith('.html')).sort())
     blurb: field(spec, 'blurb'), teaches: field(spec, 'teaches'), hint: field(spec, 'hint'), ...feedField(html),
     href: `labs/${file}`, versions
   });
+  // nothing on the page waits for the web fonts (they swap in), and the lab's code waits for the first paint
+  const lab = labs.at(-1), at = html.indexOf('<script type="module">');
+  if (at < 0) console.warn(`  ! ${file}: no module script, first paint shell not added`);
+  else html = html.slice(0, at) + bootShell(lab) + '<script type="module">\nimport \'../embed/lab-first-paint.js\';' + html.slice(at + '<script type="module">'.length);
+  html = html.replace(/<link rel="stylesheet" href="https:\/\/fonts\.googleapis\.com([^"]*)">/, `<link rel="stylesheet" href="https://fonts.googleapis.com$1" media="print" onload="this.media='all'">`);
+  await writeFile(join(OUT, file), html);
 }
 labs.sort((a, b) => a.number.localeCompare(b.number));
 
