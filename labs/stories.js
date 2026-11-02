@@ -67,7 +67,7 @@ export const STORIES = {
   },
   "knockout": {
     "paras": [
-      "The logo stands on three plinths and you throw heavy balls at it. At first it only did anything when you threw, so it was boring to just watch. I made it fire on its own, then alternate left and right, and tuned it by rhythm rather than physics: five shots, 0.75 s apart, then a reset.",
+      "The logo stands on three plinths and you throw heavy balls at it. At first it only did anything when you threw, so it was boring to just watch. I made it fire on its own, then alternate left and right, and tuned it by rhythm rather than physics: five shots, 0.75 s apart, then a reset with a rewind-like effect.",
       "The rule across every lab is that my logo stays on screen. Knockout literally knocks it off. So it leaves a dashed crime-scene outline where it stood, and you always see what was there. The pieces gliding home read as the logo restoring itself, not just a reset. This is where I discovered that trick, and I've gone on to use it elsewhere.",
       "Much later I decided it needed a surprise. At the end of the volley, every ball bursts into three, and each of those into three more. It goes from a few heavy hits to a hailstorm of glass beads, and that's the end of each cycle. It started as five and five, then came down to three and three for performance, with a similar feel."
     ],
@@ -112,7 +112,7 @@ export const STORIES = {
   "godrays": {
     "paras": [
       "A lamp behind the logo in a hazy room, and the chevrons carve shafts of shadow toward you. It was pretty much right out of the tube, and most of the work was tuning sliders. For a shake-up I added violent rainbow bursts, because rainbow light is something I love to flash into my designs wherever I can.",
-      "To be candid, it sits in the bottom middle of the pack. It's something people have seen before. It's fiiiine."
+      "To be candid, it sits in the bottom middle of the pack. It's something people have seen before. It's fine, though. Sometimes the rests between the notes matter as much as the chords."
     ],
     "versions": [
       {
