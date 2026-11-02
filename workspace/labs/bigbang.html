@@ -444,15 +444,18 @@ void main() {
       sb = th0 > 0.0 && sdf(ro.xy + rd.xy * th0) < 0.0 ? min(sb, th0) : -1.0;
     }
     if (sb > sa) {
-      float bdt = (sb - sa) / 24.0, bt = sa + bdt * jit;
+      // seen nearly edge on, the ray runs a long way through the slab but crosses the thin sheet only briefly, so
+      // even steps would mostly miss it and show as grain: bunch them where the ray crosses the sheet's plane
+      float sc = clamp(-lo.z / lz, sa, sb), L = max(max(sc - sa, sb - sc), 1e-3);
+      float ua = -sqrt((sc - sa) / L), du = (sqrt((sb - sc) / L) - ua) / 24.0;
       for (int i = 0; i < 24; i++) {
+        float u = ua + du * (float(i) + jit), bt = sc + L * u * abs(u), bdt = 2.0 * L * abs(u) * du;
         vec3 lp = lo + ld * bt;
         vec2 xy = lp.xy / uDiskOut;
         float th;
         vec4 m = uBandW * diskEmit(xy, (length(xy) - ${BAND_IN.toFixed(2)}) * 0.38, lp.z, uDiskT, uDiskOut, th);
         bacc += Tb * m.rgb * uDensity * uBoost * bdt;
         Tb *= exp(-m.a * uDensity * bdt);
-        bt += bdt;
       }
     }
   }
