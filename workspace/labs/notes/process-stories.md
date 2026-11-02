@@ -42,7 +42,7 @@ The logo stands on three plinths and you throw heavy balls at it. At first it on
 
 The rule across every lab is that my logo stays on screen. Knockout literally knocks it off. So it leaves a dashed crime-scene outline where it stood, and you always see what was there. The pieces gliding home read as the logo restoring itself, not just a reset. This is where I discovered that trick, and I've gone on to use it elsewhere.
 
-Much later I decided it needed a surprise. At the end of the volley, every ball bursts into five, and each of those into five more. It goes from a few heavy hits to a hailstorm of glass beads, and that's the end of each cycle.
+Much later I decided it needed a surprise. At the end of the volley, every ball bursts into three, and each of those into three more. It goes from a few heavy hits to a hailstorm of glass beads, and that's the end of each cycle. It started as five and five, then came down to three and three for performance, with a similar feel.
 
 *Versions: none saved.*
 
