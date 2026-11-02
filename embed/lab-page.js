@@ -15,7 +15,7 @@
 // opens over the toy, in its place.
 (() => {
   if (new URLSearchParams(location.search).has('embed')) return;
-  const SCRIPT = document.currentScript?.src || location.href;   // for the generated stories next to the labs
+  const SCRIPT = document.currentScript?.src || location.href;   // for the generated manifest next to the labs
   const root = document.documentElement;
   root.classList.add('lab-page');
   const PHONE = '(max-width: 899px)';   // lab.css's own breakpoint for the stacked layout
@@ -26,13 +26,35 @@
 
   // ---- the first shell (npm run sync adds it, see scripts/sync-labs.mjs) gives way to the real page ----
   // The still moves into the real stage and stays over the toy until the toy has drawn.
-  if (new URLSearchParams(location.search).has('story')) root.classList.add('story');
-  let poster = null;
+  // The story is written into the shell, so it reads from the start: the tabs already switch, and a tile tapped before
+  // the page is up plays once it is. The text moves across as it stands, at the place the reader has got to.
+  if (new URLSearchParams(location.search).has('story')) { root.classList.add('story'); history.scrollRestoration = 'manual'; }
+  let poster = null, bootStory = null, bootY = 0, bootTap = null, bootDead = false;
+  const untap = () => { if (bootTap?.classList.contains('ver-tile')) bootTap.querySelector('.ver-go').textContent = 'Play ▸'; bootTap = null; };
+  const onBootTap = e => {
+    const tabBtn = e.target.closest('.lab-boot .lab-tab');
+    if (tabBtn) {
+      root.classList.toggle('story', tabBtn.classList.contains('boot-story'));
+      scrollTo(0, 0);
+      tabBtn.closest('.lab-panel').scrollTop = 0;
+      return;
+    }
+    const tile = e.target.closest('.lab-boot :is(.ver-tile, .ver-now)');
+    if (!tile) return;
+    untap();
+    if (bootDead) { if (tile.classList.contains('ver-tile')) tile.querySelector('.ver-go').textContent = 'Didn’t load'; return; }
+    bootTap = tile;
+    if (tile.classList.contains('ver-tile')) tile.querySelector('.ver-go').textContent = 'Loading…';
+  };
+  addEventListener('click', onBootTap);
   const bootSwap = new MutationObserver(() => {
     const boot = document.querySelector('.lab-boot'), real = document.querySelector('.lab-panel');
     if (!boot || !real || real.closest('.lab-boot')) return;
     bootSwap.disconnect();
+    removeEventListener('click', onBootTap);
     poster = boot.querySelector('.lab-poster');
+    bootStory = boot.querySelector('.lab-story');
+    bootY = matchMedia(PHONE).matches ? scrollY : boot.querySelector('.lab-panel').scrollTop;
     if (poster) document.querySelector('.lab-stage').append(poster);
     boot.remove();
     buildPage();
@@ -44,6 +66,8 @@
     const boot = document.querySelector('.lab-boot');
     if (!boot) return;
     bootSwap.disconnect();
+    bootDead = true;
+    untap();
     boot.querySelector('.lab-spin')?.remove();
     boot.querySelector('.lab-stage').insertAdjacentHTML('beforeend', '<p class="lab-fail">This lab didn’t load. <a href="">Try again</a></p>');
   };
@@ -86,11 +110,15 @@
   const css = document.createElement('style');
   css.textContent = `
     html.lab-page { --line: #5c5c66; --top-h: 43px; --peek: 168px; }   /* 3:1 on black, the minimum for borders (the feed uses the same); the sizes are the usual ones, until measured */
+    html.lab-page, .lab-page .lab-panel { overflow-anchor: none; }   /* the story moving into the real page would otherwise drag the scroll with it */
 
     /* before the lab's code arrives: the shell's own page, its toy still a still, its controls not yet there */
     .lab-page .lab-boot { display: contents; }
     .lab-page .lab-boot * { pointer-events: none; scroll-snap-align: none !important; }   /* too short to snap: it would pull the panel up */
+    .lab-page .lab-boot :is(.lab-panel, .lab-tab, .who, .who *, .lab-pane-story, .lab-pane-story *) { pointer-events: auto; }
     .lab-page .lab-boot .blurb { margin: 0; color: var(--dim); }
+    .lab-page .lab-boot .lab-pane-story, .lab-page.story .lab-boot .blurb { display: none; }
+    .lab-page.story .lab-boot .lab-pane-story { display: grid; }
     .lab-page .lab-boot .boot-change { color: var(--ink); border-bottom-color: var(--ink); }
     .lab-page.story .lab-boot .boot-change { color: var(--dim); border-bottom-color: transparent; }
     .lab-page.story .lab-boot .boot-story { color: var(--ink); border-bottom-color: var(--ink); }
@@ -640,32 +668,12 @@
     raw.className = 'lab-raw';
     raw.innerHTML = '<a href="notes/behind-the-scenes.md" target="_blank" rel="noopener">Raw notes</a>';
     paneStory.append(raw);
-    const wait = document.createElement('p');
-    wait.className = 'lab-raw';
-    wait.textContent = 'Loading the story\u2026';
-    paneStory.prepend(wait);
-    const renderStory = ({ STORIES }) => {
-      wait.remove();
-      const story = STORIES[slug];
-      if (!story) return;
+    const renderStory = () => {
+      const sec = bootStory;
+      if (!sec) return;
       const title = panel.querySelector('h1')?.textContent || '';
-      const sec = document.createElement('section');
-      sec.className = 'lab-story';
-      const thumb = src => `<img class="ver-thumb" src="${new URL(src, SCRIPT).href}" alt="" loading="lazy" decoding="async">`;
-      const verThumb = v => thumb('../posters/' + v.href.replace('labs/notes/', '').replace(/\.html$/, '.jpg'));
-      const label = v => v.note || v.name.replace(/^\d+[a-z]?-?/, '').replace(/-/g, ' ');
-      sec.innerHTML = `${story.blocks.map(b => b.p ? `<p>${b.p}</p>` : `<ol class="lab-versions" aria-label="Saved versions">
-          ${b.versions.map(i => { const v = story.versions[i]; return `<li><button type="button" class="ver-tile" data-i="${i}">${verThumb(v)}
-            <span class="ver-n">${v.name.match(/^\d+[a-z]?/)?.[0] || i + 1}</span>
-            <span><span class="ver-cap">${label(v)}</span><br><span class="ver-go">Play ▸</span></span></button></li>`; }).join('')}
-        </ol>`).join('')}
-        ${story.open ? `<p class="open"><b>Still open</b>${story.open}</p>` : ''}
-        ${story.versions.length ? `<ol class="lab-versions" aria-label="The lab today">
-          <li><button type="button" class="ver-now">${thumb('../posters/' + slug + '.jpg')}<span class="ver-n">Now</span>
-            <span><span class="ver-cap">this lab, as it is today</span><br><span class="ver-go">${phone.matches ? 'See it ▴' : 'Playing ▸'}</span></span></button></li>
-        </ol>` : ''}`;
       paneStory.prepend(sec);
-      if (!story.versions.length) return;
+      if (!sec.querySelector('.ver-tile')) return;
 
       let cur = null, slowT = 0;   // cur: { li, play, frame }
       const stop = () => {
@@ -684,22 +692,24 @@
       phone.addEventListener('change', stop);
       const nowGo = sec.querySelector('.ver-now .ver-go');
       const setNow = () => { if (nowGo && !phone.matches) nowGo.textContent = versionOn ? 'Back to it ▸' : 'Playing ▸'; };
+      setNow();
       const breakOut = () => {
         if (!cur.play.showPopover) { open(cur.frame.src.replace(/\?.*$/, ''), '_blank', 'noopener'); return; }
         cur.play.showPopover();
         cur.play.querySelector('button').focus();
       };
-      const play = (li, v) => {
+      const play = li => {
         stop();
+        const tile = li.querySelector('.ver-tile'), name = tile.dataset.name;
         const p = document.createElement('div');
         p.className = 'ver-play';
         p.setAttribute('popover', 'manual');
-        p.innerHTML = `${verThumb(v)}<span class="ver-spin" aria-hidden="true"></span><span class="ver-wait">Still loading…</span><iframe title="${title} version ${v.name}" src="../${v.href}?embed=1" tabindex="-1"></iframe>
-          <div class="ver-bar"><span>${title} · ${v.name.match(/^\d+[a-z]?/)?.[0] || ''} · ${label(v)}</span><button type="button">Close</button></div>`;
+        p.innerHTML = `${li.querySelector('.ver-thumb').outerHTML}<span class="ver-spin" aria-hidden="true"></span><span class="ver-wait">Still loading…</span><iframe title="${title} version ${name}" src="../${tile.dataset.href}?embed=1" tabindex="-1"></iframe>
+          <div class="ver-bar"><span>${title} · ${tile.querySelector('.ver-n').textContent} · ${tile.querySelector('.ver-cap').textContent}</span><button type="button">Close</button></div>`;
         const over = !phone.matches;
         p.querySelector('button').addEventListener('click', () => {
           if (over) stop(); else p.hidePopover();
-          li.querySelector('.ver-tile').focus();
+          tile.focus();
         });
         p.querySelector('.ver-bar').addEventListener('pointerdown', e => e.stopPropagation());   // not the toy's
         if (over) { p.classList.add('over'); p.removeAttribute('popover'); stage.append(p); li.classList.add('over-on'); }
@@ -721,7 +731,7 @@
         const tile = e.target.closest('.ver-tile');
         if (!tile) return;
         const li = tile.parentElement;
-        if (cur?.li !== li) play(li, story.versions[+tile.dataset.i]);
+        if (cur?.li !== li) play(li);
         else if (cur.over) stop();
         else breakOut();
       });
@@ -738,11 +748,7 @@
         else if (cur.play.matches?.(':popover-open')) cur.play.hidePopover();
       });
     };
-    // loaded while the page is idle, so the tab opens at once; a slow or failed load says so
-    let storyLoad = null;
-    const loadStory = () => storyLoad ||= import(new URL('../labs/stories.js', SCRIPT)).then(renderStory).catch(() => {
-      wait.innerHTML = 'The story didn\u2019t load. <a href="">Try again</a>';
-    });
+    renderStory();
 
     // ---- switching tabs ----
     // Each tab keeps its own place. Asked for from the toy, Change This pulls the panel right up and How it got here
@@ -762,8 +768,13 @@
         t.btn.setAttribute('aria-selected', String(k === key));
         t.btn.tabIndex = k === key ? 0 : -1;
       }
-      if (key === 'story') loadStory();
       onScroll();
+    };
+    const setURL = key => {
+      const q = new URLSearchParams(location.search);
+      q.delete('story');
+      const others = q.toString(), search = key === 'story' ? '?' + (others ? others + '&' : '') + 'story' : others ? '?' + others : '';
+      history.replaceState(history.state, '', location.pathname + search + location.hash);
     };
     const setTab = key => {
       if (key === tab) return;
@@ -771,10 +782,7 @@
       if (tab === 'story') stopVersion();
       const fromToy = phone.matches && scrollY < 8;
       showTab(key);
-      const q = new URLSearchParams(location.search);
-      q.delete('story');
-      const others = q.toString(), search = key === 'story' ? '?' + (others ? others + '&' : '') + 'story' : others ? '?' + others : '';
-      history.replaceState(history.state, '', location.pathname + search + location.hash);
+      setURL(key);
       if (!phone.matches) { panel.scrollTop = tabY[key]; return; }
       scrollTo({ top: tabY[key] > 8 ? tabY[key] : tabHome(key), behavior: fromToy && !matchMedia('(prefers-reduced-motion: reduce)').matches ? 'smooth' : 'auto' });
       onScroll();
@@ -790,14 +798,15 @@
       setTab(next);
       TABS[next].btn.focus();
     });
-    if (new URLSearchParams(location.search).has('story')) {
-      // arriving to read: already risen, with no scroll to watch
-      history.scrollRestoration = 'manual';
+    if (root.classList.contains('story')) {
+      // arriving to read: already risen, with no scroll to watch, and still where the reader has got to
       showTab('story');
-      if (phone.matches) { scrollTo(0, tabHome('story')); onScroll(); }
+      if (phone.matches) { scrollTo(0, tabHome('story') + bootY); onScroll(); } else panel.scrollTop = bootY;
+      setURL('story');
     } else {
       showTab('change');
-      (window.requestIdleCallback || setTimeout)(loadStory, { timeout: 3000 });
+      setURL('change');
     }
+    bootTap?.click();
   }
 })();
