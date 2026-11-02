@@ -2,10 +2,12 @@
 //   posters/<slug>.jpg            4:5, for the overview grid, a moment after the toy starts
 //   posters/first/<slug>-tall.jpg  the toy's first frame on a portrait phone (390x844: its frame is 390x964)
 //   posters/first/<slug>-wide.jpg  the toy's first frame on a landscape screen (1280x800: its frame is 1280x680)
+//   posters/versions/<lab>/<name>.jpg  an old version from its process story, square, a moment after it starts
+//     (lab pages show it blurred and darkened; --versions makes only these)
 // The first frames are what a toy looks like as it starts, so the feed shows them under a toy while it loads
 // and the ripple uses them for a toy that hasn't drawn yet; the live toy then carries on from much the same picture.
 //
-//   npm run posters [slug ...] [-- --first]     (--first: only the first frames)
+//   npm run posters [slug ...] [-- --first | --versions]     (--first: only the first frames)
 //
 // Needs Chrome or Edge (or BROWSER=path/to/browser) and the dev dependency puppeteer-core.
 // Re-run after a sync when a toy looks different.
@@ -19,7 +21,8 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const OUT = join(ROOT, 'posters'), FIRST = join(OUT, 'first');
 const PORT = 8124, BASE = `http://localhost:${PORT}/`;
 const { LABS } = await import('../labs/manifest.js');
-const args = process.argv.slice(2), firstOnly = args.includes('--first');
+const { STORIES } = await import('../labs/stories.js');
+const args = process.argv.slice(2), firstOnly = args.includes('--first'), versionsOnly = args.includes('--versions');
 const only = args.filter(a => !a.startsWith('--'));
 const labs = only.length ? LABS.filter(l => only.includes(l.slug)) : LABS;
 
@@ -62,8 +65,34 @@ async function first(l, name, viewport) {
   return jpg.length;
 }
 
+// An old version in a frame, which is what turns on its embed hooks (stage only, and 'ready' at its first drawn frame)
+async function version(v) {
+  const page = await browser.newPage();
+  await page.setViewport({ width: 320, height: 320, deviceScaleFactor: 1 });
+  await page.goto(BASE + 'labs/README.md');
+  const drew = await page.evaluate(href => new Promise(done => {
+    document.documentElement.style.background = '#000';
+    document.body.style.margin = 0;
+    const f = document.createElement('iframe');
+    f.style.cssText = 'display:block;width:100vw;height:100vh;border:0';
+    addEventListener('message', e => { if (e.data?.feed === 'ready') done(true); });
+    setTimeout(() => done(false), 90000);
+    f.src = '/' + href + '?embed=1';
+    document.body.replaceChildren(f);
+  }), v.href);
+  if (!drew) console.warn(`  ! ${v.href}: no frame after 90 s`);
+  await sleep(3000);
+  const jpg = await page.screenshot({ type: 'jpeg', quality: 72 });
+  const out = join(OUT, v.href.replace('labs/notes/', '').replace(/\.html$/, '.jpg'));
+  await mkdir(dirname(out), { recursive: true });
+  await writeFile(out, jpg);
+  await page.close();
+  console.log(`  ${v.href.padEnd(56)} ${(jpg.length / 1024).toFixed(0).padStart(4)} KB`);
+}
+
 try {
-  for (const l of labs) {
+  if (versionsOnly) for (const v of Object.values(STORIES).flatMap(s => s.versions)) await version(v);
+  else for (const l of labs) {
     // 4:5 like the tiles; twice the size of a phone tile so it stays sharp; let it move a little first
     let jpg = '';
     if (!firstOnly) {

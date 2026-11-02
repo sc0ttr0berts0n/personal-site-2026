@@ -27,7 +27,7 @@ const SNAPS = 10;              // filmstrip frames per learning run (plus the ra
 const lab = createLab({
   number: '09',
   title: 'Neural Mark',
-  blurb: 'A small neural network learns the mark from scratch, live, in seconds. Scribble on it and watch it forget, then heal.',
+  blurb: 'A small neural network learns the logo from scratch, live, in seconds. Scribble on it and watch it forget, then heal.',
   teaches: 'A neural network written from scratch in plain JavaScript, no ML library. It trains in a Web Worker so the page keeps its frame rate, with WebGL2 drawing what it has learned; it pauses when the tab is hidden and falls back to time-sliced work where workers aren’t available.',
   feed: { touch: 'drag', hint: 'draw on it' },
   palettes: ['cmy', 'spectrum', 'synthwave', 'ember', 'reef', 'aurora', 'ultraviolet', 'gold'],
@@ -42,7 +42,7 @@ const lab = createLab({
     hTrain:   { type: 'heading', label: 'Training' },
     lr:       { type: 'range', label: 'Learning rate', min: -3, max: 3, step: 0.25, value: 0,
                 format: v => (2 ** v).toFixed(2), unit: '×' },
-    seconds:  { type: 'range', label: 'Time to learn the mark', min: 6, max: 60, step: 1, value: 8, unit: ' s' },
+    seconds:  { type: 'range', label: 'Time to learn the logo', min: 6, max: 60, step: 1, value: 8, unit: ' s' },
     anneal:   { type: 'toggle', label: 'Coarse to fine (open frequencies slowly)', value: true },
     hScrib:   { type: 'heading', label: 'Scribble' },
     auto:     { type: 'toggle', label: 'Auto scribble when idle', value: true },

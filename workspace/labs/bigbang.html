@@ -39,7 +39,7 @@ const QUALITY = { low: [28, 0.45], medium: [40, 0.68], high: [60, 0.85], ultra: 
 const lab = createLab({
   number: '05',
   title: 'Big Bang',
-  blurb: 'A cold dust cloud collapses into the mark.',
+  blurb: 'A cold dust cloud collapses into the logo.',
   teaches: 'A volumetric cloud in three.js, raymarched at reduced resolution and smoothed over several frames by temporal reprojection, the trick games use to make expensive effects affordable. A pull field shaped like the logo draws the gas in, and it spins up as it shrinks, like a real collapsing cloud.',
   hint: 'drag to orbit · tap to replay',
   feed: { touch: 'drag', hint: 'drag to orbit · tap to replay' },
@@ -907,7 +907,7 @@ function update(dt) {
   // on replay the disk, the band and the embers all blow outward at the same rate
   diskOut = st.out;
 
-  // camera: a slow tilted orbit around the cloud that unwinds to face-on as the mark condenses
+  // camera: a slow tilted orbit around the cloud that unwinds to face-on as the logo condenses
   const front = st.front;
   const az = mode === 'blast' ? st.az : yaw * (1 - front);
   const el = P.tilt * Math.PI / 180 * (1 - front);
@@ -1103,7 +1103,7 @@ function hud() {
   if (mode === 'blast') lab.hud(`replay · blast wave r <b>${compMat.uniforms.uRs.value.toFixed(1)} u</b> · the gas spreads back out to radius <b>${r.toFixed(2)}</b>`);
   else if (st.u <= 0) lab.hud(`cold molecular cloud · T <b>10 K</b> · radius <b>1.00</b> · ${lab.params.octaves} octaves of fBm`);
   else if (st.tau < 0) lab.hud(`free fall · radius <b>${r.toFixed(2)}</b> · spin ∝ 1/r² <b>${(C * C).toFixed(C < 3 ? 1 : 0)}×</b> · T ∝ 1/r <b>${Math.round(10 * C)} K</b>`);
-  else if (st.tau < SETTLE) lab.hud(`ignition · core T ≈ <b>${sci(1.5e7 * (0.4 + 0.6 * st.hot))} K</b> · the mark condenses`);
+  else if (st.tau < SETTLE) lab.hud(`ignition · core T ≈ <b>${sci(1.5e7 * (0.4 + 0.6 * st.hot))} K</b> · the logo condenses`);
   else lab.hud(`condensed · radius <b>${r.toFixed(3)}</b> · the leftover disc disperses${lab.params.loop && !lab.calm ? ` · replay in <b>${Math.max(0, T0 + lab.params.collapse + SETTLE + lab.params.hold - S).toFixed(0)} s</b>` : ''}`);
 }
 
