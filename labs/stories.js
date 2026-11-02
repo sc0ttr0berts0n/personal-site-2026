@@ -4,7 +4,7 @@ export const STORIES = {
   "prism": {
     "paras": [
       "The first lab, and the one that set the look for all of them. I wanted my logo sitting on an optics bench, seen from overhead, black and white on a fine grid, where the famous triangle prism would normally be. The ray tracing is real: each wavelength bends by its own amount, and steep hits bounce around inside the chevrons of the logo.",
-      "Then I looked closer and asked: \"Am I convinced this looks like glass?\" It wasn't. The edges were drawn lines that stair-stepped at the logo's near-45° angles, and the grid behind the glass sat perfectly flat, which real glass would never allow. So the drawn edges went, and one shader does it all now: smooth edges at any angle, the grid bending through the rim and through hammered-glass ripples, and color fringing where each channel refracts on its own. Black glass edges came from memory: I'd seen thick glass go black at the rim and wanted that."
+      "It already looked like glass, which can be quite optically clear when it needs to be. What I was after was the feel of glass. I pulled inspiration from the Stranger Things title sequence and wanted it to feel a bit analog and vintage. This is tightly simulated optical stuff, so I loved the idea of some parts being imprecise. The drawn edges stair-stepped at the logo's near-45° angles and the grid behind the glass sat perfectly flat, so both went, and one shader does it all now: smooth edges at any angle, the grid bending through the rim and through hammered-glass ripples, and color fringing where each channel refracts on its own. Black glass edges came from memory: I'd seen thick glass go black at the rim and wanted that."
     ],
     "versions": [],
     "open": ""
