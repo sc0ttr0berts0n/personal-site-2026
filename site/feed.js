@@ -645,7 +645,9 @@ function openDialog(d) {
     // showModal focuses the first button, the handle, which then wears a focus ring; start on the sheet instead
     d.tabIndex = -1; d.focus({ preventScroll: true });
   }
-  requestAnimationFrame(() => requestAnimationFrame(() => d.classList.add('open')));
+  // no waiting on a frame to slide or fade in: a toy starting up can hold frames back for a while
+  d.offsetWidth;
+  d.classList.add('open');
 }
 function closeDialog(d) {
   if (!d.open) return;

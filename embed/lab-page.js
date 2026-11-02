@@ -102,6 +102,8 @@
       animation: ver-spin .8s linear infinite; }   /* turns on the compositor, so it keeps going while the toy starts up */
     .lab-page .lab-fail { position: absolute; left: 12px; right: 44px; bottom: 10px; margin: 0; z-index: 2; pointer-events: auto; font: 400 12px/1.4 var(--mono); }
     .lab-page .lab-fail a { pointer-events: auto; }
+    /* the toy takes the finger: a press or a drag on it never selects anything or brings up the callout (the feed does the same) */
+    .lab-page .lab-stage, .lab-page .lab-stage * { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
     .lab-page .lab-back { text-decoration: none; }
     .lab-page .lab-back:hover { color: var(--ink); }
     .lab-page .lab-back .arr { color: var(--dim); margin-right: -2px; }
@@ -330,11 +332,11 @@
       wrapM.append(meta, gridBtn);
       const mark = top.querySelector('svg')?.outerHTML.replace(/width="\d+"/, 'width="32"').replace(/height="\d+"/, 'height="32"') || '';
       const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
-      let ov = null;
+      let ov = null, closeT = 0;
       const close = () => {
         if (!ov?.open) return;
         ov.classList.remove('open');
-        if (matchMedia('(prefers-reduced-motion: reduce)').matches) ov.close(); else setTimeout(() => ov.close(), 200);
+        if (matchMedia('(prefers-reduced-motion: reduce)').matches) ov.close(); else closeT = setTimeout(() => ov.close(), 200);
       };
       const build = async () => {
         // the feed's own list and order: the manifest npm run sync writes, sorted as site/config.js orders the feed
@@ -365,10 +367,13 @@
           gridBtn.style.opacity = '.4';
           try { await ready(); } catch (e) { location.href = new URL('../', SCRIPT).href; return; } finally { gridBtn.style.opacity = ''; }
         }
-        if (ov.open) return;
-        ov.showModal();
+        clearTimeout(closeT);
+        if (!ov.open) ov.showModal();
         ov.querySelector('[aria-current]')?.focus({ preventScroll: false });
-        requestAnimationFrame(() => requestAnimationFrame(() => ov.classList.add('open')));
+        // no waiting on a frame to fade in: a paused toy holds frames back and a busy one delays them, and until
+        // then the grid is see-through over a black backdrop
+        ov.offsetWidth;
+        ov.classList.add('open');
       });
     }
 
@@ -463,6 +468,7 @@
     // It shows whenever the hold bar would, and gives way to the full toy while a slider is scrubbed or the toy is
     // held. A tap on it puts the controls back down.
     const stage = document.querySelector('.lab-stage');
+    stage?.addEventListener('contextmenu', e => { if (phone.matches) e.preventDefault(); });   // a long press on the toy is the toy's
     const pip = document.createElement('button');
     pip.type = 'button'; pip.className = 'lab-pip';
     pip.setAttribute('aria-label', 'Put the controls down to see the toy');
