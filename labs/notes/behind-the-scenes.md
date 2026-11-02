@@ -372,3 +372,13 @@ Scott walked the saved versions in `notes/versions/goop/`.
 - **Round 7, the noise:** "its fun but the 10deg orbit is very noisy." Seen nearly edge on, a ray runs a long way through the band's slab but crosses the thin sheet only briefly, so evenly spaced steps mostly missed it. The same 24 steps now bunch up where the ray crosses the sheet, which costs nothing extra.
 - **Round 8, tuners:** "give me some tuners for changing the orbiting particles." The embers get their own section of sliders: amount, share on the band's plane, speed, innermost radius, radius spread, wobble, fall-in at ignition, trail length, brightness and twinkle. The defaults match what was already on screen, so the look only changes when Scott moves one.
 - **Round 8, Scott's values:** Scott tuned the sliders and sent the settings back, and they are now the defaults: every ember and every accretion streak on, but dim (brightness 0.2×), slower (0.65×) and packed in close (innermost radius 1.9, spread 4.9), with short trails (0.7×) and a long fall-in at ignition (5). The swarm reads as fine dust round the mark rather than bright streaks.
+
+
+### Lab page: playing and reading are two concerns
+
+The sliders sat in one column ahead of the story, so reading how a lab was made meant scrolling past 17 controls. The feed's "more" opened a sheet that said "Process notes: coming soon" while the writeup already existed one tap further on.
+
+- **The call:** shown three structures at phone width (two pages, tabs on one page, a story sheet over the feed), Scott chose **tabs**, over Claude's recommendation of the sheet. One lab page, one running toy, two tabs: Change This and How it got here.
+- **Words:** the feed's "more" becomes "How it got here". "Change This" stays.
+- **The technical paragraph** moves to the end of the story, for the engineers reading.
+- **What follows from it:** the feed's caption sheet is gone. Its old-version links were duplicates of the story's tiles, and its motion toggle moves to the caption.
