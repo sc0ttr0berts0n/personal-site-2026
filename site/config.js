@@ -52,6 +52,6 @@ export const ARTIST = {
   links: [
     { label: 'Email', href: 'mailto:you@example.com', text: 'you@example.com' },
     { label: 'GitHub', href: 'https://github.com/sc0ttr0berts0n', text: 'sc0ttr0berts0n' },
-    { label: 'LinkedIn', href: '#', text: 'placeholder' }
+    { label: 'LinkedIn', href: 'https://www.linkedin.com/in/scott-robertson-dev', text: 'scott-robertson-dev' }
   ]
 };
