@@ -197,7 +197,7 @@
       const a = document.createElement('a');
       a.className = 'who lab-back';
       a.innerHTML = `<span class="arr" aria-hidden="true">←</span>${who.innerHTML}`;
-      a.setAttribute('aria-label', 'Back to all toys');
+      a.setAttribute('aria-label', 'Back to all labs');
       const href = () => '../#' + slug + (location.hash.length > 1 ? '/' + location.hash.slice(1) : '');
       a.href = href();
       a.addEventListener('pointerdown', () => { a.href = href(); });
@@ -284,8 +284,8 @@
     // ---- hold to see the toy, and the lock ----
     const bar = document.createElement('div');
     bar.className = 'lab-holdbar';
-    bar.innerHTML = `<button type="button" class="lab-hold">${EYE}<span>Hold to see the toy</span></button>
-      <button type="button" class="lab-lock" aria-pressed="false" aria-label="Keep the toy showing">${lock(false)}</button>`;
+    bar.innerHTML = `<button type="button" class="lab-hold">${EYE}<span>Hold to see the lab</span></button>
+      <button type="button" class="lab-lock" aria-pressed="false" aria-label="Keep the lab showing">${lock(false)}</button>`;
     document.body.append(bar);
     const holdBtn = bar.querySelector('.lab-hold'), holdLbl = holdBtn.querySelector('span'), lockBtn = bar.querySelector('.lab-lock');
     // the bar shows once the controls are pulled up far enough to cover the toy
@@ -298,7 +298,7 @@
     const hold = on => {
       if (locked) return;
       root.classList.toggle('held', on);
-      holdLbl.textContent = on ? 'Let go for the controls' : 'Hold to see the toy';
+      holdLbl.textContent = on ? 'Let go for the controls' : 'Hold to see the lab';
     };
     // let go anywhere: the panel (and the button pressed) may have faded out from under the finger
     const release = () => { removeEventListener('pointerup', release); removeEventListener('pointercancel', release); hold(false); };
@@ -312,9 +312,9 @@
       root.classList.toggle('locked', locked);
       root.classList.toggle('held', locked);
       lockBtn.setAttribute('aria-pressed', String(locked));
-      lockBtn.setAttribute('aria-label', locked ? 'Back to the controls' : 'Keep the toy showing');
+      lockBtn.setAttribute('aria-label', locked ? 'Back to the controls' : 'Keep the lab showing');
       lockBtn.innerHTML = lock(locked);
-      holdLbl.textContent = 'Hold to see the toy';
+      holdLbl.textContent = 'Hold to see the lab';
     });
 
     // ---- picture in picture: the toy in the top right corner while the controls are up ----
@@ -323,7 +323,7 @@
     const stage = document.querySelector('.lab-stage');
     const pip = document.createElement('button');
     pip.type = 'button'; pip.className = 'lab-pip';
-    pip.setAttribute('aria-label', 'Put the controls down to see the toy');
+    pip.setAttribute('aria-label', 'Put the controls down to see the lab');
     document.body.append(pip);
     pip.addEventListener('click', () => scrollTo({ top: 0, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }));
     // maps the stage's key square onto the corner box: offsetWidth/Height ignore the transform, so this never feeds back
