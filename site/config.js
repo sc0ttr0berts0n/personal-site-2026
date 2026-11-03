@@ -42,8 +42,10 @@ export const TOUCH = {
 export const SITE_URL = 'https://sc0ttr0berts0n.github.io/personal-site-2026/';
 
 // Share cards (npm run share): how long each toy runs before its picture is taken, in ms. Default 6000.
-// Vessel at 12 s is mid-way through a color front; Neon Oil needs its shader compiled first.
-export const SHARE_AT = { fluid: 12000, goop: 22000 };
+// Neon Oil needs its shader compiled first, and at 34 s the logo is coated in oil, mid-drip.
+export const SHARE_AT = { fluid: 22000, goop: 34000, knockout: 4000 };
+// Scott picked these frames by eye, and they never run quite the same way twice: a plain run leaves them alone.
+export const SHARE_KEEP = ['fluid', 'goop', 'knockout'];
 
 export const ARTIST = {
   name: 'Scott Robertson',

@@ -7,7 +7,8 @@
 //   npm run share [slug ...] [-- --pages]     (--pages: only rewrite the pages, keep the pictures)
 //
 // Needs Chrome or Edge (or BROWSER=path/to/browser) and the dev dependency puppeteer-core.
-// Re-run after a sync (new titles or blurbs) and when a toy looks different. SITE_URL and SHARE_AT are in site/config.js.
+// Re-run after a sync (new titles or blurbs) and when a toy looks different. SITE_URL, SHARE_AT and SHARE_KEEP are in site/config.js.
+// A plain run leaves SHARE_KEEP's hand-picked cards alone; naming a slug renders it anyway.
 import { spawn } from 'node:child_process';
 import { mkdir, readFile, writeFile, stat } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -19,10 +20,10 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const OUT = join(ROOT, 'share');
 const PORT = 8125, BASE = `http://localhost:${PORT}/`;
 const { LABS } = await import('../labs/manifest.js');
-const { SITE_URL, SHARE_AT, START, ORDER, ARTIST } = await import('../site/config.js');
+const { SITE_URL, SHARE_AT, SHARE_KEEP, START, ORDER, ARTIST } = await import('../site/config.js');
 const args = process.argv.slice(2), pagesOnly = args.includes('--pages');
 const only = args.filter(a => !a.startsWith('--'));
-const labs = only.length ? LABS.filter(l => only.includes(l.slug)) : LABS;
+const labs = only.length ? LABS.filter(l => only.includes(l.slug)) : LABS.filter(l => !SHARE_KEEP?.includes(l.slug));
 
 const exists = p => stat(p).then(() => true, () => false);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
