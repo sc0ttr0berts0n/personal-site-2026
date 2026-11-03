@@ -31,7 +31,7 @@ const storyHTML = (slug, story) => {
 };
 const bootShell = ({ slug, number, title, blurb, teaches }, story) => `<body>
 <div class="lab-boot">
-<header class="lab-top"><a class="who lab-back" href="../#${slug}" aria-label="Back to all toys"><span class="arr" aria-hidden="true">←</span>${logoSVG({ size: 18 })} scott robertson</a><span>lab ${number}</span></header>
+<header class="lab-top"><a class="who lab-back" href="../#${slug}" aria-label="Back to all labs"><span class="arr" aria-hidden="true">←</span>${logoSVG({ size: 18 })} scott robertson</a><span>lab ${number}</span></header>
 <div class="lab">
 <div class="lab-stage" aria-hidden="true"><div class="lab-poster"><picture><source media="(orientation: landscape)" srcset="../posters/first/${slug}-wide.jpg"><img src="../posters/first/${slug}-tall.jpg" alt="" fetchpriority="high"></picture><i class="lab-spin"></i></div></div>
 <div class="lab-panel"><div class="lab-peek"></div><div class="lab-tabs" aria-hidden="true"><span class="lab-tab boot-change">Change This</span><span class="lab-tab boot-story">How it got here</span></div>
