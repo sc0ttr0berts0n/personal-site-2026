@@ -6,9 +6,20 @@
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@200;300&family=Familjen+Grotesk:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@200;300&family=Familjen+Grotesk:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap" media="print" onload="this.media='all'">
 <link rel="stylesheet" href="shared/lab.css">
+<body>
+<div class="lab-boot">
+<header class="lab-top"><a class="who lab-back" href="../#knockout" aria-label="Back to all toys"><span class="arr" aria-hidden="true">←</span><svg viewBox="160.987 180.556 678.272 638.597" width="18" height="18" aria-hidden="true"><g fill="currentColor" stroke="none" stroke-width="0" stroke-linejoin="round"><path d="M311.621 404.88L468.345 259.765L404.781 200.908L184.501 404.88C180.987 408.128 180.987 413.397 184.501 416.653L432.387 646.177L489.596 593.215C493.101 589.959 493.101 584.69 489.596 581.442L311.621 416.653C308.108 413.397 308.108 408.128 311.621 404.88Z"/><path d="M567.86 351.911L510.659 404.881C507.145 408.129 507.145 413.399 510.659 416.647L688.626 581.443C692.139 584.691 692.139 589.96 688.626 593.208L531.901 738.324L595.465 797.18L758.545 646.178L815.746 593.208C819.259 589.96 819.259 584.691 815.746 581.443Z"/><path d="M474.699 404.879L631.806 259.405L568.242 200.556L347.579 404.879C344.065 408.127 344.065 413.396 347.579 416.652L525.546 581.441C529.059 584.689 529.059 589.958 525.546 593.214L366.698 740.297L430.262 799.153L652.674 593.214C656.179 589.958 656.179 584.689 652.674 581.441L474.699 416.652C471.186 413.396 471.186 408.127 474.699 404.879Z"/></g></svg> scott robertson</a><span>lab 04</span></header>
+<div class="lab">
+<div class="lab-stage" aria-hidden="true"><div class="lab-poster"><picture><source media="(orientation: landscape)" srcset="../posters/first/knockout-wide.jpg"><img src="../posters/first/knockout-tall.jpg" alt="" fetchpriority="high"></picture><i class="lab-spin"></i></div></div>
+<div class="lab-panel"><div class="lab-peek"></div><div class="lab-tabs" aria-hidden="true"><span class="lab-tab boot-change">Change This</span><span class="lab-tab boot-story">How it got here</span></div>
+<div class="lab-group"><span class="num">Lab 04</span><h1>Knockout</h1></div><p class="blurb">The logo stands on three slim plinths with rubber caps. Pull back anywhere and let go to throw a ball at it.</p>
+<div class="lab-pane lab-pane-story"><section class="lab-story"><p>The logo stands on three plinths, and you throw heavy balls at it. At first it did something only when you threw, which made it dull to watch. I made it fire on its own, then alternate left and right, and tuned it for rhythm rather than physics: five shots, three-quarters of a second apart, then a rewind-like reset.</p><p>The rule across every lab is that my logo stays on screen, and Knockout literally knocks it off. So it leaves a dashed crime-scene outline where it stood, and you can always see what was there. The pieces gliding home read as the logo restoring itself rather than as a reset. I discovered that trick here, and I've gone on to use it elsewhere.</p><p>Much later, I decided it needed a surprise. At the end of the volley, every ball bursts into three, and each of those into three more, turning a few heavy hits into a hailstorm of glass beads to end each cycle. It started as five and five, and came down to three and three for performance, with a similar feel.</p></section><p class="teaches"><span>how it’s built →</span> Canvas 2D drawing with planck.js, a JavaScript port of the Box2D physics engine. The logo’s concave shapes are cut into convex pieces the engine can simulate, and lines snap to whole device pixels so they stay sharp on any screen.</p><p class="lab-raw"><a href="notes/behind-the-scenes.md" target="_blank" rel="noopener">Raw notes</a></p></div></div>
+</div>
+</div>
 <script type="module">
+import '../embed/lab-first-paint.js';
 import * as pl from 'https://cdn.jsdelivr.net/npm/planck@1.4.3/dist/planck.mjs';
 import { createLab } from './shared/lab.js';
 import { LOGO_PIECES, logoPolygons, fitLogo } from './shared/logo.js';

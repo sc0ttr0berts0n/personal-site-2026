@@ -6,12 +6,23 @@
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@200;300&family=Familjen+Grotesk:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@200;300&family=Familjen+Grotesk:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap" media="print" onload="this.media='all'">
 <link rel="stylesheet" href="shared/lab.css">
 <style>
   .lab-stage > canvas { cursor: pointer; }
 </style>
+<body>
+<div class="lab-boot">
+<header class="lab-top"><a class="who lab-back" href="../#splat" aria-label="Back to all toys"><span class="arr" aria-hidden="true">←</span><svg viewBox="160.987 180.556 678.272 638.597" width="18" height="18" aria-hidden="true"><g fill="currentColor" stroke="none" stroke-width="0" stroke-linejoin="round"><path d="M311.621 404.88L468.345 259.765L404.781 200.908L184.501 404.88C180.987 408.128 180.987 413.397 184.501 416.653L432.387 646.177L489.596 593.215C493.101 589.959 493.101 584.69 489.596 581.442L311.621 416.653C308.108 413.397 308.108 408.128 311.621 404.88Z"/><path d="M567.86 351.911L510.659 404.881C507.145 408.129 507.145 413.399 510.659 416.647L688.626 581.443C692.139 584.691 692.139 589.96 688.626 593.208L531.901 738.324L595.465 797.18L758.545 646.178L815.746 593.208C819.259 589.96 819.259 584.691 815.746 581.443Z"/><path d="M474.699 404.879L631.806 259.405L568.242 200.556L347.579 404.879C344.065 408.127 344.065 413.396 347.579 416.652L525.546 581.441C529.059 584.689 529.059 589.958 525.546 593.214L366.698 740.297L430.262 799.153L652.674 593.214C656.179 589.958 656.179 584.689 652.674 581.441L474.699 416.652C471.186 413.396 471.186 408.127 474.699 404.879Z"/></g></svg> scott robertson</a><span>lab 12</span></header>
+<div class="lab">
+<div class="lab-stage" aria-hidden="true"><div class="lab-poster"><picture><source media="(orientation: landscape)" srcset="../posters/first/splat-wide.jpg"><img src="../posters/first/splat-tall.jpg" alt="" fetchpriority="high"></picture><i class="lab-spin"></i></div></div>
+<div class="lab-panel"><div class="lab-peek"></div><div class="lab-tabs" aria-hidden="true"><span class="lab-tab boot-change">Change This</span><span class="lab-tab boot-story">How it got here</span></div>
+<div class="lab-group"><span class="num">Lab 12</span><h1>Splat!</h1></div><p class="blurb">The logo is made of slime and falling fast. It splats on the floor, the next logo pops out of the splat, then the floor gives way and down they go.</p>
+<div class="lab-pane lab-pane-story"><section class="lab-story"><p>You see a fine grid, slowly zooming. It turns out the camera is locked to the logo, the logo is made of Nickelodeon-style slime, and it's falling fast.</p><p>Every revision was about the loop. A lab that goes on a journey is more fun if it loops, and I'm always chasing novel ways to close one. First, the splat tore open to reveal the next drop, which was nice but only an effect. Then the next drop fell through the splat. Now the next logo pops up out of the splat on impact, the floor opens in the splat's own shape, and down they both go.</p><p>Along the way, I lost the sharp corners in favor of pure goop, made the fall a true free fall from rest, and had the logo flutter like a parachute as it speeds up.</p><p>Then I let it tumble. It used to lean toward your finger and level out just before impact, so it always met the floor flat and square. Now a tap or a flick sends it spinning, it never rights itself, and it splats however it lands, with the puddle, the spray and the hole all following how it came down. Turned edge-on, the flat sheet vanished, so I asked for thickness, and now it has a gooey rim that catches the light as it rolls.</p><p>I'm not married to all of it. I'd still like to see a putty or clay feel.</p></section><p class="teaches"><span>how it’s built →</span> Raw WebGL2: every bead of goo is drawn with instanced rendering into a floating-point field (metaballs), then one composite pass lights the slime and the floors. The zoom is just perspective: a steady fall reads as an accelerating zoom.</p><p class="lab-raw"><a href="notes/behind-the-scenes.md" target="_blank" rel="noopener">Raw notes</a></p></div></div>
+</div>
+</div>
 <script type="module">
+import '../embed/lab-first-paint.js';
 import { createLab } from './shared/lab.js';
 import { fitLogo, logoPolygons } from './shared/logo.js';
 import { hex, mix } from './shared/palettes.js';

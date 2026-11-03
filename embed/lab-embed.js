@@ -42,7 +42,7 @@
   css.textContent = `
     html.lab-embed, html.lab-embed body { height: 100%; overflow: hidden; }
     html.lab-embed body { padding: 0; display: block; }
-    html.lab-embed .lab-top, html.lab-embed .lab-panel, html.lab-embed .lab-hint, html.lab-embed .lab-hud { display: none !important; }
+    html.lab-embed .lab-boot, html.lab-embed .lab-top, html.lab-embed .lab-panel, html.lab-embed .lab-hint, html.lab-embed .lab-hud { display: none !important; }
     /* controls a lab puts on its stage belong to its own page, not the feed, unless it marks them [data-feed] (Sand's element buttons) */
     html.lab-embed .lab-stage > :is(button, input, select, :has(button, input, select)):not([data-feed]) { display: none !important; }
     html.lab-embed .lab { display: block; height: 100%; }

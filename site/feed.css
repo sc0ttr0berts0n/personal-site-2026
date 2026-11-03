@@ -187,12 +187,11 @@ html[data-axis="y"] .cues { display: block; position: absolute; inset: 0; z-inde
 .cap { flex: 0 1 620px; min-width: 0; display: grid; gap: 6px; text-align: left; background: none; border: 0; padding: 0; cursor: pointer; max-width: 620px; }
 .cap .title { font: 200 26px/1.1 var(--display); letter-spacing: -.01em; }
 .cap .blurb { color: var(--dim); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.cap { color: inherit; text-decoration: none; }
 .cap .more { font: 400 11px/1 var(--mono); color: var(--ink); letter-spacing: .08em; text-transform: uppercase; }
 .cap:hover .more { text-decoration: underline; }
-/* the sheet rises from below; on a portrait phone an up arrow would read as "swipe up", which is the next toy there */
-.cap .arr::before { content: "↑"; }
-:root[data-axis="y"] .cap .arr::before { content: "+"; }
 .play { flex: none; margin-left: auto; }
+.motion { flex: none; justify-content: center; }
 
 /* ---- chrome over the feed ---- */
 .topbar { position: fixed; z-index: 5; top: 0; left: 0; right: 0; display: flex; justify-content: space-between; align-items: center; gap: 12px;
@@ -213,7 +212,7 @@ html[data-axis="y"] .cues { display: block; position: absolute; inset: 0; z-inde
 .nav.next { right: var(--gut-r); }
 @media (hover: hover) and (pointer: fine) { .nav { display: grid; } }
 
-/* ---- sheets (caption details, artist card) ---- */
+/* ---- the artist card sheet ---- */
 dialog { color: var(--ink); }
 dialog:focus { outline: none; }
 dialog::backdrop { background: rgb(0 0 0 / .55); opacity: 0; transition: opacity .25s; }
@@ -231,17 +230,6 @@ dialog.open::backdrop { opacity: 1; }
 .sheet h2 { margin: 0; font: 200 28px/1.1 var(--display); letter-spacing: -.01em; text-wrap: balance; }
 .sheet p { margin: 0; }
 .sheet .blurb { color: var(--dim); }
-.sheet .teaches { font: 400 12px/1.6 var(--mono); border-top: 1px solid var(--line); padding-top: 14px; }
-.sheet .teaches span, .sheet .hint span { color: var(--dim); }
-.sheet .hint { font: 400 12px/1.6 var(--mono); }
-.sheet .label { font: 500 10px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--dim); }
-.sheet section { display: grid; gap: 10px; border-top: 1px solid var(--line); padding-top: 14px; }
-.versions { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
-.versions a { font: 400 12px/1 var(--mono); display: inline-block; padding: 8px 10px; border: 1px solid var(--line); border-radius: 2px; text-decoration: none; }
-.versions a:hover { border-color: var(--ink); }
-.stub { font: 400 12px/1.5 var(--mono); color: var(--dim); }
-.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-
 .card .who { display: flex; align-items: center; gap: 16px; }
 .card .avatar { width: 72px; height: 72px; }
 .links { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; }

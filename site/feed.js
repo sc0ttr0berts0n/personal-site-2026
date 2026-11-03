@@ -186,7 +186,7 @@ function readHash() {
   if (code) codes.set(slug, code); else codes.delete(slug);
   return slug;
 }
-const pageHref = t => t.href + (codes.get(t.slug) ? '#' + codes.get(t.slug) : '');
+const pageHref = (t, story) => t.href + (story ? '?story' : '') + (codes.get(t.slug) ? '#' + codes.get(t.slug) : '');
 const frameSrc = (t, play) => `${t.href}?embed=1${play ? '' : '&paused=1'}${codes.get(t.slug) ? '#' + codes.get(t.slug) : ''}`;
 function writeHash() {
   const t = toys[cur], code = codes.get(t.slug);
@@ -210,12 +210,13 @@ function makeSlide(t, play, defer = false) {
       <span class="toyhint" aria-hidden="true"></span>
     </div>
     <div class="caption">
-      <button type="button" class="cap" aria-haspopup="dialog">
+      <a class="cap" href="${esc(pageHref(t, true))}">
         <span class="num">lab ${t.number}</span>
         <span class="title">${esc(t.title)}</span>
         <span class="blurb">${esc(t.blurb)}</span>
-        <span class="more">more <span class="arr" aria-hidden="true"></span></span>
-      </button>
+        <span class="more">How it got here <span aria-hidden="true">&rarr;</span></span>
+      </a>
+      ${calm ? motionBtn() : ''}
       <a class="btn primary play" href="${esc(pageHref(t))}">Change This <span aria-hidden="true">→</span></a>
     </div>`;
   const s = { toy: t, el, iframe: null, ready: false, playing: play, offset: 0, born: performance.now(), touch: t.touch || TOUCH[t.slug]?.touch || 'none', hint: t.touchHint || TOUCH[t.slug]?.hint || '' };
@@ -224,7 +225,7 @@ function makeSlide(t, play, defer = false) {
   img.onerror = () => { const own = posters.get(t.slug); if (own && img.src !== own) img.src = own; };
   img.src = firstFrame(t);
   if (img.complete && img.naturalWidth) img.onload();   // fetched ahead: there now, not a frame later
-  el.querySelector('.cap').addEventListener('click', () => openSheet(t));
+  el.querySelector('.motion')?.addEventListener('click', toggleMotion);
   slidesEl.appendChild(el);
   slides.set(t.slug, s);
   if (!defer) mount(s);
@@ -632,6 +633,7 @@ function reloadCurrent() {
   if (!s?.iframe) return;
   s.iframe.src = frameSrc(s.toy, true);
   s.el.querySelector('.play').href = pageHref(s.toy);
+  s.el.querySelector('.cap').href = pageHref(s.toy, true);
 }
 
 // ---- dialogs ----
@@ -643,7 +645,9 @@ function openDialog(d) {
     // showModal focuses the first button, the handle, which then wears a focus ring; start on the sheet instead
     d.tabIndex = -1; d.focus({ preventScroll: true });
   }
-  requestAnimationFrame(() => requestAnimationFrame(() => d.classList.add('open')));
+  // no waiting on a frame to slide or fade in: a toy starting up can hold frames back for a while
+  d.offsetWidth;
+  d.classList.add('open');
 }
 function closeDialog(d) {
   if (!d.open) return;
@@ -711,33 +715,12 @@ for (const d of document.querySelectorAll('dialog')) {
   d.addEventListener('click', e => { if (e.target.closest('[data-close]')) closeDialog(d); });
 }
 
-function openSheet(t) {
-  const motion = matchMedia('(prefers-reduced-motion: reduce)').matches;
-  let forced = false; try { forced = localStorage.getItem('lab-motion') === 'on'; } catch (e) {}
-  $('sheet-body').innerHTML = `
-    <button type="button" class="grab" data-close aria-label="Close"></button>
-    <span class="num">lab ${t.number}</span>
-    <h2 id="sheet-title">${esc(t.title)}</h2>
-    <p class="blurb">${esc(t.blurb)}</p>
-    <p class="teaches"><span>demonstrates →</span> ${esc(t.teaches)}</p>
-    ${t.hint ? `<p class="hint"><span>on its own page →</span> ${esc(stripTags(t.hint))}</p>` : ''}
-    <div class="row"><a class="btn primary" href="${esc(pageHref(t))}">Change This <span aria-hidden="true">→</span></a></div>
-    ${motion ? `<section><span class="label">Motion</span>
-      <p class="stub">${forced ? 'Labs play full motion even though your system asks for reduced motion.' : 'Your system asks for reduced motion, so the labs hold still.'}</p>
-      <div class="row"><button type="button" class="btn" id="motion-toggle">${forced ? 'Reduce motion again' : 'Play motion anyway'}</button></div></section>` : ''}
-    <section>
-      <span class="label">Process</span>
-      ${t.versions.length
-        ? `<p class="stub">Old versions, from before each decisive change (each runs on a copy of the shared code frozen on 2026-10-30, not the code it was first built on, so some may look a little off).</p>
-           <ul class="versions">${t.versions.map(v => `<li><a href="${esc(v.href)}" target="_blank" rel="noopener">${esc(v.name)}</a></li>`).join('')}</ul>`
-        : `<p class="stub">No old versions kept for this one.</p>`}
-      <p class="stub">Process notes: coming soon. <a href="labs/notes/behind-the-scenes.md" target="_blank" rel="noopener">Raw notes</a></p>
-    </section>`;
-  $('motion-toggle')?.addEventListener('click', () => {
-    try { localStorage.setItem('lab-motion', forced ? 'off' : 'on'); } catch (e) {}
-    location.reload();
-  });
-  openDialog($('sheet'));
+// Reduced motion holds the labs still; the caption offers to play them anyway (lab pages have the same offer)
+function motionForced() { try { return localStorage.getItem('lab-motion') === 'on'; } catch (e) { return false; } }
+function motionBtn() { return `<button type="button" class="btn motion">${motionForced() ? 'Reduce motion again' : 'Play motion anyway'}</button>`; }
+function toggleMotion() {
+  try { localStorage.setItem('lab-motion', motionForced() ? 'off' : 'on'); } catch (e) {}
+  location.reload();
 }
 
 function avatarHTML() {
@@ -794,6 +777,8 @@ $('overview').addEventListener('close', () => {
 
 // ---- start ----
 const startSlug = readHash() || (START && bySlug.has(START) ? START : toys[0].slug);
+// lab/<slug>/?story is a link to the writeup that still previews as the lab: on to the lab's page, on that tab
+if (new URLSearchParams(location.search).has('story')) location.replace(pageHref(bySlug.get(startSlug), true));
 cur = indexOf(startSlug);
 const first = makeSlide(toys[cur], true);
 first.offset = 0; place(first);

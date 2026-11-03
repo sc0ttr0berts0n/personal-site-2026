@@ -10,13 +10,36 @@
 // standalone, without ?embed in its URL, that script does nothing.
 import { readdir, readFile, writeFile, mkdir, rm, cp, stat } from 'node:fs/promises';
 import { join, resolve, dirname, basename, relative } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const SRC = resolve(process.argv[2] || process.env.LABS_SRC || join(ROOT, 'workspace', 'labs'));
 const OUT = join(ROOT, 'labs');
 // Feed embed hooks, plus the layout of a lab's own page on the site (embed/lab-page.js).
 const EMBED_TAG = '<script src="../embed/lab-embed.js"></script>\n<script src="../embed/lab-page.js"></script>';
+
+// What a lab's own page shows before its code has loaded: the header, the panel's name and tabs, and the toy's first
+// frame (the feed's still). It goes in before the lab's module, which only builds the real page once all its imports
+// have arrived; embed/lab-page.js swaps this out then. The feed's frames hide it (embed/lab-embed.js).
+// The story is here in full, and moves into the real page as it stands: reading never waits for the toy.
+const esc = t => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+const storyHTML = (slug, story) => {
+  if (!story) return '';
+  const thumb = src => `<img class="ver-thumb" src="${src}" alt="" loading="lazy" decoding="async">`;
+  const tile = (v, i) => `<li><button type="button" class="ver-tile" data-name="${esc(v.name)}" data-href="${esc(v.href)}">${thumb('../posters/' + v.href.replace('labs/notes/', '').replace(/\.html$/, '.jpg'))}<span class="ver-n">${v.name.match(/^\d+[a-z]?/)?.[0] || i + 1}</span><span><span class="ver-cap">${esc(v.note || v.name.replace(/^\d+[a-z]?-?/, '').replace(/-/g, ' '))}</span><br><span class="ver-go">Play ▸</span></span></button></li>`;
+  return `<section class="lab-story">${story.blocks.map(b => b.p ? `<p>${b.p}</p>` : `<ol class="lab-versions" aria-label="Saved versions">${b.versions.map(i => tile(story.versions[i], i)).join('')}</ol>`).join('')}${story.open ? `<p class="open"><b>Still open</b>${story.open}</p>` : ''}${story.versions.length ? `<ol class="lab-versions" aria-label="The lab today"><li><button type="button" class="ver-now">${thumb(`../posters/${slug}.jpg`)}<span class="ver-n">Now</span><span><span class="ver-cap">this lab, as it is today</span><br><span class="ver-go">See it ▴</span></span></button></li></ol>` : ''}</section>`;
+};
+const bootShell = ({ slug, number, title, blurb, teaches }, story) => `<body>
+<div class="lab-boot">
+<header class="lab-top"><a class="who lab-back" href="../#${slug}" aria-label="Back to all toys"><span class="arr" aria-hidden="true">←</span>${logoSVG({ size: 18 })} scott robertson</a><span>lab ${number}</span></header>
+<div class="lab">
+<div class="lab-stage" aria-hidden="true"><div class="lab-poster"><picture><source media="(orientation: landscape)" srcset="../posters/first/${slug}-wide.jpg"><img src="../posters/first/${slug}-tall.jpg" alt="" fetchpriority="high"></picture><i class="lab-spin"></i></div></div>
+<div class="lab-panel"><div class="lab-peek"></div><div class="lab-tabs" aria-hidden="true"><span class="lab-tab boot-change">Change This</span><span class="lab-tab boot-story">How it got here</span></div>
+<div class="lab-group"><span class="num">Lab ${number}</span><h1>${title}</h1></div><p class="blurb">${blurb}</p>
+<div class="lab-pane lab-pane-story">${storyHTML(slug, story)}${teaches ? `<p class="teaches"><span>how it’s built →</span> ${teaches}</p>` : ''}<p class="lab-raw"><a href="notes/behind-the-scenes.md" target="_blank" rel="noopener">Raw notes</a></p></div></div>
+</div>
+</div>
+`;
 // The labs are written for the artifact viewer, which supplies its own viewport. Served directly, a phone would
 // lay them out at desktop width unless the page says otherwise.
 const VIEWPORT_TAG = '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">';
@@ -29,6 +52,7 @@ if (!(await exists(join(SRC, 'shared', 'lab.js')))) {
   console.error(`No labs found at ${SRC} (expected shared/lab.js). Pass the labs folder as an argument.`);
   process.exit(1);
 }
+const { logoSVG } = await import(pathToFileURL(join(SRC, 'shared', 'logo.js')).href);
 
 await rm(OUT, { recursive: true, force: true });
 await mkdir(OUT, { recursive: true });
@@ -65,7 +89,7 @@ const feedField = src => {
   return m ? { touch: m[1], touchHint: (m[2] || '').replace(/\\(.)/g, '$1') } : {};
 };
 
-const labs = [];
+const labs = [], pages = [];
 for (const file of (await readdir(SRC)).filter(f => f.endsWith('.html')).sort()) {
   const slug = basename(file, '.html');
   let html = await readFile(join(SRC, file), 'utf8');
@@ -79,9 +103,7 @@ for (const file of (await readdir(SRC)).filter(f => f.endsWith('.html')).sort())
       html = html.slice(0, end) + viewport + '\n' + EMBED_TAG + html.slice(end);
     }
   }
-  await writeFile(join(OUT, file), html);
-
-  const vdir = VERSION_DIRS[slug] || slug;
+    const vdir = VERSION_DIRS[slug] || slug;
   const vpath = join(SRC, 'notes', 'versions', vdir);
   const versions = (await exists(vpath))
     ? (await readdir(vpath)).filter(f => f.endsWith('.html')).sort().map(f => ({ name: basename(f, '.html'), href: `labs/notes/versions/${vdir}/${f}` }))
@@ -92,6 +114,9 @@ for (const file of (await readdir(SRC)).filter(f => f.endsWith('.html')).sort())
     blurb: field(spec, 'blurb'), teaches: field(spec, 'teaches'), hint: field(spec, 'hint'), ...feedField(html),
     href: `labs/${file}`, versions
   });
+  // nothing on the page waits for the web fonts (they swap in)
+  html = html.replace(/<link rel="stylesheet" href="https:\/\/fonts\.googleapis\.com([^"]*)">/, `<link rel="stylesheet" href="https://fonts.googleapis.com$1" media="print" onload="this.media='all'">`);
+  pages.push({ file, html, lab: labs.at(-1) });
 }
 labs.sort((a, b) => a.number.localeCompare(b.number));
 
@@ -136,9 +161,15 @@ if (await exists(STORIES_MD)) {
   }
   for (const l of labs) if (!stories[l.slug]) console.warn(`  ! process-stories.md: no story for ${l.slug} (${l.title})`);
 }
+// each page, with its first shell and story; the lab's code waits for the first paint
+for (const { file, html, lab } of pages) {
+  const at = html.indexOf('<script type="module">');
+  if (at < 0) console.warn(`  ! ${file}: no module script, first paint shell not added`);
+  await writeFile(join(OUT, file), at < 0 ? html : html.slice(0, at) + bootShell(lab, stories[lab.slug]) + '<script type="module">\nimport \'../embed/lab-first-paint.js\';' + html.slice(at + '<script type="module">'.length));
+}
 await writeFile(join(OUT, 'stories.js'),
   `// Generated by scripts/sync-labs.mjs from ${relative(ROOT, STORIES_MD).replace(/\\/g, '/')} — do not edit; edit the stories and re-sync.\n` +
-  `// Each lab's process story for its own page (embed/lab-page.js): blocks in reading order, a paragraph (HTML) or indexes into its saved versions.\n` +
+  `// Each lab's process story, for the posters script (each lab's own page has its story written in): blocks in reading order, a paragraph (HTML) or indexes into its saved versions.\n` +
   `export const STORIES = ${JSON.stringify(stories, null, 2)};\n`);
 
 await writeFile(join(OUT, 'README.md'),
