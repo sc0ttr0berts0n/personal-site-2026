@@ -58,24 +58,25 @@ const lab = createLab({
     swirl:    { type: 'range', label: 'Angular momentum (swirl)', min: 0, max: 3, step: 0.05, value: 0.55 },
     heat:     { type: 'range', label: 'Heating (compression → color)', min: 0, max: 4, step: 0.05, value: 2 },
     wobble:   { type: 'range', label: 'Clumping', min: 0, max: 2, step: 0.01, value: 1 },
-    streaks:  { type: 'range', label: 'Accretion streaks', min: 0, max: 1, step: 0.01, value: 1 },
+    streaks:  { type: 'range', label: 'Accretion streaks', min: 0, max: 3, step: 0.01, value: 1 },
     hIgnite:  { type: 'heading', label: 'Ignition' },
     flash:    { type: 'range', label: 'Flash intensity', min: 0, max: 2, step: 0.05, value: 0.45 },
     pulse:    { type: 'range', label: 'Afterglow pulse', min: 0, max: 0.2, step: 0.005, value: 0.04 },
     pulseRate:{ type: 'range', label: 'Pulse rate', min: 0.2, max: 2, step: 0.05, value: 0.2, unit: '/s', when: P => P.pulse > 0 },
+    hHole:    { type: 'heading', label: 'Black hole' },
     disk:     { type: 'range', label: 'Accretion disk', min: 0, max: 2, step: 0.05, value: 1 },
     diskSpin: { type: 'range', label: 'Disk spin', min: 0, max: 4, step: 0.05, value: 1, unit: '×', when: P => P.disk > 0 },
     lens:     { type: 'range', label: 'Lensing (spacetime warp)', min: 0, max: 2, step: 0.05, value: 1 },
     hole:     { type: 'range', label: 'Black hole (the mark’s shadow)', min: 0, max: 1, step: 0.05, value: 1 },
-    band:     { type: 'range', label: 'Disk band tilt', min: -45, max: 45, step: 1, value: 10, unit: '°', when: P => P.disk > 0 },
+    band:     { type: 'range', label: 'Disk band tilt', min: -45, max: 45, step: 1, value: 10, unit: '°', when: P => P.disk > 0 || (P.embers > 0 && P.emberBand > 0) },
     hEmbers:  { type: 'heading', label: 'Orbiting embers' },
-    embers:   { type: 'range', label: 'Amount', min: 0, max: 1, step: 0.01, value: 1 },
+    embers:   { type: 'range', label: 'Amount', min: 0, max: 3, step: 0.01, value: 1 },
     emberBand:{ type: 'range', label: 'Share on the band’s plane', min: 0, max: 1, step: 0.01, value: 0.5, when: P => P.embers > 0 },
     emberSpeed:{ type: 'range', label: 'Speed', min: 0, max: 4, step: 0.05, value: 0.65, unit: '×', when: P => P.embers > 0 },
     emberR:   { type: 'range', label: 'Innermost radius', min: 1, max: 12, step: 0.1, value: 1.9, when: P => P.embers > 0 },
     emberSpread:{ type: 'range', label: 'Radius spread', min: 0, max: 16, step: 0.1, value: 4.9, when: P => P.embers > 0 },
     emberWobble:{ type: 'range', label: 'Wobble', min: 0, max: 0.4, step: 0.01, value: 0.08, when: P => P.embers > 0 },
-    emberFall:{ type: 'range', label: 'Fall-in at ignition', min: 0, max: 5, step: 0.05, value: 5, when: P => P.embers > 0 },
+    emberFall:{ type: 'range', label: 'Fall-in at ignition', min: 0, max: 10, step: 0.05, value: 5, when: P => P.embers > 0 },
     emberTrail:{ type: 'range', label: 'Trail length', min: 0.1, max: 8, step: 0.05, value: 0.7, unit: '×', when: P => P.embers > 0 },
     emberGlow:{ type: 'range', label: 'Brightness', min: 0, max: 4, step: 0.05, value: 0.2, unit: '×', when: P => P.embers > 0 },
     emberTwinkle:{ type: 'range', label: 'Twinkle', min: 0, max: 1, step: 0.01, value: 0.46, when: P => P.embers > 0 },
@@ -650,8 +651,10 @@ function pose(obj, pc, b, force) {
 }
 
 // ---- streaks: gas parcels spiralling in onto the mark (and thrown back out on replay) ----
-const STREAKS = 560;
-const streaks = Array.from({ length: STREAKS }, () => {
+// the first 560 are the 0–1 of the Accretion streaks and Amount sliders; the rest only show above 1, from their own
+// generator, so everything below keeps the random draws it always had
+const STREAKS = 1680;
+const streakOf = (rng, pick0, pickW) => {
   let tx, ty;
   do { tx = (rng() - 0.5) * LOGO_W; ty = (rng() - 0.5) * LOGO_W; } while (sdfAt(tx, ty) > -0.03);
   const dur = 0.12 + rng() * 0.22;
@@ -664,9 +667,11 @@ const streaks = Array.from({ length: STREAKS }, () => {
     r0: 3.5 + rng() * 7.5, phi0: rng() * Math.PI * 2, z0: (rng() - 0.5) * 4,
     s: 0.12 + rng() * (0.86 - dur), dur,
     o, d: new THREE.Vector3(o.x * 0.3 + (rng() - 0.5) * 0.9, o.y * 0.3 + (rng() - 0.5) * 0.9, 0.15 + rng() * 1.1).normalize(),
-    speed: 3 + rng() ** 2 * 16, life: 0.6 + rng() * 1.6, hue: rng(), pick: rng()
+    speed: 3 + rng() ** 2 * 16, life: 0.6 + rng() * 1.6, hue: rng(), pick: pick0 + rng() * pickW
   };
-});
+};
+const xrng = mulberry32(78);
+const streaks = Array.from({ length: STREAKS }, (_, i) => i < 560 ? streakOf(rng, 0, 1) : streakOf(xrng, 1, 2));
 const streakGeo = new LineSegmentsGeometry();
 // room for four segments a streak: as the mark coalesces, its infall streak (two) and its orbiting ember (two) overlap
 streakGeo.setPositions(new Float32Array(STREAKS * 24));
@@ -780,7 +785,7 @@ lab.on('change', key => { if (key === 'quality') sizeNebula(); dirty = 40; });
 // snapshot of wherever the sequence was back to the cloud as it is at loopS(), just before the mark coalesces,
 // then hands over to 'seq' there. The lab opens at loopS() too, so it loops collapse, hold, blast.
 // Everything is a pure function of S (or B and the snapshot), so seeking and replaying never pop.
-let mode = 'seq', S = 0, B = 0, enterS = -1, churn = 0, beatT = 0, diskT = 0, emberT = 0, diskOut = 1, yaw = 0, from = null;
+let mode = 'seq', S = 0, B = 0, enterS = -1, churn = 0, beatT = 0, diskT = 0, emberT = 0, twinkleT = 0, diskOut = 1, yaw = 0, from = null;
 const clamp01 = x => Math.max(0, Math.min(1, x));
 function smooth(e0, e1, x) { const t = clamp01((x - e0) / (e1 - e0)); return t * t * (3 - 2 * t); }
 const mix = (a, b, f) => a + (b - a) * f;
@@ -892,7 +897,8 @@ function update(dt) {
     churn += dt * P.time * P.flow / 3;
     beatT += dt * P.time * P.pulseRate;
     diskT += dt * P.time * P.diskSpin;
-    emberT += dt * P.time * P.diskSpin * P.emberSpeed;   // its own clock, so the speed slider doesn't jump them round
+    emberT += dt * P.time * P.emberSpeed;   // its own clock, so the speed slider doesn't jump them round
+    twinkleT += dt * P.time;
     if (!press) { const r = Math.exp(-dt * 1.6); dragYaw *= r; dragPitch *= r; }
     if (mode === 'seq') {
       S += dt * P.time;
@@ -1050,7 +1056,7 @@ function update(dt) {
       const R = R0 * diskOut * (1 + st.fall * (0.6 + 0.4 * Math.sin(o.fl * 3))) * (1 + P.emberWobble * Math.sin(th * 2 + o.fl));
       const d = 0.12 * P.emberTrail;
       at(o, R, th - d, a); at(o, R, th - d / 2, m); at(o, R, th, h);
-      const fade = st.emb * P.emberGlow * (1 - P.emberTwinkle + P.emberTwinkle * Math.sin(diskT * 2.3 + o.fl * 9)), c = lut(0.08 + 0.45 * sp.hue);
+      const fade = st.emb * P.emberGlow * (1 - P.emberTwinkle + P.emberTwinkle * Math.sin(twinkleT * 2.3 + o.fl * 9)), c = lut(0.08 + 0.45 * sp.hue);
       const f0 = fade * 0.08, f1 = fade * 0.45;
       const i = n * 6;
       put(i, a, c, f0); put(i + 3, m, c, f1); put(i + 6, m, c, f1); put(i + 9, h, c, fade);
@@ -1058,7 +1064,8 @@ function update(dt) {
     }
   }
   streakGeo.instanceCount = n;
-  streakPos.needsUpdate = streakCol.needsUpdate = true;
+  // only the part drawn this frame goes to the GPU, so the larger pool costs nothing until the sliders ask for it
+  for (const b of [streakPos, streakCol]) { b.clearUpdateRanges(); b.addUpdateRange(0, n * 6); b.needsUpdate = true; }
 }
 
 const prevVP = new THREE.Matrix4();
