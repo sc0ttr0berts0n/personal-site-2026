@@ -36,7 +36,7 @@ const bootShell = ({ slug, number, title, blurb, teaches }, story) => `<body>
 <div class="lab-stage" aria-hidden="true"><div class="lab-poster"><picture><source media="(orientation: landscape)" srcset="../posters/first/${slug}-wide.jpg"><img src="../posters/first/${slug}-tall.jpg" alt="" fetchpriority="high"></picture><i class="lab-spin"></i></div></div>
 <div class="lab-panel"><div class="lab-peek"></div><div class="lab-tabs" aria-hidden="true"><span class="lab-tab boot-change">Change This</span><span class="lab-tab boot-story">How it got here</span></div>
 <div class="lab-group"><span class="num">Lab ${number}</span><h1>${title}</h1></div><p class="blurb">${blurb}</p>
-<div class="lab-pane lab-pane-story">${storyHTML(slug, story)}${teaches ? `<p class="teaches"><span>how it’s built →</span> ${teaches}</p>` : ''}<p class="lab-raw"><a href="notes/behind-the-scenes.md" target="_blank" rel="noopener">Raw notes</a></p></div></div>
+<div class="lab-pane lab-pane-story">${storyHTML(slug, story)}${teaches ? `<p class="teaches"><span>how it’s built →</span> ${teaches}</p>` : ''}</div></div>
 </div>
 </div>
 `;
@@ -59,9 +59,7 @@ await mkdir(OUT, { recursive: true });
 
 await cp(join(SRC, 'shared'), join(OUT, 'shared'), { recursive: true });
 await mkdir(join(OUT, 'notes'), { recursive: true });
-await cp(join(SRC, 'notes', 'behind-the-scenes.md'), join(OUT, 'notes', 'behind-the-scenes.md'));
 const STORIES_MD = join(SRC, 'notes', 'process-stories.md');
-if (await exists(STORIES_MD)) await cp(STORIES_MD, join(OUT, 'notes', 'process-stories.md'));
 if (await exists(join(SRC, 'notes', 'versions'))) {
   await cp(join(SRC, 'notes', 'versions'), join(OUT, 'notes', 'versions'), { recursive: true });
   // the old versions play inside a lab's page as squares, stage only: they get the feed's embed hooks too

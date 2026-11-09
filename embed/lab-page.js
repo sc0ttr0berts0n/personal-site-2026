@@ -273,8 +273,6 @@
 
     /* the lab's process story, with its saved versions as squares that play on tap */
     .lab-page .lab-story { display: grid; gap: 12px; }
-    .lab-page .lab-raw { margin: 0; font: 400 12px/1.5 var(--mono); color: var(--dim); }
-    .lab-page .lab-raw a { color: var(--ink); }
     .lab-page .lab-story p { margin: 0; font-size: 14px; line-height: 1.6; text-wrap: pretty; }
     .lab-page .lab-story .open { color: var(--dim); font-size: 13px; }
     .lab-page .lab-story .open b { font: 500 10px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--ink); margin-right: 6px; }
@@ -664,10 +662,6 @@
       teaches.firstElementChild.textContent = 'how it\u2019s built \u2192';
       paneStory.append(teaches);
     }
-    const raw = document.createElement('p');
-    raw.className = 'lab-raw';
-    raw.innerHTML = '<a href="notes/behind-the-scenes.md" target="_blank" rel="noopener">Raw notes</a>';
-    paneStory.append(raw);
     const renderStory = () => {
       const sec = bootStory;
       if (!sec) return;
