@@ -73,7 +73,7 @@ if (await exists(join(SRC, 'notes', 'versions'))) {
       const at = html.search(/<meta charset[^>]*>/i);
       if (at < 0) { console.warn(`  ! versions/${dir}/${f}: no <meta charset>, embed hooks not added`); continue; }
       const end = html.indexOf('>', at) + 1;
-      await writeFile(join(d, f), html.slice(0, end) + '\n' + VIEWPORT_TAG + '\n<script src="../../../../embed/lab-embed.js"></script>' + html.slice(end));
+      await writeFile(join(d, f), html.slice(0, end) + '\n' + VIEWPORT_TAG + '\n<link rel="icon" href="../../../../favicon.svg" type="image/svg+xml">\n<script src="../../../../embed/lab-embed.js"></script>' + html.slice(end));
     }
   }
 }
@@ -100,7 +100,9 @@ for (const file of (await readdir(SRC)).filter(f => f.endsWith('.html')).sort())
     else {
       const end = html.indexOf('>', at) + 1;
       const viewport = /<meta name="viewport"/i.test(html) ? '' : '\n' + VIEWPORT_TAG;
-      html = html.slice(0, end) + viewport + '\n' + EMBED_TAG + html.slice(end);
+      // opened on its own, a lab page would otherwise ask for /favicon.ico and get a 404
+      const icon = /rel="icon"/i.test(html) ? '' : '\n<link rel="icon" href="../favicon.svg" type="image/svg+xml">';
+      html = html.slice(0, end) + viewport + icon + '\n' + EMBED_TAG + html.slice(end);
     }
   }
     const vdir = VERSION_DIRS[slug] || slug;
