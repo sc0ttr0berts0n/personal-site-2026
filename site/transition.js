@@ -190,9 +190,10 @@ export function createTransitions(host) {
   }
 
   // kept pictures of the frozen neighbours: a frozen toy doesn't change, so its picture is taken ahead of time
-  // and a move to it only has to wait for the outgoing toy's. Stale once the toy plays or reloads.
+  // and a move to it only has to wait for the outgoing toy's. Stale once the toy plays or reloads, or the screen
+  // changes size (the toy redraws to fit, and the old picture would be stretched into the new frame).
   const kept = new Map();      // slide → { img, stamp }
-  const stamp = s => `${s.born}|${s.playAt || 0}`;
+  const stamp = s => `${s.born}|${s.playAt || 0}|${host.clientWidth}x${host.clientHeight}`;
   const isKept = img => [...kept.values()].some(k => k.img === img);
   function keep(slide) {
     for (const [s, k] of kept) if (!s.el.isConnected) { if (!inUse(k.img)) k.img.close(); kept.delete(s); }

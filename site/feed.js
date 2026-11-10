@@ -52,7 +52,7 @@ const solo = new URLSearchParams(location.search).has('solo');   // measuring on
 const fx = calm || new URLSearchParams(location.search).get('fx') === 'off' ? null : createTransitions(feed);
 // Swipe cues, on a tall screen: a chevron at the foot of the top edge zone and one over the caption, as quiet as
 // the labs' corner brackets until a swipe starts, so there's always a mark for where a swipe down or up begins.
-// They sit over the ripple, so they stay in sight through a move. (Wide screens have the ‹ › buttons.)
+// They sit over the ripple, so they stay in sight through a move. (Wide screens have the ï¿½ ï¿½ buttons.)
 const cues = document.createElement('div');
 cues.className = 'cues'; cues.setAttribute('aria-hidden', 'true');
 cues.innerHTML = '<i class="slot"></i><i class="cue lo"></i><i class="cue hi"></i><i class="ring"></i>' +
@@ -149,6 +149,19 @@ function placeCues() {
   if (cap) feed.style.setProperty('--cap-top', `${cap.offsetTop}px`);
 }
 addEventListener('resize', placeCues);
+// after a resize: the frozen neighbours' kept pictures are the old size, so take them again once it settles, and a
+// turn between tall and wide swaps each slide's first-frame poster for the other one
+let resizeTimer = 0;
+addEventListener('resize', () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    for (const s of slides.values()) {
+      const img = s.el.querySelector('.poster'), want = new URL(firstFrame(s.toy), location.href).href;
+      if (img && img.src.includes('posters/first/') && img.src !== want) img.src = want;
+      if (!s.playing) fx?.keep(s);
+    }
+  }, 250);
+});
 if (fx) { metrics.fx = fx.stats; window.requestIdleCallback ? requestIdleCallback(() => fx.prepare()) : fx.prepare(); }
 
 // ---- posters: a small snapshot of each toy, for the overview grid and as an underlay while a toy loads ----
