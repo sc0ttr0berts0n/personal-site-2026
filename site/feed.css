@@ -211,13 +211,15 @@ html[data-axis="y"] .cues { display: block; position: absolute; inset: 0; z-inde
 .contact { flex: none; display: inline-flex; align-items: center; gap: 8px; height: 38px; padding: 0 12px 0 11px; border: 1px solid var(--line); border-radius: 999px;
   background: rgb(0 0 0 / .45); color: var(--ink); cursor: pointer; font: 400 12px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; white-space: nowrap; }
 .contact:hover { border-color: var(--ink); }
-.contact .ping { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--ink); animation: ping 2.2s ease-out infinite; }
+/* 6 px, nudged up half a pixel: centred on the capitals, not the line box */
+.contact .ping { flex: none; width: 6px; height: 6px; margin-top: -1px; border-radius: 50%; background: var(--ink); animation: ping 2.2s ease-out infinite; }
 @keyframes ping { 0% { box-shadow: 0 0 0 0 rgb(244 244 246 / .55); } 70%, 100% { box-shadow: 0 0 0 8px rgb(244 244 246 / 0); } }
 @media (prefers-reduced-motion: reduce) { .contact .ping { animation: none; } }
 /* a phone has no room for the counter beside both pills; the overview still numbers the labs */
 @media (max-width: 440px) { .count { display: none; } }
-/* and the smallest phones keep the mark in the name pill, not the name, so Contact me fits */
-@media (max-width: 380px) { .artist .nm { display: none; } .artist { padding-right: 4px; } }
+/* small phones (a 375 iPhone) say just Contact, and only the very smallest drop the name for the mark */
+@media (max-width: 380px) { .contact .me { display: none; } }
+@media (max-width: 340px) { .artist .nm { display: none; } .artist { padding-right: 4px; } }
 /* on the same dark backing as the buttons beside it, so it reads over a bright toy; no border, so it stays quieter */
 .count { font: 400 12px/1 var(--mono); color: var(--dim); font-variant-numeric: tabular-nums; letter-spacing: .08em;
   padding: 8px 9px; border-radius: 2px; background: rgb(0 0 0 / .45); }
