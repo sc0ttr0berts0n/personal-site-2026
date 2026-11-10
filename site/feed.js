@@ -753,6 +753,8 @@ $('artist-btn').addEventListener('click', () => {
     <ul class="links">${ARTIST.links.map(l => `<li><span>${esc(l.label)}</span><a href="${esc(l.href)}"${/^https?:/.test(l.href) ? ' target="_blank" rel="noopener"' : ''}>${esc(l.text)}</a></li>`).join('')}</ul>`;
   openDialog($('artist'));
 });
+// the loud way to the same card, for someone who doesn't know the name opens it
+$('contact-btn').addEventListener('click', () => $('artist-btn').click());
 
 // ---- overview ----
 let overviewWasPlaying = null;
