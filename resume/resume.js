@@ -21,28 +21,32 @@ new IntersectionObserver(([e]) => send(e.isIntersecting ? 'play' : 'pause')).obs
 // The header is sticky with a negative top (resume.css), so only its bottom band stays; this moves the toy into it.
 // That only happens when the page can scroll far enough to finish the shrink: a short resume on a tall screen would
 // otherwise stop halfway, so then the header stays full size (no html.collapse) and simply scrolls with the page.
-const root = document.documentElement, sheet = document.querySelector('.sheet');
+const root = document.documentElement, sheet = document.querySelector('.sheet'), head = document.querySelector('.head');
 const phone = matchMedia('(max-width: 720px)');
-let travel = 0;
+let travel = 0, size = 0, band = 72, headW = 0, lastW = 0, raf = 0;
 function measure() {
-  if (!phone.matches) { root.classList.remove('collapse'); travel = 0; return shrink(); }
-  const band = parseFloat(getComputedStyle(root).getPropertyValue('--band')) || 72;
+  lastW = innerWidth;
+  if (!phone.matches) { root.classList.remove('collapse'); return shrink(); }
+  band = parseFloat(getComputedStyle(root).getPropertyValue('--band')) || 72;
+  size = box.offsetWidth; headW = head.clientWidth;
   const top = sheet.getBoundingClientRect().top + scrollY;   // the header's place in the page (it opens the sheet)
-  travel = top + box.offsetWidth + 56 - band;                 // scroll needed until the header sticks as a band
+  travel = top + size + 56 - band;                            // scroll needed until the header sticks as a band
   root.classList.toggle('collapse', root.scrollHeight - innerHeight >= travel);
   shrink();
 }
+// the toy is centred by CSS; this only moves it from there into the band's left end
 function shrink() {
-  if (!root.classList.contains('collapse')) { box.style.transform = phone.matches ? `translateX(${(innerWidth - box.offsetWidth) / 2}px)` : ''; root.style.removeProperty('--p'); return; }
-  const size = box.offsetWidth, band = parseFloat(getComputedStyle(root).getPropertyValue('--band')) || 72;
+  raf = 0;
+  if (!phone.matches || !root.classList.contains('collapse')) { box.style.transform = ''; root.style.removeProperty('--p'); return; }
   const p = Math.min(1, Math.max(0, scrollY / travel));
   const s = 1 + ((band - 16) / size - 1) * p;
-  const x0 = (innerWidth - size) / 2, x1 = 12, y1 = size + 56 - band + 8;   // big: centred up top; small: the band's left end
-  box.style.transform = `translate(${x0 + (x1 - x0) * p}px, ${y1 * p}px) scale(${s})`;
+  const x1 = 12 - (headW - size) / 2, y1 = size + 56 - band + 8;
+  box.style.transform = `translate(${x1 * p}px, ${y1 * p}px) scale(${s})`;
   root.style.setProperty('--p', p.toFixed(3));
 }
-addEventListener('scroll', shrink, { passive: true });
-addEventListener('resize', measure);
+addEventListener('scroll', () => { raf ||= requestAnimationFrame(shrink); }, { passive: true });
+// a phone's URL bar showing or hiding changes only the height: don't re-decide mid-scroll, or the header would jump
+addEventListener('resize', () => { if (innerWidth !== lastW) measure(); });
 phone.addEventListener('change', measure);
-new ResizeObserver(measure).observe(document.body);   // fonts landing change the page's height
+new ResizeObserver(measure).observe(sheet);   // fonts landing change the resume's height
 measure();

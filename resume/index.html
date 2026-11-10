@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<base href="/resume/">   <!-- served as /resume (no slash), relative URLs would resolve from the root -->
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Scott Robertson · Resume</title>
 <meta name="description" content="Scott Robertson, software engineer: web games, Pixi.js, TypeScript, agentic workflows.">
@@ -24,7 +25,7 @@
 
 <div class="page">
 <main class="sheet">
-  <svg class="watermark" aria-hidden="true"><use href="#mark"/></svg>
+  <svg class="watermark" viewBox="0 0 8.5 11" preserveAspectRatio="xMinYMin meet" aria-hidden="true"><use href="#mark" x=".4" y="2.4" width="10" height="10"/></svg>
 
   <header class="head">
     <div class="logo">
@@ -101,6 +102,6 @@
 </main>
 </div>
 
-<script type="module" src="resume.js"></script>
+<script defer src="resume.js"></script>
 </body>
 </html>

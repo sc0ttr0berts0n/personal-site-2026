@@ -17,7 +17,7 @@
 }
 * { box-sizing: border-box; }
 html { background: var(--bg); }
-body { display: flow-root; margin: 0; min-height: 100dvh; color: var(--body-ink); font: 400 15px/1.55 var(--body); -webkit-font-smoothing: antialiased;
+body { display: flow-root; margin: 0; min-height: 100svh; color: var(--body-ink); font: 400 15px/1.55 var(--body); -webkit-font-smoothing: antialiased;
   background-color: var(--bg);
   background-image: linear-gradient(to right, var(--grid) 1px, transparent 1px), linear-gradient(to bottom, var(--grid) 1px, transparent 1px);
   background-size: var(--grid-size) var(--grid-size); background-position: 50vw 0; }
@@ -35,15 +35,15 @@ h1, h2, h3, p, ul { margin: 0; }
 /* ---- the sheet: everything below is measured in letter-page points, so the screen and the print match ---- */
 .page { container-type: inline-size; width: min(100% - 48px, 1200px); margin: 68px auto 56px; }
 .sheet { --in: calc(100cqw / 8.5); --pt: calc(var(--in) / 72);
-  position: relative; overflow: hidden; aspect-ratio: 8.5 / 11; background: var(--paper);
+  position: relative; aspect-ratio: 8.5 / 11;   /* a minimum: if the text ever runs long (fallback fonts), the sheet grows instead of clipping it */
+  background: var(--paper);
   border: 1px solid var(--grid); box-shadow: 0 30px 80px rgb(0 0 0 / .7), 0 0 0 1px rgb(255 255 255 / .02);
   padding: calc(.9 * var(--in)) calc(.85 * var(--in)) calc(.5 * var(--in)) calc(1.6 * var(--in));
   display: grid; grid-template-columns: calc(2.4 * var(--in)) 1fr; align-content: start;
   grid-template-areas: "head head" "contact contact" "edu skills" "exp exp" "proj proj";
   font-size: calc(8.6 * var(--pt)); line-height: 1.38; }
 
-.watermark { position: absolute; z-index: 0; pointer-events: none; fill: #fff; opacity: .022;
-  width: calc(10 * var(--in)); height: calc(10 * var(--in)); left: calc(.4 * var(--in)); top: calc(2.4 * var(--in)); }
+.watermark { position: absolute; z-index: 0; pointer-events: none; fill: #fff; opacity: .022; inset: 0; width: 100%; height: 100%; }
 .sheet > :not(.watermark) { position: relative; z-index: 1; }
 
 .head { grid-area: head; }
@@ -109,14 +109,15 @@ section li::before { content: ""; position: absolute; left: 0; top: .62em; width
   .contact { background: rgb(0 0 0 / .78); box-shadow: 0 0 0 10px rgb(0 0 0 / .78); }
 
   /* the toy starts big at the top and shrinks into a band that stays put as the page scrolls (resume.js drives --p) */
-  :root { --hero: min(100vw, 62dvh); --band: 72px; }
+  :root { --hero: min(100vw, 62svh); --band: 72px; }
   .bar { padding-bottom: 12px; }
   /* resume.js sets html.collapse only when the page can scroll far enough to shrink the header all the way;
      otherwise (a short resume on a tall screen) the header stays full size and scrolls away with the page */
   .sheet > .head { position: relative; z-index: 10; height: calc(var(--hero) + 56px);
     margin: 0 calc(-1 * max(18px, env(safe-area-inset-left, 0px))); background: rgb(7 7 10 / .94); border-bottom: 1px solid var(--grid); }
   html.collapse .sheet > .head { position: sticky; top: calc(var(--band) - var(--hero) - 56px); }
-  .logo { left: 0; top: 0; --size: var(--hero); transform-origin: 0 0; will-change: transform; border-radius: 0; }
+  .logo iframe { pointer-events: none; }   /* a swipe on the big toy must scroll the page (the embed takes touches with touch-action: none) */
+  .logo { left: calc((100% - var(--size)) / 2); top: 0; --size: var(--hero); transform-origin: 0 0; will-change: transform; border-radius: 0; }
   .who { position: absolute; left: calc(18px + var(--p, 0) * (var(--band) - 8px)); bottom: 12px; right: 12px; }
   h1 { font-size: 19px; letter-spacing: .1em; }
   h1 span { display: inline; }
@@ -134,7 +135,7 @@ section li::before { content: ""; position: absolute; left: 0; top: .62em; width
   .page { width: 8.5in; margin: 0; container-type: normal; }
   .sheet { --in: 1in; width: 8.5in; height: 11in; aspect-ratio: auto; border: 0; box-shadow: none; }
   .watermark { fill: #000; opacity: .025; }
-  .logo { background: none; }
+  .logo { background: none; transform: none !important; }
   .printmark { display: block; position: absolute; inset: 12%; width: 76%; height: 76%; fill: #b8b8b8; }
   section li::before { background: #888; }
   a { text-decoration: none; }
