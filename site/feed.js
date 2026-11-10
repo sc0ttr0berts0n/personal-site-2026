@@ -52,7 +52,7 @@ const solo = new URLSearchParams(location.search).has('solo');   // measuring on
 const fx = calm || new URLSearchParams(location.search).get('fx') === 'off' ? null : createTransitions(feed);
 // Swipe cues, on a tall screen: a chevron at the foot of the top edge zone and one over the caption, as quiet as
 // the labs' corner brackets until a swipe starts, so there's always a mark for where a swipe down or up begins.
-// They sit over the ripple, so they stay in sight through a move. (Wide screens have the ï¿½ ï¿½ buttons.)
+// They sit over the ripple, so they stay in sight through a move. (Wide screens have the ‹ › buttons.)
 const cues = document.createElement('div');
 cues.className = 'cues'; cues.setAttribute('aria-hidden', 'true');
 cues.innerHTML = '<i class="slot"></i><i class="cue lo"></i><i class="cue hi"></i><i class="ring"></i>' +
@@ -151,10 +151,14 @@ function placeCues() {
 addEventListener('resize', placeCues);
 // after a resize: the frozen neighbours' kept pictures are the old size, so take them again once it settles, and a
 // turn between tall and wide swaps each slide's first-frame poster for the other one
-let resizeTimer = 0;
+// Only a real change of the feed's size counts: a resize event that settles back to the same size wakes nothing.
+let resizeTimer = 0, keptSize = `${feed.clientWidth}x${feed.clientHeight}`;
 addEventListener('resize', () => {
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => {
+    const size = `${feed.clientWidth}x${feed.clientHeight}`;
+    if (size === keptSize) return;
+    keptSize = size;
     for (const s of slides.values()) {
       const img = s.el.querySelector('.poster'), want = new URL(firstFrame(s.toy), location.href).href;
       if (img && img.src.includes('posters/first/') && img.src !== want) img.src = want;
@@ -271,7 +275,14 @@ function dispose(s) {
   s.el.remove();
 }
 
-const send = (s, feedMsg, extra) => s?.iframe?.contentWindow?.postMessage({ feed: feedMsg, ...extra }, location.origin);
+// A message posted before the lab's embed script is listening is lost. Until a toy is ready, play and pause still go
+// (s.playing holds what it should be doing, and 'ready' squares it up if one was lost); anything else waits in s.queue.
+const post = (s, feedMsg, extra) => s.iframe?.contentWindow?.postMessage({ feed: feedMsg, ...extra }, location.origin);
+function send(s, feedMsg, extra) {
+  if (!s?.iframe) return;
+  if (s.ready || feedMsg === 'play' || feedMsg === 'pause') post(s, feedMsg, extra);
+  else (s.queue ||= []).push([feedMsg, extra]);
+}
 const playCurrent = () => { const c = slides.get(toys[cur].slug); if (c) play(c); };
 function play(s) { if (!s.playing) { s.playing = true; s.playAt = performance.now(); s.wantLive = true; send(s, 'play'); waiting(); } }
 function pause(s) { if (s.playing) { s.playing = false; s.wantLive = false; send(s, 'pause'); } }
@@ -455,10 +466,11 @@ addEventListener('message', e => {
     if (m.touch) s.touch = m.touch;
     if (m.hint) s.hint = m.hint;
     s.ready = true; s.el.classList.add('ready');
-    // a 'play' sent while the frame was still loading can land before the lab listens, leaving it frozen on its first
-    // frame with the spinner gone: the lab says whether it's playing, and one that should be is told again
+    // a play or pause sent while it loaded may have been lost (see send): the lab says whether it's playing, and is
+    // told if that's not what the feed wants; one told to play keeps the spinner until it goes live. Then whatever else waited.
     s.wantLive = s.playing && m.playing === false;
-    if (s.wantLive) send(s, 'play');
+    if (m.playing !== undefined && m.playing !== s.playing) post(s, s.playing ? 'play' : 'pause');
+    for (const [msg, extra] of s.queue?.splice(0) || []) post(s, msg, extra);
     if (s.toy === toys[cur]) { setLive(); showHint(s); }
     waiting(); paintPies();
     sawLoad(s.toy.slug, now - s.born);
@@ -745,16 +757,18 @@ function avatarHTML() {
 }
 $('avatar').innerHTML = avatarHTML();
 $('artist-name').textContent = ARTIST.name;
-$('artist-btn').addEventListener('click', () => {
+function openArtistCard() {
   $('artist-body').innerHTML = `
     <button type="button" class="grab" data-close aria-label="Close"></button>
     <div class="who"><span class="avatar">${ARTIST.avatar ? avatarHTML() : logoSVG({ size: 34 })}</span>
       <div><h2 id="artist-title">${esc(ARTIST.name)}</h2><p class="blurb">${esc(ARTIST.line)}</p></div></div>
     <ul class="links">${ARTIST.links.map(l => `<li><span>${esc(l.label)}</span><a href="${esc(l.href)}"${/^https?:/.test(l.href) ? ' target="_blank" rel="noopener"' : ''}>${esc(l.text)}</a></li>`).join('')}</ul>`;
   openDialog($('artist'));
-});
-// the loud way to the same card, for someone who doesn't know the name opens it
-$('contact-btn').addEventListener('click', () => $('artist-btn').click());
+}
+// the name opens the card, and Contact me is the loud way to it, for someone who doesn't know the name does
+$('artist-btn').addEventListener('click', openArtistCard);
+$('contact-btn').addEventListener('click', openArtistCard);
+$('artist-btn').setAttribute('aria-label', ARTIST.name);
 
 // ---- overview ----
 let overviewWasPlaying = null;
