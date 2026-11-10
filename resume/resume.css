@@ -67,9 +67,6 @@ h1, h2, h3, p, ul { margin: 0; }
 .logo .loading { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: linear-gradient(90deg, transparent, var(--ink), transparent) 0 0 / 40% 100% no-repeat; animation: sweep 1.1s linear infinite; opacity: .7; }
 .logo.ready .loading, .logo.stuck .loading { display: none; }
 @keyframes sweep { from { background-position: -60% 0; } to { background-position: 160% 0; } }
-.labname { position: absolute; left: calc(-1.45 * var(--in)); top: calc(1.24 * var(--in)); width: calc(1.3 * var(--in));
-  font: 400 calc(6.5 * var(--pt))/1.3 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--dim); text-decoration: none; text-align: center; }
-.labname:hover { color: var(--ink); }
 
 h1 { font: 200 calc(22 * var(--pt))/1.12 var(--display); letter-spacing: .14em; text-transform: uppercase; color: var(--ink); }
 h1 span { display: block; }
@@ -122,7 +119,6 @@ section li::before { content: ""; position: absolute; left: 0; top: .62em; width
   h1 { font-size: 19px; letter-spacing: .1em; }
   h1 span { display: inline; }
   .role { font-size: 11px; margin-top: 4px; }
-  .labname { position: absolute; left: auto; right: 18px; width: auto; font-size: 10px; top: calc(var(--hero) - 24px); opacity: calc(1 - var(--p, 0) * 3); }
   .contact { margin-top: 24px; }
 }
 
@@ -131,7 +127,7 @@ section li::before { content: ""; position: absolute; left: 0; top: .62em; width
 @media print {
   :root { --ink: #222; --body-ink: #444; --dim: #666; --paper: #fff; }
   html, body { background: #fff !important; }
-  .bar, .labname, .logo iframe, .logo .poster, .logo .loading { display: none !important; }
+  .bar, .logo iframe, .logo .poster, .logo .loading { display: none !important; }
   .page { width: 8.5in; margin: 0; container-type: normal; }
   .sheet { --in: 1in; width: 8.5in; height: 11in; aspect-ratio: auto; border: 0; box-shadow: none; }
   .watermark { fill: #000; opacity: .025; }
