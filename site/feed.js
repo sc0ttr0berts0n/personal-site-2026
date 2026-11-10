@@ -454,7 +454,11 @@ addEventListener('message', e => {
     // the lab's own word on what it does with a finger beats the feed's table
     if (m.touch) s.touch = m.touch;
     if (m.hint) s.hint = m.hint;
-    s.ready = true; s.wantLive = false; s.el.classList.add('ready');
+    s.ready = true; s.el.classList.add('ready');
+    // a 'play' sent while the frame was still loading can land before the lab listens, leaving it frozen on its first
+    // frame with the spinner gone: the lab says whether it's playing, and one that should be is told again
+    s.wantLive = s.playing && m.playing === false;
+    if (s.wantLive) send(s, 'play');
     if (s.toy === toys[cur]) { setLive(); showHint(s); }
     waiting(); paintPies();
     sawLoad(s.toy.slug, now - s.born);

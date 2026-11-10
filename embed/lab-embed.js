@@ -134,7 +134,7 @@
     if (grabs.length && ++grabWait > 3) sendGrabs();
     if (!drew) { last = now; return; }
     drew = false;
-    if (!firstSent) { firstSent = true; const f = window.labFeed || {}; post({ feed: 'ready', touch: f.touch, hint: f.hint }); }
+    if (!firstSent) { firstSent = true; const f = window.labFeed || {}; post({ feed: 'ready', touch: f.touch, hint: f.hint, playing }); }
     if (liveWanted && playing) { liveWanted = false; post({ feed: 'live' }); }
     if (last) { const g = now - last; gaps += g; worst = Math.max(worst, g); }
     last = now; frames++;
