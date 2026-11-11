@@ -54,7 +54,7 @@ export const ARTIST = {
   // a short bio on the card, under the links: one string per paragraph. Empty shows none.
   bio: [
     'I make web games for a living, and interactive web stuff for fun. This feed is a batch of tech demos, each one built around my logo. Enjoy.',
-    'I’m a tinkerer at heart. It started in graphic design school and followed me into web development, then interactive work, then games. At every step I’ve used whatever I know to solve the problem in front of me, and if something’s poorly built, I can’t leave it alone.',
+    'I started in graphic design school, and that eye followed me into web development, then interactive work, then games. At every step I’ve used whatever I know to solve the problem in front of me, and if something’s poorly built, I can’t leave it alone.',
     'I’m looking for a full-time role somewhere world-class: a team doing the best work in its field, where I’d be proud of what we ship. Off the clock I’m chasing the perfect coffee, pizza, and steak, pointing a camera at the night sky, and digging up weird little indie games: someone’s odd passion project over another AAA blockbuster.'
   ],
   links: [
