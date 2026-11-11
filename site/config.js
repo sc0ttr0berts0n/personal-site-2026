@@ -51,11 +51,11 @@ export const ARTIST = {
   name: 'Scott Robertson',
   avatar: null,                      // e.g. 'site/img/scott.jpg'; null shows the mark
   line: 'Creative Developer',
-  // a short bio under the name on the card: one string per paragraph. Empty shows none.
+  // a short bio on the card, under the links: one string per paragraph. Empty shows none.
   bio: [
     'I make web games for a living, plus interactive web stuff I can’t stop tinkering with. Everything on this site is my logo, rebuilt as a toy.',
     'I’m a tinkerer with a graphic design degree. I came up through design, moved into web development, then interactive work, then games, and at every step I’ve used whatever I know to just solve the problem in front of me. If something’s poorly built, I can’t leave it alone.',
-    'I’m looking for a full-time role somewhere world-class: a team doing the best work in its field, where I’d be proud of what we ship. Off the clock I’m chasing the perfect steak, coffee and pizza, pointing a camera at the night sky, and digging up weird little indie games: someone’s odd passion project over another AAA blockbuster.'
+    'I’m looking for a full-time role somewhere world-class: a team doing the best work in its field, where I’d be proud of what we ship. Off the clock I’m chasing the perfect coffee, pizza, and steak, pointing a camera at the night sky, and digging up weird little indie games: someone’s odd passion project over another AAA blockbuster.'
   ],
   links: [
     { label: 'Email', href: 'mailto:scott@scottrobertson.dev', text: 'scott@scottrobertson.dev' },
