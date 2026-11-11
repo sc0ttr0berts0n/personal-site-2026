@@ -250,6 +250,7 @@ dialog.open::backdrop { opacity: 1; }
 .sheet .blurb { color: var(--dim); }
 .card .who { display: flex; align-items: center; gap: 16px; }
 .card .avatar { width: 72px; height: 72px; }
+.card .bio { max-width: 60ch; font-size: 15px; line-height: 1.55; }
 .links { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; }
 .links li { display: flex; justify-content: space-between; gap: 12px; padding: 12px 0; border-top: 1px solid var(--line); font: 400 13px/1.2 var(--mono); }
 .links li span { color: var(--dim); }

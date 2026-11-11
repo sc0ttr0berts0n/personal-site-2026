@@ -160,7 +160,7 @@ addEventListener('resize', () => {
     if (size === keptSize) return;
     keptSize = size;
     for (const s of slides.values()) {
-      const img = s.el.querySelector('.poster'), want = new URL(firstFrame(s.toy), location.href).href;
+      const img = s.el.querySelector('.poster'), want = new URL(firstFrame(s.toy), document.baseURI).href;
       if (img && img.src.includes('posters/first/') && img.src !== want) img.src = want;
       if (!s.playing) fx?.keep(s);
     }
@@ -762,6 +762,7 @@ function openArtistCard() {
     <button type="button" class="grab" data-close aria-label="Close"></button>
     <div class="who"><span class="avatar">${ARTIST.avatar ? avatarHTML() : logoSVG({ size: 34 })}</span>
       <div><h2 id="artist-title">${esc(ARTIST.name)}</h2><p class="blurb">${esc(ARTIST.line)}</p></div></div>
+    ${(ARTIST.bio || []).map(p => `<p class="bio">${esc(p)}</p>`).join('')}
     <ul class="links">${ARTIST.links.map(l => `<li><span>${esc(l.label)}</span><a href="${esc(l.href)}"${/^https?:/.test(l.href) ? ' target="_blank" rel="noopener"' : ''}>${esc(l.text)}</a></li>`).join('')}</ul>`;
   openDialog($('artist'));
 }
