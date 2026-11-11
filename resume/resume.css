@@ -85,7 +85,8 @@ section p + h3, section ul + h3 { margin-top: calc(8 * var(--pt)); }
 ul { padding: 0; list-style: none; }
 section li { position: relative; padding-left: calc(10 * var(--pt)); }
 section li + li { margin-top: calc(1.5 * var(--pt)); }
-section li::before { content: ""; position: absolute; left: 0; top: .62em; width: calc(3.5 * var(--pt)); height: calc(3.5 * var(--pt)); background: var(--dim); rotate: 45deg; }
+/* a small diamond centred on the first line's lowercase letters, sized in em so it scales with the text */
+section li::before { content: ""; position: absolute; left: .2em; width: .3em; height: .3em; top: .55em; top: calc((1lh - .3em) / 2 + .06em); background: var(--dim); rotate: 45deg; }
 
 /* ================= phone: one column, the toy stays on screen while the resume scrolls ================= */
 @media (max-width: 720px) {
@@ -134,6 +135,6 @@ section li::before { content: ""; position: absolute; left: 0; top: .62em; width
   .logo { background: none; transform: none !important; }
   .printmark { display: block; position: absolute; inset: 12%; width: 76%; height: 76%; fill: #b8b8b8; }
   /* a border, not a background: print skips backgrounds unless Background graphics is ticked */
-  section li::before { background: none; box-sizing: border-box; border: calc(1.75 * var(--pt)) solid #888; }
+  section li::before { background: none; box-sizing: content-box; width: 0; height: 0; border: .15em solid #888; }
   a { text-decoration: none; }
 }
