@@ -13,6 +13,7 @@ import { ORDER, START, ARTIST, NO_PRELOAD, TOUCH } from './config.js';
 import { logoSVG } from '../labs/shared/logo.js';
 import { createTransitions } from './transition.js';
 import { LOAD_MS } from './load-times.js';
+import { track, onVisibility, arrival } from './analytics.js';
 
 const bySlug = new Map(LABS.map(l => [l.slug, l]));
 const toys = [...ORDER.filter(s => bySlug.has(s)), ...LABS.map(l => l.slug).filter(s => !ORDER.includes(s))].map(s => bySlug.get(s));
@@ -47,6 +48,28 @@ window.feedMetrics = metrics;
 const showStats = new URLSearchParams(location.search).has('stats');
 if (new URLSearchParams(location.search).has('trace')) import('./trace.js');   // a run-through record for a real device
 const solo = new URLSearchParams(location.search).has('solo');   // measuring only: no preloaded neighbours
+
+// ---- analytics (site/analytics.js): which toys people reach, how they move on, how long they stay, whether they play ----
+let viewing = null, views = 0;   // the toy on screen: since when, and its fps while there
+function viewStart(slug, via) {
+  views++;
+  viewing = { slug, at: performance.now(), fpsSum: 0, n: 0, worst: 0 };
+  track('lab_view', { lab: slug, via, position: indexOf(slug) + 1, nth: views });
+}
+function viewEnd(reason) {
+  const v = viewing;
+  if (!v?.at) return;
+  const load = metrics.loads.findLast(l => l.slug === v.slug);
+  track('lab_leave', { lab: v.slug, reason, dwell_ms: Math.round(performance.now() - v.at), touched: touchedToys.has(v.slug),
+    fps: v.n ? +(v.fpsSum / v.n).toFixed(1) : undefined, worst_frame_ms: v.n ? v.worst : undefined,
+    load_ms: load?.ms, preloaded: load ? load.asNeighbour : undefined });
+  v.at = 0;
+}
+// hidden (another app or tab, or a link away) ends the time on a toy; coming back picks it up without a new view
+onVisibility(hidden => {
+  if (hidden) viewEnd('hidden');
+  else if (viewing && !viewing.at) Object.assign(viewing, { at: performance.now(), fpsSum: 0, n: 0, worst: 0 });
+});
 
 // ---- the ripple transition over the slides (site/transition.js); ?fx=off, reduced motion or no WebGL keep the CSS slide ----
 const fx = calm || new URLSearchParams(location.search).get('fx') === 'off' ? null : createTransitions(feed);
@@ -413,7 +436,7 @@ function showHint(s) {
 }
 
 // Move by one toy (dir ±1). ms: slide duration, shorter after a fast flick.
-function go(dir, { ms = 420, t0 = performance.now() } = {}) {
+function go(dir, { ms = 420, t0 = performance.now(), via = 'swipe' } = {}) {
   unpark();
   const from = slides.get(toys[cur].slug);
   cur = wrap(cur + dir);
@@ -428,18 +451,20 @@ function go(dir, { ms = 420, t0 = performance.now() } = {}) {
   const held = !!fx?.cover(from, s, dir, ms, slide, axis(), slid => { playCurrent(); settle(slid ? ms : 0); });
   if (!held) slide();
   if (calm) { s.el.classList.remove('entering'); void s.el.offsetWidth; s.el.classList.add('entering'); }
+  viewEnd('moved');
   becameCurrent(s, t0, held);
+  viewStart(t.slug, via);
   writeHash();
   if (held) { clearTimeout(settleTimer); clearTimeout(neighbourTimer); }
   else settle(calm ? 160 : ms);
 }
 
 // Jump anywhere (overview, URL). Neighbours slide; anything further cuts with a short fade over the old toy.
-function jump(i) {
+function jump(i, via = 'grid') {
   if (i === cur) return;
   unpark();
   const d = rel(i);
-  if (Math.abs(d) === 1) return go(d);
+  if (Math.abs(d) === 1) return go(d, { via });
   const old = slides.get(toys[cur].slug);
   fx?.stop();
   cur = i;
@@ -450,7 +475,9 @@ function jump(i) {
   if (old) { old.pinned = true; old.el.classList.add('pinned'); place(old); }
   s.el.classList.remove('entering'); void s.el.offsetWidth; s.el.classList.add('entering');
   place(s);
+  viewEnd('moved');
   becameCurrent(s, performance.now());
+  viewStart(t.slug, via);
   writeHash();
   settle(260);
 }
@@ -482,11 +509,14 @@ addEventListener('message', e => {
     if (s.swipeAt) { metrics.swipes.push({ slug: s.toy.slug, msToLive: Math.round(now - s.swipeAt), wasPreloaded: s.ready }); s.swipeAt = 0; }
   } else if (m.feed === 'stats') {
     metrics.stats[s.toy.slug] = { fps: +m.fps.toFixed(1), cbMs: +m.cbMs.toFixed(2), worstMs: Math.round(m.worstMs) };
+    if (viewing?.slug === s.toy.slug && viewing.at) { viewing.fpsSum += m.fps; viewing.n++; viewing.worst = Math.max(viewing.worst, Math.round(m.worstMs)); }
     if (showStats && s.toy === toys[cur]) renderStats(s.toy.slug);
   } else if (m.feed === 'frozen') fx?.keep(s);
   else if (m.feed === 'snap' && m.url) savePoster(s.toy.slug, m.url);
   else if (m.feed === 'active') busyNow();
-  else if (m.feed === 'touched') { if (s.toy === toys[cur]) s.touched = true; touchedToys.add(s.toy.slug); clearTimeout(s.hintTimer); s.el.classList.remove('hinting'); }
+  else if (m.feed === 'touched') {
+    if (!touchedToys.has(s.toy.slug)) track('lab_touched', { lab: s.toy.slug, ms_after_view: viewing?.slug === s.toy.slug && viewing.at ? Math.round(now - viewing.at) : undefined });
+    if (s.toy === toys[cur]) s.touched = true; touchedToys.add(s.toy.slug); clearTimeout(s.hintTimer); s.el.classList.remove('hinting'); }
   // a toy under the pointer gets the wheel, and one that was pressed keeps the focus (even once swiped away),
   // so they pass the feed's own back up
   else if (m.feed === 'wheel') wheel(m.dx, m.dy, m.mode);
@@ -638,7 +668,7 @@ function wheel(dx, dy, mode) {
   wheelTimer = setTimeout(() => { wheelLock = false; wheelAcc = 0; }, 160);
   if (wheelLock) return;
   wheelAcc += d;
-  if (Math.abs(wheelAcc) > 40) { wheelLock = true; go(Math.sign(wheelAcc)); wheelAcc = 0; }
+  if (Math.abs(wheelAcc) > 40) { wheelLock = true; go(Math.sign(wheelAcc), { via: 'wheel' }); wheelAcc = 0; }
 }
 
 addEventListener('keydown', e => {
@@ -647,15 +677,15 @@ addEventListener('keydown', e => {
 });
 function navKey(key) {
   if (dialogOpen()) return false;
-  if (key === 'ArrowRight' || key === 'ArrowDown' || key === 'PageDown') go(1);
-  else if (key === 'ArrowLeft' || key === 'ArrowUp' || key === 'PageUp') go(-1);
+  if (key === 'ArrowRight' || key === 'ArrowDown' || key === 'PageDown') go(1, { via: 'key' });
+  else if (key === 'ArrowLeft' || key === 'ArrowUp' || key === 'PageUp') go(-1, { via: 'key' });
   else if (key === 'g') openOverview();
   else return false;
   return true;
 }
-$('prev').addEventListener('click', () => go(-1));
-$('next').addEventListener('click', () => go(1));
-addEventListener('hashchange', () => { const slug = readHash(); if (slug) { const i = indexOf(slug); if (i === cur) reloadCurrent(); else jump(i); } });
+$('prev').addEventListener('click', () => go(-1, { via: 'button' }));
+$('next').addEventListener('click', () => go(1, { via: 'button' }));
+addEventListener('hashchange', () => { const slug = readHash(); if (slug) { const i = indexOf(slug); if (i === cur) reloadCurrent(); else jump(i, 'link'); } });
 function reloadCurrent() {
   // a new settings code for the toy on screen: remount it with the code
   const s = slides.get(toys[cur].slug);
@@ -767,8 +797,17 @@ function openArtistCard() {
   openDialog($('artist'));
 }
 // the name opens the card, and Contact me is the loud way to it, for someone who doesn't know the name does
-$('artist-btn').addEventListener('click', openArtistCard);
-$('contact-btn').addEventListener('click', openArtistCard);
+$('artist-btn').addEventListener('click', () => { track('contact_open', { from: 'name', lab: toys[cur].slug }); openArtistCard(); });
+$('contact-btn').addEventListener('click', () => { track('contact_open', { from: 'contact', lab: toys[cur].slug }); openArtistCard(); });
+// the card's links (Email, GitHub, LinkedIn, the game), and the caption's two ways into a lab's own page
+$('artist-body').addEventListener('click', e => {
+  const a = e.target.closest('a[href]');
+  if (a) track('link_click', { link: a.closest('li')?.firstElementChild?.textContent, text: a.textContent, href: a.getAttribute('href'), lab: toys[cur].slug });
+});
+slidesEl.addEventListener('click', e => {
+  const a = e.target.closest('.caption a'), s = a && [...slides.values()].find(o => o.el.contains(a));
+  if (s) track(a.classList.contains('play') ? 'change_this' : 'how_it_got_here', { lab: s.toy.slug });
+});
 $('artist-btn').setAttribute('aria-label', ARTIST.name);
 
 // ---- overview ----
@@ -788,6 +827,7 @@ function updateCurrentTile() {
   for (const b of document.querySelectorAll('.tile')) b.setAttribute('aria-current', +b.dataset.i === cur ? 'true' : 'false');
 }
 function openOverview() {
+  track('grid_open', { lab: toys[cur].slug });
   renderTiles();
   // nothing on screen while the grid covers it, so the toy rests
   overviewWasPlaying = slides.get(toys[cur].slug);
@@ -814,6 +854,9 @@ const startSlug = readHash() || (START && bySlug.has(START) ? START : toys[0].sl
 // lab/<slug>/?story is a link to the writeup that still previews as the lab: on to the lab's page, on that tab
 if (new URLSearchParams(location.search).has('story')) location.replace(pageHref(bySlug.get(startSlug), true));
 cur = indexOf(startSlug);
+track('$pageview', { page: 'feed', entry_lab: startSlug, settings_code: codes.has(startSlug), ...arrival(),
+  arrived_via: location.pathname.includes('/lab/') ? 'share_link' : location.hash.length > 1 ? 'hash' : 'home' });
+viewStart(startSlug, 'arrival');
 const first = makeSlide(toys[cur], true);
 first.offset = 0; place(first);
 writeHash();

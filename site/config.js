@@ -66,3 +66,7 @@ export const ARTIST = {
     { label: 'Game', href: 'https://smashrockets.com/', text: 'Smash Rockets' }
   ]
 };
+
+// Analytics (site/analytics.js): PostHog, US cloud. The key is a public project key, made to sit in a web page.
+// Events go only from `host`, through `path` on this site (a proxy rule in netlify.toml forwards it to PostHog).
+export const ANALYTICS = { key: 'phc_u5CnkDMUutxfX82djWwhMviKMPufcUY4StJcJz46vG9V', host: 'scottrobertson.dev', path: 'plume', direct: 'https://us.i.posthog.com' };

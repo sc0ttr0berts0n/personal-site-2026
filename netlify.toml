@@ -14,3 +14,10 @@
   to = "/404.html"
   status = 404
   force = true
+
+# Analytics (site/analytics.js): /plume/* is PostHog's US ingest, proxied so blockers that know PostHog's domain let it through.
+[[redirects]]
+  from = "/plume/*"
+  to = "https://us.i.posthog.com/:splat"
+  status = 200
+  force = true

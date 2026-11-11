@@ -16,6 +16,9 @@
 (() => {
   if (new URLSearchParams(location.search).has('embed')) return;
   const SCRIPT = document.currentScript?.src || location.href;   // for the generated manifest next to the labs
+  // analytics (site/analytics.js): a page view, and the time spent each time the page is left
+  import(new URL('../site/analytics.js', SCRIPT).href)
+    .then(a => a.labPage(location.pathname.split('/').pop().replace(/\.html$/, ''))).catch(() => {});
   const root = document.documentElement;
   root.classList.add('lab-page');
   const PHONE = '(max-width: 899px)';   // lab.css's own breakpoint for the stacked layout
