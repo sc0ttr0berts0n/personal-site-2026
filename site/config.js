@@ -54,8 +54,9 @@ export const ARTIST = {
   // a short bio on the card, under the links: one string per paragraph. Empty shows none.
   bio: [
     'I make web games for a living, and interactive web stuff for fun. This feed is a batch of tech demos, each one built around my logo. Enjoy.',
-    'I started in graphic design school, then moved into web development, interactive work, and eventually games. At every step I’ve used whatever I know to solve the problem in front of me, always trying to ship the best work possible.',
-    'I’m looking for a full-time role somewhere world-class: a team doing the best work in its field, where I’d be proud of what we ship. Off the clock I’m chasing the perfect coffee, pizza, and steak, pointing a camera at the night sky, and digging up weird little indie games: someone’s odd passion project over another AAA blockbuster.'
+    'I started in graphic design school, then moved into web development, interactive work, and eventually games. Two things have stuck with me the whole way: make it usable, and make it delightful. When either one is missing, I can’t leave it alone.',
+    'I’m open to doing that full time with the right team: somewhere world-class, doing the best work in its field.',
+    'Off the clock I’m chasing the perfect coffee, pizza, and steak, pointing a camera at the night sky, and digging up weird little indie games: someone’s odd passion project over another AAA blockbuster.'
   ],
   links: [
     { label: 'Email', href: 'mailto:scott@scottrobertson.dev', text: 'scott@scottrobertson.dev' },
