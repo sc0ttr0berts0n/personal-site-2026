@@ -1,0 +1,138 @@
+/* Resume: a letter sheet on the bench (desktop), one column on a phone, one printed page. Tokens match site/feed.css. */
+:root {
+  --bg: #000000;
+  --grid: #1c1c22;
+  --ink: #f4f4f6;
+  --body-ink: #c4c4cd;
+  --dim: #8b8b98;
+  --line: #5c5c66;
+  --panel: #07070a;
+  --paper: #0b0b0f;
+  --grid-size: 16px;
+  --display: "Unbounded", "Arial Narrow", system-ui, sans-serif;
+  --body: "Familjen Grotesk", "Helvetica Neue", Arial, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+  --ease: cubic-bezier(.22, .8, .24, 1);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html { background: var(--bg); }
+body { display: flow-root; margin: 0; min-height: 100svh; color: var(--body-ink); font: 400 15px/1.55 var(--body); -webkit-font-smoothing: antialiased;
+  background-color: var(--bg);
+  background-image: linear-gradient(to right, var(--grid) 1px, transparent 1px), linear-gradient(to bottom, var(--grid) 1px, transparent 1px);
+  background-size: var(--grid-size) var(--grid-size); background-position: 50vw 0; }
+a { color: inherit; text-decoration-color: var(--line); text-underline-offset: .2em; }
+a:hover { text-decoration-color: currentColor; }
+:focus-visible { outline: 1px solid var(--ink); outline-offset: 2px; }
+h1, h2, h3, p, ul { margin: 0; }
+.btn { display: inline-flex; align-items: center; gap: 8px; font: 400 12px/1 var(--mono); padding: 10px 13px; border: 1px solid var(--line); background: rgb(0 0 0 / .6); color: var(--ink); border-radius: 2px; cursor: pointer; text-decoration: none; white-space: nowrap; }
+.btn:hover { border-color: var(--ink); }
+
+.bar { position: fixed; z-index: 20; top: 12px; left: max(16px, env(safe-area-inset-left, 0px)); right: max(16px, env(safe-area-inset-right, 0px)); display: flex; gap: 8px; pointer-events: none; }
+.bar > * { pointer-events: auto; }
+.bar .spacer { flex: 1; }
+
+/* ---- the sheet: everything below is measured in letter-page points, so the screen and the print match ---- */
+.page { container-type: inline-size; width: min(100% - 48px, 1200px); margin: 68px auto 56px; }
+.sheet { --in: calc(100cqw / 8.5); --pt: calc(var(--in) / 72);
+  position: relative; aspect-ratio: 8.5 / 11;   /* a minimum: if the text ever runs long (fallback fonts), the sheet grows instead of clipping it */
+  background: var(--paper);
+  border: 1px solid var(--grid); box-shadow: 0 30px 80px rgb(0 0 0 / .7), 0 0 0 1px rgb(255 255 255 / .02);
+  padding: calc(.9 * var(--in)) calc(.85 * var(--in)) calc(.5 * var(--in)) calc(1.6 * var(--in));
+  display: grid; grid-template-columns: calc(2.4 * var(--in)) 1fr; align-content: start;
+  grid-template-areas: "head head" "contact contact" "edu skills" "exp exp" "proj proj";
+  font-size: calc(8.6 * var(--pt)); line-height: 1.38; }
+
+.watermark { position: absolute; z-index: 0; pointer-events: none; fill: #fff; opacity: .022; inset: 0; width: 100%; height: 100%; }
+.sheet > :not(.watermark) { position: relative; z-index: 1; }
+
+.head { grid-area: head; }
+.contact { grid-area: contact; }
+.edu { grid-area: edu; }
+.skills { grid-area: skills; }
+.exp { grid-area: exp; }
+.proj { grid-area: proj; }
+
+/* the live logo: a lab toy in an iframe, its poster underneath until the first frame lands */
+.logo { position: absolute; overflow: hidden; background: var(--bg); border-radius: 2px;
+  --size: calc(1.3 * var(--in)); width: var(--size); height: var(--size);
+  left: calc(-1.45 * var(--in)); top: calc(-.12 * var(--in)); }
+.logo .poster, .logo iframe { position: absolute; left: 50%; top: 50%; width: calc(var(--size) * var(--zoom, 1)); height: calc(var(--size) * var(--zoom, 1)); translate: -50% -50%; border: 0; display: block; }
+.logo .poster { object-fit: cover; pointer-events: none; transition: opacity .3s; }
+.logo iframe { opacity: 0; transition: opacity .3s; color-scheme: dark; background: transparent; }
+.logo.ready iframe { opacity: 1; }
+.logo.ready .poster { opacity: 0; }
+.printmark { display: none; }
+/* a thin sweep along the bottom edge while the toy loads, so a slow lab never reads as a dead picture */
+.logo .loading { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: linear-gradient(90deg, transparent, var(--ink), transparent) 0 0 / 40% 100% no-repeat; animation: sweep 1.1s linear infinite; opacity: .7; }
+.logo.ready .loading, .logo.stuck .loading { display: none; }
+@keyframes sweep { from { background-position: -60% 0; } to { background-position: 160% 0; } }
+
+h1 { font: 200 calc(22 * var(--pt))/1.12 var(--display); letter-spacing: .14em; text-transform: uppercase; color: var(--ink); }
+h1 span { display: block; }
+.role { margin-top: calc(4 * var(--pt)); font: 400 calc(10 * var(--pt))/1.2 var(--mono); letter-spacing: .22em; text-transform: uppercase; color: var(--ink); }
+.contact { list-style: none; padding: 0; margin: calc(12 * var(--pt)) 0 calc(18 * var(--pt)); font: 400 calc(7.6 * var(--pt))/1.5 var(--mono); color: var(--dim); }
+.contact a { text-decoration: none; }
+.contact a:hover { color: var(--ink); }
+
+h2 { font: 300 calc(16 * var(--pt))/1 var(--display); letter-spacing: .06em; text-transform: uppercase; color: var(--ink); margin-bottom: calc(10 * var(--pt)); }
+h3 { font: 600 calc(9 * var(--pt))/1.3 var(--body); letter-spacing: .06em; text-transform: uppercase; color: var(--ink); }
+h3 a { text-decoration: none; }
+section p + h3, section ul + h3 { margin-top: calc(8 * var(--pt)); }
+.edu p, .skills p { margin-top: calc(2 * var(--pt)); }
+.exp, .proj { margin-top: calc(18 * var(--pt)); }
+.when { margin: calc(2 * var(--pt)) 0 calc(4 * var(--pt)); font: 400 calc(7.5 * var(--pt))/1.3 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--dim); }
+ul { padding: 0; list-style: none; }
+section li { position: relative; padding-left: calc(10 * var(--pt)); }
+section li + li { margin-top: calc(1.5 * var(--pt)); }
+section li::before { content: ""; position: absolute; left: 0; top: .62em; width: calc(3.5 * var(--pt)); height: calc(3.5 * var(--pt)); background: var(--dim); rotate: 45deg; }
+
+/* ================= phone: one column, the toy stays on screen while the resume scrolls ================= */
+@media (max-width: 720px) {
+  .page { container-type: normal; width: auto; margin: 0; }
+  .sheet { --pt: 1.62px; --in: 0px; aspect-ratio: auto; overflow: visible; border: 0; box-shadow: none; background: transparent;
+    padding: 0 max(18px, env(safe-area-inset-right, 0px)) 64px max(18px, env(safe-area-inset-left, 0px));
+    display: block; font-size: 15px; line-height: 1.5; }
+  .watermark { display: none; }
+  body { background-position: 50vw 0; }
+  .bar { position: static; padding: 12px max(16px, env(safe-area-inset-right, 0px)) 0 max(16px, env(safe-area-inset-left, 0px)); }
+  h2 { font-size: 20px; margin-bottom: 12px; }
+  h3 { font-size: 14px; }
+  .when { font-size: 11.5px; }
+  .contact { font-size: 13px; margin: 18px 0 30px; }
+  .skills, .exp, .proj { margin-top: 32px; }
+  section p + h3, section ul + h3 { margin-top: 16px; }
+  .edu, .skills, .exp, .proj { background: rgb(0 0 0 / .78); box-shadow: 0 0 0 10px rgb(0 0 0 / .78); }
+  .contact { background: rgb(0 0 0 / .78); box-shadow: 0 0 0 10px rgb(0 0 0 / .78); }
+
+  /* the toy starts big at the top and shrinks into a band that stays put as the page scrolls (resume.js drives --p) */
+  :root { --hero: min(100vw, 62svh); --band: 72px; }
+  .bar { padding-bottom: 12px; }
+  /* resume.js sets html.collapse only when the page can scroll far enough to shrink the header all the way;
+     otherwise (a short resume on a tall screen) the header stays full size and scrolls away with the page */
+  .sheet > .head { position: relative; z-index: 10; height: calc(var(--hero) + 56px);
+    margin: 0 calc(-1 * max(18px, env(safe-area-inset-left, 0px))); background: rgb(7 7 10 / .94); border-bottom: 1px solid var(--grid); }
+  html.collapse .sheet > .head { position: sticky; top: calc(var(--band) - var(--hero) - 56px); }
+  .logo iframe { pointer-events: none; }   /* a swipe on the big toy must scroll the page (the embed takes touches with touch-action: none) */
+  .logo { left: calc((100% - var(--size)) / 2); top: 0; --size: var(--hero); transform-origin: 0 0; will-change: transform; border-radius: 0; }
+  .who { position: absolute; left: calc(18px + var(--p, 0) * (var(--band) - 8px)); bottom: 12px; right: 12px; }
+  h1 { font-size: 19px; letter-spacing: .1em; }
+  h1 span { display: inline; }
+  .role { font-size: 11px; margin-top: 4px; }
+  .contact { margin-top: 24px; }
+}
+
+/* ================= print: one letter page, light paper, the static mark in place of the toy ================= */
+@page { size: letter; margin: 0; }
+@media print {
+  :root { --ink: #222; --body-ink: #444; --dim: #666; --paper: #fff; }
+  html, body { background: #fff !important; }
+  .bar, .logo iframe, .logo .poster, .logo .loading { display: none !important; }
+  .page { width: 8.5in; margin: 0; container-type: normal; }
+  .sheet { --in: 1in; width: 8.5in; height: 11in; aspect-ratio: auto; border: 0; box-shadow: none; }
+  .watermark { fill: #000; opacity: .025; }
+  .logo { background: none; transform: none !important; }
+  .printmark { display: block; position: absolute; inset: 12%; width: 76%; height: 76%; fill: #b8b8b8; }
+  section li::before { background: #888; }
+  a { text-decoration: none; }
+}
