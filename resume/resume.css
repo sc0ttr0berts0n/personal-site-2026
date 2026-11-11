@@ -133,6 +133,7 @@ section li::before { content: ""; position: absolute; left: 0; top: .62em; width
   .watermark { fill: #000; opacity: .025; }
   .logo { background: none; transform: none !important; }
   .printmark { display: block; position: absolute; inset: 12%; width: 76%; height: 76%; fill: #b8b8b8; }
-  section li::before { background: #888; }
+  /* a border, not a background: print skips backgrounds unless Background graphics is ticked */
+  section li::before { background: none; box-sizing: border-box; border: calc(1.75 * var(--pt)) solid #888; }
   a { text-decoration: none; }
 }
